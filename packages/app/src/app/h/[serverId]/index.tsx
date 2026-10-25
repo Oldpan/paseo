@@ -24,6 +24,8 @@ export default function HostIndexRoute() {
     return <StartupSplashScreen />;
   }
 
+  if (process.env.EXPO_PUBLIC_BIGBANG === "true") return <Redirect href="/bigbang" />;
+
   return (
     <Redirect
       href={resolveHostIndexRoute({

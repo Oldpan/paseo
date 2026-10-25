@@ -1,3 +1,4 @@
+import { BigbangTerminalEmulator } from "@/bigbang/terminal/emulator.native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -23,6 +24,8 @@ function UnsupportedNativeTerminal({ streamKey, onRendererReadyChange }: Termina
 }
 
 export default function TerminalEmulator(props: TerminalEmulatorProps) {
+  if (process.env.EXPO_PUBLIC_BIGBANG === "true") return <BigbangTerminalEmulator {...props} />;
+
   const rendererSelection = resolveTerminalRendererSelection({
     supportsTerminalInputModeReplay: props.supportsTerminalInputModeReplay,
   });

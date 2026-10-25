@@ -29,6 +29,75 @@ the titlebar row. Production builds leave the variable unset and show no label.
 
 `npm run dev` is only a shorthand for `npm run dev:server`. Keep `127.0.0.1:6767` for the packaged app and production-style `~/.paseo` state.
 
+## Bigbang fork isolation
+
+Product decisions, source/UI migration scope and delivery gates live in the [Bigbang roadmap](bigbang-roadmap.md).
+
+Use the fork profile on macOS/Linux while the official Paseo installation is running:
+
+```bash
+npm run bigbang:profile
+npm run bigbang:server   # separate terminal
+npm run bigbang:app      # separate terminal
+# Optional desktop client, after npm run build:app-deps:
+npm run bigbang:desktop
+npm run bigbang:cli -- daemon status --json
+```
+
+| Surface          | Official installation | Bigbang development                      |
+| ---------------- | --------------------- | ---------------------------------------- |
+| Daemon           | `127.0.0.1:6767`      | `127.0.0.1:6778`                         |
+| Runtime state    | `~/.paseo`            | `<checkout>/.dev/bigbang/paseo-home`     |
+| Web client       | Official app          | `http://localhost:8181`                  |
+| Desktop renderer | Packaged assets       | `http://localhost:8182`                  |
+| Desktop profile  | Official userData     | `<checkout>/.dev/bigbang/.dev/user-data` |
+
+The launcher removes inherited Paseo/Expo settings, creates a fresh private home, disables relay and speech-model downloads, and never seeds official agents or host connections. Fresh homes enable Paseo tools inside Agents (`daemon.mcp.enabled` and `daemon.mcp.injectIntoAgents`); an existing home keeps its explicit settings. It delegates to the normal supervised dev launchers. An occupied port fails startup; do not stop another instance to free it. Avoid globally installing the fork CLI or replacing `/Applications/Paseo.app`.
+
+A separate Paseo home isolates daemon state, not provider credentials or workspace files. Use disposable project directories for tests; do not attach or resume official Agent sessions. Test daemons on other machines use the same profile and their own host identities. Connect them explicitly through a private network or a dedicated tunnel after validating the local instance.
+
+Fork builds use `npm run bigbang:apk:arm64`, `npm run bigbang:build:web`, and `npm run bigbang:build:desktop`. The Bigbang app variant and desktop builder configuration own their separate identities and deep links. Packaged desktop state uses `~/.bigbang-paseo` on port `6777`; development stays on the profile above. Official Paseo updates are disabled for the fork. Configure and validate a fork release source before distributing updates. A successful Web run does not validate Android hardware or the Mac installer.
+
+### Bigbang presentation migration
+
+Migrate from Bigbang `apps/app/src`, captured at `f9e502a9a73024a8f2cbfc1aa67c52d70b7265ae`. The presentation source lives in `packages/app/src/bigbang/ui`; file headers name the original component. Keep its palette, typography, pixel avatars, shadows, Markdown, composer, sidebar and tab chrome together. Its scoped lint exceptions preserve the imported presentation; host and data adapters keep the ordinary app rules.
+
+The host owns networking, theme preference, editing surfaces and execution. Migrated controls consume the presentation context without installing the old Core client or its global theme effects. `EditingTextInput` replaces the old controlled native input so composition stays with the editing surface. Core-only attachment upload, slash commands, reactions and reminders stay hidden until their host capabilities are connected. Never expose an inert control to match a screenshot.
+
+The Chat coordinator is explicitly selected and retained across Studio navigation. Each chat/thread/assistant keeps one durable native Agent binding; new messages continue it. Native history already contains its earlier turns, so replaying the Chat transcript on each send both wastes context and creates conflicting histories. Persist the binding and message cursor before dispatch; an uncertain dispatch must stay attached to that execution rather than create a replacement. Enable the Bigbang plugin on the isolated Spark daemon only after the trusted-code permission disclosure. A host without that plugin can still provide a Studio workspace; it cannot store Chat. Workspace containers retain their `{serverId, workspaceId}` binding, and closing a view does not stop its agents or PTYs.
+
+Web acceptance on 2026-10-25 covered a real Grok assistant created through the migrated form, a Chinese reply, Studio draft retention, a wide thread and a compact sidebar. Codex and Grok use the Spark provider proxy at `127.0.0.1:7893`; local Mac proxy availability is separate. Native keyboard, terminal latency, Android editing, Mac installation, full screenshot parity and the remaining collaborative controls still require their platform checks. Private screenshots and live test receipts stay under `.dev/bigbang/`.
+
+### Mac and Spark test pair
+
+The two-machine baseline uses this profile on both hosts. Keep the remote daemon on loopback and use a saved SSH destination from the Mac:
+
+```bash
+# Mac, in the fork checkout:
+npm run bigbang:cli -- host add 'ssh://<spark-ssh-alias>?daemonPort=6778' --label 'Spark · Bigbang Dev' --json
+```
+
+For Spark-to-Mac calls, maintain a separate SSH reverse tunnel from the Mac. This reaches the existing Mac test daemon without enabling an SSH server on the Mac:
+
+```bash
+# Mac, in a dedicated terminal or tmux window:
+ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -R 127.0.0.1:6779:127.0.0.1:6778 <spark-ssh-alias>
+# Spark, in its fork checkout:
+npm run bigbang:cli -- host add 127.0.0.1:6779 --label 'Mac · Bigbang Dev' --json
+```
+
+Both test daemons use `6778` on their own machines. Spark's `6779` is only the reverse tunnel. Each daemon stores its own peer registration and pins the learned server identity. The tunnel must remain running for the Spark-to-Mac connection; its loss leaves the saved peer offline and reconnection restores the same registration. Keep this tunnel separate from official Paseo connections.
+
+Acceptance on 2026-10-25 used base `72e3316f4f5d` plus the local isolation changes, Paseo 0.13.0, macOS arm64 / Node 22.23.3 and Spark Linux aarch64 / Node 24.13.0. Each direction used `hosts.client()` to create a disposable workspace and real PTY, execute Python, write a random nonce to a file and read it back. Both passed; PTYs were closed, workspaces archived and temporary project registrations removed. Breaking and restoring the reverse tunnel produced offline → online on the same registration and server ID, followed by a successful routed read. Official daemon PIDs and configuration hashes remained unchanged. Machine-specific identities and proof payloads stay in the ignored `.dev/bigbang/mac-spark-evidence.json` on each test checkout.
+
+This verifies transport, routing, terminal execution and bounded file readback.
+
+Real Agent messaging also passed in both directions on 2026-10-25. Each requester used native Paseo `list_hosts` and `send_agent_prompt` with `notifyOnFinish: true`. The remote worker returned a request ID, a random challenge and a small calculation; the native `finished` notification carried the qualified worker identity back to the requester and resumed it. SDK reads independently checked the worker answer, the requester's final answer, the sending call and the notification's server/Agent IDs. Mac used discovered `codex/gpt-6-astra`; Spark used discovered `codex/gpt-6.1-sol`, both with low reasoning. All test Agents and workspaces were archived and their temporary project registrations removed.
+
+The fresh test home did not inherit machine-specific model networking. Spark's test Codex provider explicitly uses the already-running local model proxy through provider environment settings; this copies no credentials or official Agent/host state. Codex MCP calls needed individual approvals: the test driver allowed only host discovery and the exact paired recipient/prompt. General sandbox network access stayed disabled. Read canonical `waitForFinish().lastMessage` after completion instead of interpreting timeline text fragments as a finished reply. Assistant text can still contain presentation separators between commentary and the final answer; keep business correlation in typed message data rather than assuming arbitrary text is raw JSON.
+
+The successful messaging runs used no Agent shell or filesystem tools. A separate Spark Agent Python attempt reached a Linux sandbox loopback setup failure and requested unsandboxed execution; it was archived without that execution. A subsequent execution check passed through one narrowly approved `/usr/bin/python3 verify.py` command: the driver checked the staged script hash before approval, then verified exit code zero, the written file, the random challenge digest and the Agent response. General sandbox network access stayed disabled. This proves the reviewed command can execute through the approval path; it does not fix Linux sandbox compatibility. Our Chat scheduling and durable delivery rules, in-flight mutation recovery, general Spark Agent sandbox support and native-device behavior remain separate work. Private proof files and the corrected local smoke driver stay under `.dev/bigbang/`.
+
 ## Nix desktop package
 
 The flake exposes `packages.<system>.desktop` on Linux and macOS:

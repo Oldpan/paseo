@@ -67,7 +67,9 @@ function resolveSecretFile(params) {
   return undefined;
 }
 
+const isBigbang = appVariant === "bigbang";
 const variants = {
+  bigbang: { name: "Bigbang Studio", packageId: "com.oldpan.bigbang.studio" },
   production: {
     name: "Paseo",
     packageId: "sh.paseo",
@@ -97,14 +99,17 @@ const variants = {
 const variant = variants[appVariant] ?? variants.production;
 const nativeReleaseVersion = getNativeReleaseVersion(pkg.version);
 
+const easProjectId = isBigbang
+  ? process.env.BIGBANG_EAS_PROJECT_ID
+  : "0e7f65ce-0367-46c8-a238-2b65963d235a";
 export default {
   expo: {
     name: variant.name,
     slug: "voice-mobile",
     version: nativeReleaseVersion.appVersion,
     orientation: "portrait",
-    icon: "./assets/images/icon.png",
-    scheme: "paseo",
+    icon: isBigbang ? "./assets/images/bigbang-icon.png" : "./assets/images/icon.png",
+    scheme: isBigbang ? "bigbang-studio" : "paseo",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
     ios: {
@@ -122,7 +127,9 @@ export default {
     android: {
       adaptiveIcon: {
         backgroundColor: "#000000",
-        foregroundImage: "./assets/images/android-icon-foreground.png",
+        foregroundImage: isBigbang
+          ? "./assets/images/bigbang-icon.png"
+          : "./assets/images/android-icon-foreground.png",
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -196,10 +203,8 @@ export default {
       diagnosticRevision: process.env.PASEO_DIAGNOSTIC_REVISION,
       diagnosticBuildTime: process.env.PASEO_DIAGNOSTIC_BUILD_TIME,
       router: {},
-      eas: {
-        projectId: "0e7f65ce-0367-46c8-a238-2b65963d235a",
-      },
+      ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
     },
-    owner: "getpaseo",
+    ...(isBigbang ? {} : { owner: "getpaseo" }),
   },
 };

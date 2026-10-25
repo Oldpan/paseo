@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { isBigbangDesktopName } from "./branding.js";
 import { protectConsoleStreams } from "./diagnostics/console-streams.js";
 protectConsoleStreams();
 
@@ -106,16 +108,25 @@ import { BrowserKeyboard } from "./features/browser-keyboard/index.js";
 import { installAppUpdateOnQuit } from "./features/auto-updater.js";
 import {
   buildAgentDeepLinkRoute,
-  parseAgentDeepLink,
   type AgentDeepLinkTarget,
 } from "@getpaseo/protocol/agent-deep-link";
-import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
+import {
+  parseDesktopAgentDeepLink,
+  AgentNavigationInbox,
+  parseAgentDeepLinkFromArgv,
+} from "./agent-navigation.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
-const APP_SCHEME = "paseo";
+const IS_BIGBANG = isBigbangDesktopName(app.getName()) || process.env.PASEO_BIGBANG_BUILD === "1";
+const APP_SCHEME = IS_BIGBANG ? "bigbang-studio" : "paseo";
 const PASEO_DEBUG = process.env.PASEO_DEBUG === "1";
 const DISABLE_SINGLE_INSTANCE_LOCK = process.env.PASEO_DISABLE_SINGLE_INSTANCE_LOCK === "1";
-const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Paseo";
+const APP_NAME = IS_BIGBANG ? "Bigbang Studio" : process.env.PASEO_TEST_APP_NAME?.trim() || "Paseo";
+if (IS_BIGBANG) {
+  const packagedHome = path.join(homedir(), ".bigbang-paseo");
+  if (app.isPackaged || !process.env.PASEO_HOME) process.env.PASEO_HOME = packagedHome;
+  if (app.isPackaged || !process.env.PASEO_LISTEN) process.env.PASEO_LISTEN = "127.0.0.1:6777";
+}
 const DESKTOP_WINDOW_CHROME_MODE = resolveDesktopWindowChromeMode({
   platform: process.platform,
   override: process.env.PASEO_DESKTOP_WINDOW_CONTROLS,
@@ -360,7 +371,7 @@ let pendingOpenProjectPath = parseOpenProjectPathFromArgv({
   argv: process.argv,
   isDefaultApp: process.defaultApp,
 });
-let pendingAgentNavigation = parseAgentDeepLinkFromArgv(process.argv);
+let pendingAgentNavigation = parseAgentDeepLinkFromArgv(process.argv, APP_SCHEME);
 
 // Each window pulls its own pending open-project path on mount, keyed by
 // webContents id, so deep-linked windows (second-instance launches, the
@@ -834,7 +845,7 @@ desktopWindowOwner = createDesktopWindowOwner<AgentDeepLinkTarget>({
 // ---------------------------------------------------------------------------
 
 function receiveAgentDeepLink(input: string): void {
-  const target = parseAgentDeepLink(input);
+  const target = parseDesktopAgentDeepLink(input, APP_SCHEME);
   if (!target) {
     return;
   }
@@ -877,7 +888,7 @@ function setupSingleInstanceLock(): boolean {
   }
 
   app.on("second-instance", (_event, commandLine) => {
-    const agentTarget = parseAgentDeepLinkFromArgv(commandLine);
+    const agentTarget = parseAgentDeepLinkFromArgv(commandLine, APP_SCHEME);
     if (agentTarget) {
       void bootstrapComplete
         .then(() => desktopWindowOwner.openOrFocusAgent(agentTarget))

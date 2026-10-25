@@ -12,6 +12,15 @@ describe("desktop agent navigation", () => {
     ).toEqual({ serverId: "server-1", agentId: "agent-2" });
   });
 
+  it("uses only the fork scheme for a Bigbang desktop launch", () => {
+    expect(
+      parseAgentDeepLinkFromArgv(["bigbang-studio://h/spark/agent/worker"], "bigbang-studio"),
+    ).toEqual({ serverId: "spark", agentId: "worker" });
+    expect(
+      parseAgentDeepLinkFromArgv(["paseo://h/spark/agent/worker"], "bigbang-studio"),
+    ).toBeNull();
+  });
+
   it("holds navigation until the existing renderer is ready", () => {
     const inbox = new AgentNavigationInbox();
     const target = { serverId: "server-1", agentId: "agent-2" };

@@ -269,6 +269,7 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
     "dispose",
     "hosts",
     "observeEvents",
+    "plugins",
     "projects",
     "providers",
     "terminals",
@@ -1769,4 +1770,40 @@ test("qualified parents preserve foreign identity without resolving an equal loc
   await creating;
   await client.close();
   expect(localParent.address).toEqual({ serverId: "srv_sdk_test", agentId: "same-parent" });
+});
+
+test("agent cancellation uses the existing daemon operation without archiving", async () => {
+  const { client, ws } = await connectClient();
+  const cancelled = client.agents.ref("agent_sdk").cancel();
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request.type).toBe("cancel_agent_request");
+  expect(request.agentId).toBe("agent_sdk");
+  ws.message(
+    sessionMessage({
+      type: "cancel_agent_response",
+      payload: { requestId: request.requestId, agentId: "agent_sdk", agent: null, error: null },
+    }),
+  );
+  await expect(cancelled).resolves.toBeUndefined();
+  await client.close();
+});
+
+test("plugin RPC calls retain the selected SDK host transport", async () => {
+  const { client, ws } = await connectClient();
+  const result = client.plugins.invoke("bigbang", "chat.state", { after: 7 });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "plugin.rpc.invoke.request",
+    pluginId: "bigbang",
+    method: "chat.state",
+    input: { after: 7 },
+  });
+  ws.message(
+    sessionMessage({
+      type: "plugin.rpc.invoke.response",
+      payload: { requestId: request.requestId, pluginId: "bigbang", output: { cursor: 8 } },
+    }),
+  );
+  await expect(result).resolves.toEqual({ cursor: 8 });
+  await client.close();
 });

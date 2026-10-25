@@ -250,3 +250,30 @@ describe("FileEditorModel", () => {
     expect(disk()).toBe("first\n");
   });
 });
+
+test("a delayed native edit conflicts with a disk version read after its document base", async () => {
+  const { model, session, clock, disk } = await openEditor("original\n");
+  const sourceRevision = model.getSourceRevision();
+  session.put("source.ts", "external update\n");
+  await model.reload();
+  model.edit("local edit based on original\n", { sourceRevision });
+  expect(model.getSnapshot()).toMatchObject({
+    status: "conflict",
+    content: "local edit based on original\n",
+    conflict: "changed",
+    modified: true,
+  });
+  expect(clock.scheduled).toBe(false);
+  expect(disk()).toBe("external update\n");
+});
+
+test("native edits keep their source revision across their own autosaves", async () => {
+  const { model, disk } = await openEditor("original\n");
+  const sourceRevision = model.getSourceRevision();
+  model.edit("first edit\n", { sourceRevision });
+  await model.save();
+  model.edit("second edit\n", { sourceRevision });
+  expect(model.getSnapshot().status).toBe("dirty");
+  await model.save();
+  expect(disk()).toBe("second edit\n");
+});

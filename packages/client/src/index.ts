@@ -370,6 +370,8 @@ export interface PaseoAgentHandle {
   current(): PaseoAgent | null;
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
+  /** Interrupts the current turn without archiving its session. */
+  cancel(): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
   /** Sends a prompt and resolves when that turn finishes or needs attention. */
   run(text: string, options?: PaseoAgentRunOptions): Promise<PaseoAgentRunResult>;
@@ -490,7 +492,12 @@ export interface PaseoConfigActions {
   ): Promise<{ requestId: string; config: MutableDaemonConfig }>;
 }
 
+export interface PaseoPluginActions {
+  invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+}
+
 export interface PaseoApi {
+  readonly plugins: PaseoPluginActions;
   readonly hosts: PaseoHostActions;
   dispose(): Promise<void>;
   observeEvents: DaemonClient["observeEvents"];
@@ -716,6 +723,9 @@ export function createPaseoApi(
 
   return {
     dispose,
+    plugins: {
+      invoke: (pluginId, method, input) => daemonClient.invokePluginRpc(pluginId, method, input),
+    },
     hosts: createHostActions(daemonClient, { own, signal: lifetime.signal, api: createPaseoApi }),
     observeEvents,
     terminals,
@@ -984,6 +994,7 @@ function createAgentHandleFactory(
       send: async (text, options) => {
         await daemonClient.sendAgentMessage(id, text, options);
       },
+      cancel: () => daemonClient.cancelAgent(id),
       respondToPermission: async ({ requestId, response }) => {
         await daemonClient.respondToPermission(id, requestId, response);
       },

@@ -63,6 +63,7 @@ export class FileEditorModel {
     error: null,
   };
   private persisted = "";
+  private sourceRevision = 0;
   private autosave: ReturnType<typeof setTimeout> | null = null;
   private saving = false;
   private saveSequence = 0;
@@ -90,9 +91,26 @@ export class FileEditorModel {
     void this.reload();
   }
 
-  edit(content: string): void {
+  // Native WebView edits can arrive after a clean buffer has already followed a disk change.
+  getSourceRevision(): number {
+    return this.sourceRevision;
+  }
+
+  edit(content: string, options?: { sourceRevision: number }): void {
     if (this.disposed || !this.isLoaded() || content === this.snapshot.content) return;
     const modified = content !== this.persisted;
+    if (options && options.sourceRevision !== this.sourceRevision) {
+      this.clearAutosave();
+      this.setSnapshot({
+        ...this.snapshot,
+        content,
+        modified,
+        status: "conflict",
+        conflict: "changed",
+        error: null,
+      });
+      return;
+    }
     let status: FileEditorStatus = modified ? "dirty" : "clean";
     if (this.snapshot.status === "conflict") status = "conflict";
     this.setSnapshot({ ...this.snapshot, status, content, modified, error: null });
@@ -220,6 +238,7 @@ export class FileEditorModel {
   }
 
   private applyFile(content: string): void {
+    this.sourceRevision += 1;
     this.clearAutosave();
     this.saveSequence += 1;
     this.persisted = content;

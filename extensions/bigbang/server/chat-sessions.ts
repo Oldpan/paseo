@@ -1,0 +1,130 @@
+import { randomUUID } from "node:crypto";
+import type { Assistant, Message, Turn } from "../shared/contracts";
+import type { ChatStore } from "./store";
+
+export interface ChatSession {
+  id: string;
+  conversationId: string;
+  threadId: string | null;
+  assistantId: string;
+  agentId: string;
+  provider: string;
+  systemPrompt: string;
+  lastInstructions: string;
+  created: boolean;
+  lastMessageId?: string;
+}
+export function chatSessionKey(
+  conversationId: string,
+  threadId: string | null,
+  assistantId: string,
+): string {
+  return JSON.stringify([conversationId, threadId, assistantId]);
+}
+export function restoreChatSessions(store: ChatStore): void {
+  const state = store.snapshot();
+  store.transaction(() => {
+    for (const turn of state.turns) {
+      if (turn.taskId) continue;
+      const assistant = state.assistants.find((item) => item.id === turn.assistantId);
+      if (assistant) bindChatSession(store, turn.conversationId, turn.threadId, assistant);
+    }
+  });
+}
+export function assistantInstructions(assistant: Assistant): string {
+  return `${assistant.persona}\nLong-term memory:\n${assistant.memory}\nYou are a personal assistant. Project changes belong in separate Studio tasks.`;
+}
+function legacySessionTurn(turns: Turn[]): Turn | undefined {
+  const reverse = turns.toReversed();
+  return (
+    reverse.find((turn) => ["running", "attention", "unknown", "creating"].includes(turn.status)) ??
+    reverse.find((turn) => turn.status === "completed") ??
+    reverse.find((turn) => turn.accepted) ??
+    reverse[0]
+  );
+}
+export function bindChatSession(
+  store: ChatStore,
+  conversationId: string,
+  threadId: string | null,
+  assistant: Assistant,
+): ChatSession {
+  const id = chatSessionKey(conversationId, threadId, assistant.id);
+  const existing = store.getChatSession(id);
+  if (existing) return existing;
+  const state = store.snapshot();
+  const previous = legacySessionTurn(
+    state.turns.filter(
+      (turn) =>
+        turn.conversationId === conversationId &&
+        turn.threadId === threadId &&
+        turn.assistantId === assistant.id &&
+        !turn.taskId,
+    ),
+  );
+  const reply = previous && state.messages.find((message) => message.id === `reply:${previous.id}`);
+  const session: ChatSession = {
+    id,
+    conversationId,
+    threadId,
+    assistantId: assistant.id,
+    agentId: previous?.agentId ?? randomUUID(),
+    provider: previous?.provider ?? assistant.provider,
+    systemPrompt: previous?.systemPrompt ?? assistantInstructions(assistant),
+    lastInstructions: previous?.systemPrompt ?? assistantInstructions(assistant),
+    created: Boolean(
+      previous &&
+      (previous.accepted || ["running", "attention", "completed"].includes(previous.status)),
+    ),
+    lastMessageId: reply?.id ?? previous?.seenUserId,
+  };
+  store.putChatSession(session);
+  return session;
+}
+export function unseenMessages(
+  messages: Message[],
+  session: ChatSession,
+  turns: Turn[] = [],
+): Message[] {
+  const history = messages.filter(
+    (message) =>
+      message.conversationId === session.conversationId && message.threadId === session.threadId,
+  );
+  const nativeReplies = new Set(
+    turns.filter((turn) => turn.agentId === session.agentId).map((turn) => `reply:${turn.id}`),
+  );
+  if (!session.lastMessageId)
+    return history.slice(-24).filter((message) => !nativeReplies.has(message.id));
+  const index = history.findIndex((message) => message.id === session.lastMessageId);
+  if (index < 0)
+    throw new Error(
+      "The chat execution cursor is missing. Open the existing execution in Studio to inspect it.",
+    );
+  return history.slice(index + 1).filter((message) => !nativeReplies.has(message.id));
+}
+// Updating a turn moves its SQLite snapshot row behind newer queued turns. Keep
+// the current execution owner ahead of those turns until its result is settled.
+export function runnableChatTurns(turns: Turn[]): Turn[] {
+  const selected = new Map<string, Turn>();
+  for (const turn of turns) {
+    if (!["queued", "creating", "running", "attention", "unknown"].includes(turn.status)) continue;
+    const key = JSON.stringify([turn.conversationId, turn.threadId]);
+    const previous = selected.get(key);
+    if (!previous || (previous.status === "queued" && turn.status !== "queued"))
+      selected.set(key, turn);
+  }
+  return [...selected.values()];
+}
+export function chatPrompt(
+  messages: Message[],
+  assistant: Assistant,
+  assistants: Assistant[],
+): string {
+  return messages
+    .map((message) => {
+      if (message.senderId === "user") return `You: ${message.content}`;
+      const sender = assistants.find((item) => item.id === message.senderId);
+      return `${sender?.name ?? (message.senderId === assistant.id ? assistant.name : "Assistant")}: ${message.content}`;
+    })
+    .join("\n\n");
+}

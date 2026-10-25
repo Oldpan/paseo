@@ -98,3 +98,6 @@ app.json
 
 # Project-local Serena configuration and memories.
 .serena/
+
+# Locally bundled native editor
+packages/app/src/file-panels/source/editor/generated/

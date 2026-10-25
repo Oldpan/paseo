@@ -469,6 +469,26 @@
       }
     },
     {
+      // Bigbang's migrated presentation preserves its own press feedback, style expressions,
+      // and component composition. Host/data adapters outside ui/ keep the normal rules.
+      "files": ["packages/app/src/bigbang/ui/**/*.{ts,tsx}"],
+      "rules": {
+        "paseo/no-raw-pressable": "off",
+        "react-perf/jsx-no-new-object-as-prop": "off",
+        "react-perf/jsx-no-new-function-as-prop": "off",
+        "react-perf/jsx-no-jsx-as-prop": "off",
+        "no-nested-ternary": "off",
+        "react/no-array-index-key": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/app/src/bigbang/ui/Composer.tsx",
+        "packages/app/src/bigbang/ui/markdown.ts"
+      ],
+      "rules": { "complexity": "off", "max-depth": "off" }
+    },
+    {
       "files": ["**/e2e/**/fixtures.ts"],
       "rules": {
         "no-empty-pattern": "off"

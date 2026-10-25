@@ -32,7 +32,8 @@
     "packages/relay",
     "packages/website",
     "packages/desktop",
-    "packages/cli"
+    "packages/cli",
+    "extensions/bigbang"
   ],
   "scripts": {
     "dev": "npm run dev:server",
@@ -66,7 +67,7 @@
     "build:server": "npm run build:server-deps && npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli",
     "build:server:clean": "npm run build:server-deps:clean && npm run build:clean --workspace=@getpaseo/server && npm run build:clean --workspace=@getpaseo/cli",
     "build:daemon-web-ui": "node scripts/build-daemon-web-ui.mjs",
-    "build:app-deps": "npm run build:highlight && npm run build:client && npm run build:plugin && npm run build --workspace=@getpaseo/expo-two-way-audio",
+    "build:app-deps": "npm run build:highlight && npm run build:client && npm run build:plugin && npm run build --workspace=@getpaseo/expo-two-way-audio && npm run build:native-editor --workspace=@getpaseo/app",
     "build:app-deps:clean": "npm run build:highlight:clean && npm run build:client:clean && npm run build:plugin:clean && npm run build --workspace=@getpaseo/expo-two-way-audio",
     "watch:protocol": "npm run watch --workspace=@getpaseo/protocol",
     "watch:client": "tsc -p packages/client/tsconfig.json --watch --preserveWatchOutput",
@@ -122,7 +123,15 @@
     "release:promote": "npm run release:check && npm run version:all:promote && npm run release:publish && npm run release:push",
     "release:patch": "npm run release:check && npm run version:all:patch && npm run release:publish && npm run release:push",
     "release:minor": "npm run release:check && npm run version:all:minor && npm run release:publish && npm run release:push",
-    "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push"
+    "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push",
+    "bigbang:profile": "node scripts/bigbang/dev.mjs profile",
+    "bigbang:server": "node scripts/bigbang/dev.mjs server",
+    "bigbang:app": "node scripts/bigbang/dev.mjs app",
+    "bigbang:desktop": "node scripts/bigbang/dev.mjs desktop",
+    "bigbang:cli": "node scripts/bigbang/dev.mjs cli",
+    "bigbang:apk:arm64": "cross-env PASEO_BIGBANG_BUILD=1 node scripts/build-apk.mjs arm64",
+    "bigbang:build:web": "cross-env EXPO_PUBLIC_BIGBANG=true APP_VARIANT=bigbang npm run build:web --workspace=@getpaseo/app",
+    "bigbang:build:desktop": "cross-env PASEO_WEB_PLATFORM=electron npm run bigbang:build:web && cross-env PASEO_BIGBANG_BUILD=1 npm run build:bigbang --workspace=@getpaseo/desktop"
   },
   "devDependencies": {
     "@types/ws": "^8.5.14",
