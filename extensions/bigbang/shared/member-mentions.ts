@@ -2,11 +2,16 @@ import {
   CHANNEL_ALL_MENTION_NAME,
   extractMentionedNames,
   stripIgnoredMentionContexts,
-} from "../shared/mentions";
+} from "./mentions";
 
 interface MentionableAgent {
   agentId: string;
   name: string;
+}
+
+/** Members as mentionable agents (`agentId` is the member id). */
+export function mentionable(members: ReadonlyArray<{ id: string; name: string }>) {
+  return members.map(({ id, name }) => ({ id, name, agentId: id }));
 }
 
 function escapeRegExp(value: string): string {

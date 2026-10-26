@@ -27,7 +27,11 @@ export const conversationSchema = z.object({
   name: z.string(),
   members: z.array(z.string().uuid()).min(1).max(6),
   kind: z.enum(["dm", "group"]),
+  // The composer's default for the roundtable toggle; the server starts one only on an explicit
+  // `responseMode`.
   roundtable: z.boolean(),
+  // Replies when a plain message has no mention, quote or recent participant.
+  defaultResponderId: z.string().uuid().optional(),
 });
 export const messageSchema = z.object({
   id: z.string(),
@@ -42,6 +46,7 @@ export const messageSchema = z.object({
   turnId: z.string().optional(),
   quoteOf: z.string().optional(),
   epochId: z.string().optional(),
+  round: z.number().optional(),
   event: z
     .object({ type: z.string(), taskId: z.string().optional(), detail: z.string().optional() })
     .optional(),
@@ -95,6 +100,13 @@ export const turnSchema = z.object({
     .optional(),
   epochId: z.string().optional(),
   round: z.number().optional(),
+  // The user message that started the chain of turns this one belongs to. Agent-triggered turns
+  // (mention, peer_inbox) are budgeted per root trigger.
+  rootTriggerId: z.string().optional(),
+  // The assistant whose message woke this turn (kind mention).
+  wokenBy: z.string().optional(),
+  // The peer messages a peer_inbox turn was batched from.
+  inboxMessageIds: z.array(z.string()).optional(),
   finalMessageId: z.string().optional(),
   accepted: z.boolean().optional(),
   prepared: z.boolean().optional(),
@@ -180,6 +192,10 @@ export const sendMessage = defineRpc({
     conversationId: z.string(),
     threadId: z.string().nullable(),
     content: z.string().trim().min(1).max(100000),
+    // Id of the assistant message being quoted; routes the reply to its sender.
+    quoteOf: z.string().optional(),
+    // "roundtable" starts an ordered discussion from a root message with 2-6 explicit mentions.
+    responseMode: z.literal("roundtable").optional(),
   }),
   output: z.object({ id: z.string() }),
 });

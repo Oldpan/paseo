@@ -1,4 +1,3 @@
-import { resolveOrdinaryChannelRoute } from "./routing";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -8,6 +7,7 @@ import {
   type Assistant,
   type ChatState,
   type Conversation,
+  type Message,
   type Task,
   type Turn,
   readAssistantMemory,
@@ -16,9 +16,10 @@ import {
   startTask,
   writeAssistantMemory,
 } from "../shared/contracts";
-import { findMentionedAgents } from "./mentions";
 import { ChatStore } from "./store";
-import { bindChatSession, restoreChatSessions } from "./chat-sessions";
+import { restoreChatSessions } from "./chat-sessions";
+import { Fanout } from "./fanout";
+import { Roundtable, roundtableStartMembers } from "./roundtable";
 import { Dispatcher, KeyedQueue, agentKey, errorMessage, failureStatus } from "./dispatcher";
 import {
   PaseoExecution,
@@ -55,6 +56,8 @@ export interface CoordinatorOptions {
   execution?: ExecutionPort;
   /** Safety sweep interval; hooks are best-effort, so the sweep settles what they missed. */
   sweepMs?: number;
+  /** Clock for message times, recent participants and the peer inbox; tests drive it. */
+  now?: () => number;
 }
 interface Finish {
   outcome?: TurnEndedEvent["outcome"];
@@ -91,6 +94,10 @@ export class Coordinator {
   private readonly injected: boolean;
   private readonly queue = new KeyedQueue();
   private readonly dispatcher: Dispatcher;
+  private readonly fanout: Fanout;
+  private readonly roundtable: Roundtable;
+  private readonly now: () => number;
+  private inboxTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watches = new Map<string, () => void>();
   private readonly watching = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -105,6 +112,9 @@ export class Coordinator {
     this.port = options.execution ?? null;
     this.injected = Boolean(options.execution);
     this.sweepMs = options.sweepMs ?? DEFAULT_SWEEP_MS;
+    this.now = options.now ?? Date.now;
+    this.fanout = new Fanout(store, this.now);
+    this.roundtable = new Roundtable(store, this.now);
     this.dispatcher = new Dispatcher({
       store,
       queue: this.queue,
@@ -112,6 +122,7 @@ export class Coordinator {
       closed: () => this.closed,
       cancelTask: (id) => this.cancel(id),
       settle: (agentId) => this.settle(agentId),
+      turnEnded: (turn) => this.afterTurn(turn),
     });
   }
   /** Binds the plugin's Paseo API once; later calls are ignored. The first call runs recovery. */
@@ -126,6 +137,10 @@ export class Coordinator {
     if (this.recovered || !this.port) return;
     this.recovered = true;
     restoreChatSessions(this.store);
+    // Resume what the last process left: roundtable epochs between turns, and peer batches that
+    // came due while it was down.
+    this.roundtable.advanceAll();
+    this.fanout.flushDue();
     this.timer = setInterval(() => void this.sweep(), this.sweepMs);
     this.timer.unref();
     void this.sweep();
@@ -217,56 +232,26 @@ export class Coordinator {
     )
       throw new Error("Thread belongs to another chat.");
     const state = this.store.snapshot();
-    const members = state.assistants.filter((assistant) =>
-      conversation.members.includes(assistant.id),
-    );
-    const mentioned = findMentionedAgents(
-      input.content,
-      members.map((assistant) => ({ ...assistant, agentId: assistant.id })),
-    );
-    const recent = state.messages
-      .filter(
-        (message) =>
-          message.conversationId === conversation.id &&
-          message.threadId === input.threadId &&
-          message.senderId !== "user" &&
-          message.createdAt > Date.now() - 60 * 60 * 1000,
-      )
-      .toReversed()
-      .map((message) => message.senderId);
-    const route = resolveOrdinaryChannelRoute({
-      memberAgentIds: new Set(conversation.members),
-      mentionedAgentIds: mentioned.map((member) => member.id),
-      recentParticipantAgentIds: recent,
-      firstMemberAgentId: conversation.members[0],
-    });
-    const routed = members.filter((member) => route?.dispatchAgentIds.includes(member.id));
-    let responders = routed;
-    if (conversation.roundtable) responders = mentioned.length ? mentioned : members;
-    const taskRoot = input.threadId ? this.store.get("messages", input.threadId) : null;
-    const followupTask = taskRoot?.taskId ? this.store.get("tasks", taskRoot.taskId) : null;
-    if (followupTask && (!followupTask.execution || followupTask.status === "cancelled"))
-      throw new Error("This task cannot accept a follow-up yet.");
-    let orderedResponders = responders;
-    if (conversation.roundtable)
-      orderedResponders = Array.from({ length: 3 }, (_, round) => [
-        ...responders.slice(round % responders.length),
-        ...responders.slice(0, round % responders.length),
-      ])
-        .flat()
-        .slice(0, 10);
-    if (followupTask)
-      orderedResponders = members.filter((member) => member.id === followupTask.assistantId);
-    let turnKind: Turn["kind"] = "reply";
-    if (followupTask) turnKind = "task_followup";
-    else if (conversation.roundtable) turnKind = "roundtable";
+    const { followupTask, epoch, starters } = this.planSend(input, conversation, state);
+    const staleAgents =
+      epoch?.status === "running"
+        ? state.turns
+            .filter(
+              (turn) => turn.epochId === epoch.id && turn.accepted && TURN_LIVE.has(turn.status),
+            )
+            .map((turn) => turn.agentId)
+        : [];
     this.store.transaction(() => {
-      this.store.putMessage({
-        ...input,
+      const message = this.store.putMessage({
+        id: input.id,
+        conversationId: input.conversationId,
+        threadId: input.threadId,
+        content: input.content,
         senderId: "user",
-        createdAt: Date.now(),
+        createdAt: this.now(),
         taskId: null,
         kind: "user",
+        ...(input.quoteOf ? { quoteOf: input.quoteOf } : {}),
       });
       for (const previous of state.turns.filter(
         (turn) =>
@@ -279,40 +264,68 @@ export class Coordinator {
           status: "cancelled",
           error: "Superseded by a newer message.",
         });
-      if (followupTask)
-        this.store.put("tasks", {
-          ...followupTask,
-          status: "running",
-          deadline: Date.now() + TASK_BUDGET_MS,
-        });
-      for (const [index, assistant] of orderedResponders.entries()) {
-        const id = randomUUID();
-        const session = followupTask
-          ? null
-          : bindChatSession(this.store, conversation.id, input.threadId, assistant);
-        this.store.put("turns", {
-          id,
-          kind: turnKind,
-          ...(conversation.roundtable && !followupTask
-            ? { round: Math.floor(index / Math.max(responders.length, 1)) }
-            : {}),
-          conversationId: conversation.id,
-          threadId: input.threadId,
-          assistantId: assistant.id,
-          prompt: input.content,
-          prepared: false,
-          accepted: false,
-          triggerId: input.id,
-          taskId: followupTask?.id ?? null,
-          status: "queued",
-          agentId: followupTask?.execution?.agentId ?? session!.agentId,
-          chatSessionId: session?.id,
-          error: null,
-        });
-      }
+      // Peer messages waiting for a batch belong to the conversation this message just replaced.
+      this.store.clearInbox(conversation.id, input.threadId);
+      if (followupTask) this.queueFollowup(followupTask, message);
+      else if (starters)
+        this.roundtable.advance(this.roundtable.start(conversation, message, starters).id);
+      // Supersedes the running epoch; its in-flight turn is cancelled when it settles below.
+      else if (epoch) this.roundtable.advance(this.roundtable.restart(epoch, message).id);
+      else this.fanout.wakeForUserMessage(conversation, message);
     });
+    for (const agentId of staleAgents) this.settle(agentId);
     this.kick();
     return { id: input.id };
+  }
+  // Checks everything a message needs before anything is written and decides how it is routed.
+  private planSend(
+    input: RpcInput<typeof sendMessage>,
+    conversation: Conversation,
+    state: ChatState,
+  ) {
+    const taskRoot = input.threadId ? this.store.get("messages", input.threadId) : null;
+    const followupTask = taskRoot?.taskId ? this.store.get("tasks", taskRoot.taskId) : null;
+    if (followupTask && (!followupTask.execution || followupTask.status === "cancelled"))
+      throw new Error("This task cannot accept a follow-up yet.");
+    if (
+      input.quoteOf &&
+      state.messages.find((message) => message.id === input.quoteOf)?.conversationId !==
+        conversation.id
+    )
+      throw new Error("The quoted message no longer exists.");
+    // A message in a roundtable thread always continues it; only a root message can start one.
+    const epoch = input.threadId ? this.store.latestEpoch(conversation.id, input.threadId) : null;
+    const starters =
+      input.responseMode === "roundtable" && !epoch
+        ? roundtableStartMembers({
+            conversation,
+            threadId: input.threadId,
+            content: input.content,
+            members: conversation.members.flatMap(
+              (id) => state.assistants.find((assistant) => assistant.id === id) ?? [],
+            ),
+          })
+        : null;
+    return { followupTask, epoch, starters };
+  }
+  private queueFollowup(task: Task, message: Message): void {
+    this.store.put("tasks", { ...task, status: "running", deadline: Date.now() + TASK_BUDGET_MS });
+    this.store.put("turns", {
+      id: randomUUID(),
+      kind: "task_followup",
+      conversationId: message.conversationId,
+      threadId: message.threadId,
+      assistantId: task.assistantId,
+      prompt: message.content,
+      prepared: false,
+      accepted: false,
+      triggerId: message.id,
+      rootTriggerId: message.id,
+      taskId: task.id,
+      status: "queued",
+      agentId: task.execution!.agentId,
+      error: null,
+    });
   }
 
   task(input: RpcInput<typeof startTask>): Task {
@@ -422,11 +435,37 @@ export class Coordinator {
   private kick(): void {
     this.dispatcher.kick();
     this.scheduleTasks();
+    this.armInbox();
+  }
+  // One timer, armed for the earliest pending peer batch.
+  private armInbox(): void {
+    if (this.inboxTimer) clearTimeout(this.inboxTimer);
+    this.inboxTimer = null;
+    const due = this.fanout.nextDeadline();
+    if (this.closed || due === null) return;
+    this.inboxTimer = setTimeout(
+      () => {
+        void this.queue.run("fanout", async () => {
+          this.fanout.flushDue();
+          this.kick();
+        });
+      },
+      Math.max(0, due - this.now()),
+    );
+    this.inboxTimer.unref();
+  }
+  // A turn ended outside the settle path: the roundtable moves on to its next speaker.
+  private afterTurn(turn: Turn): void {
+    if (!turn.epochId || turn.status !== "failed") return;
+    this.roundtable.advance(turn.epochId);
+    this.kick();
   }
   /** Settles everything live, enforces task budgets and restarts stalled work. */
   async sweep(): Promise<void> {
     if (this.closed || !this.port) return;
     const state = this.store.snapshot();
+    this.roundtable.advanceAll();
+    this.fanout.flushDue();
     for (const turn of state.turns)
       if (turn.accepted && TURN_LIVE.has(turn.status)) this.settle(turn.agentId);
     for (const task of state.tasks) {
@@ -518,6 +557,9 @@ export class Coordinator {
     if (!read.ended) {
       const gone = goneReason(read, finish);
       if (gone) this.interrupt(turn, gone);
+      // A superseded roundtable turn is stopped, not waited for.
+      else if (this.roundtable.isStale(turn.epochId))
+        await this.port!.cancel(turn.agentId, this.serverFor(turn));
       else this.setAttention(turn, read.permission);
       return;
     }
@@ -546,28 +588,35 @@ export class Coordinator {
     }
     const text = read.text.trim();
     this.store.transaction(() => {
-      let finalMessageId: string | undefined;
+      let final: Message | undefined;
       if (status === "completed" && assistant && text && !isPass(text)) {
-        finalMessageId = `final:${turn.id}`;
-        if (!this.store.get("messages", finalMessageId))
-          this.store.putMessage({
-            id: finalMessageId,
+        const id = `final:${turn.id}`;
+        final = this.store.get("messages", id) ?? undefined;
+        if (!final)
+          final = this.store.putMessage({
+            id,
             conversationId: turn.conversationId,
             threadId: turn.threadId,
             senderId: assistant.id,
             content: text,
-            createdAt: Date.now(),
+            createdAt: this.now(),
             taskId: turn.taskId ?? null,
             kind: "final",
             turnId: turn.id,
+            ...(turn.epochId ? { epochId: turn.epochId } : {}),
+            ...(turn.round !== undefined ? { round: turn.round } : {}),
           });
       }
-      this.store.put("turns", {
+      const settled: Turn = {
         ...turn,
         status,
         error,
-        ...(finalMessageId ? { finalMessageId } : {}),
-      });
+        ...(final ? { finalMessageId: final.id } : {}),
+      };
+      this.store.put("turns", settled);
+      // What the assistant said may wake others; what the roundtable does next depends on it.
+      if (final) this.fanout.onFinal(settled, final);
+      if (turn.epochId) this.roundtable.advance(turn.epochId);
       const latest = task ? this.store.get("tasks", task.id) : null;
       if (latest && latest.status !== "cancelled")
         this.store.put("tasks", {
@@ -664,7 +713,10 @@ export class Coordinator {
     const error = reason === "archived" ? ARCHIVED_MESSAGE : INTERRUPTED_MESSAGE;
     this.store.transaction(() => {
       const taskId = "agentId" in target ? target.taskId : target.id;
-      if ("agentId" in target) this.store.put("turns", { ...target, status: "failed", error });
+      if ("agentId" in target) {
+        this.store.put("turns", { ...target, status: "failed", error });
+        if (target.epochId) this.roundtable.advance(target.epochId);
+      }
       const task = taskId ? this.store.get("tasks", taskId) : null;
       if (task && LIVE.has(task.status))
         this.store.put("tasks", { ...task, status: "failed", error, pendingPermission: null });
@@ -728,6 +780,7 @@ export class Coordinator {
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.inboxTimer) clearTimeout(this.inboxTimer);
     for (const stop of this.watches.values()) stop();
     this.watches.clear();
     await this.queue.idle();

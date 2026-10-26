@@ -88,15 +88,27 @@ export function bindChatSession(
   store.putChatSession(session);
   return session;
 }
+/** The messages of one lane, plus the thread's root message when `rootId` names it (roundtable). */
+export function laneMessages(
+  messages: Message[],
+  conversationId: string,
+  threadId: string | null,
+  rootId?: string | null,
+): Message[] {
+  return messages.filter(
+    (message) =>
+      message.conversationId === conversationId &&
+      message.kind !== "system" &&
+      (message.threadId === threadId || (rootId != null && message.id === rootId)),
+  );
+}
 export function unseenMessages(
   messages: Message[],
   session: ChatSession,
   turns: Turn[] = [],
+  rootId?: string | null,
 ): Message[] {
-  const history = messages.filter(
-    (message) =>
-      message.conversationId === session.conversationId && message.threadId === session.threadId,
-  );
+  const history = laneMessages(messages, session.conversationId, session.threadId, rootId);
   // The execution already holds its own replies in its native history.
   const nativeReplies = new Set(
     turns
@@ -128,6 +140,49 @@ export function runnableChatTurns(turns: Turn[]): Turn[] {
       selected.set(key, turn);
   }
   return [...selected.values()];
+}
+export interface QueuedTurn {
+  /** Defaults to a fresh id; the id is the anchor the execution records. */
+  id?: string;
+  conversationId: string;
+  threadId: string | null;
+  assistant: Assistant;
+  kind: NonNullable<Turn["kind"]>;
+  triggerId: string;
+  /** Replaced by the composed prompt when the dispatcher prepares the turn. */
+  prompt: string;
+  rootTriggerId: string;
+  wokenBy?: string;
+  inboxMessageIds?: string[];
+  epochId?: string;
+  round?: number;
+}
+/** Persists a queued turn for an assistant in a lane, binding its chat execution. */
+export function queueTurn(store: ChatStore, input: QueuedTurn): Turn {
+  const session = bindChatSession(store, input.conversationId, input.threadId, input.assistant);
+  const turn: Turn = {
+    id: input.id ?? randomUUID(),
+    kind: input.kind,
+    conversationId: input.conversationId,
+    threadId: input.threadId,
+    assistantId: input.assistant.id,
+    prompt: input.prompt,
+    prepared: false,
+    accepted: false,
+    triggerId: input.triggerId,
+    rootTriggerId: input.rootTriggerId,
+    taskId: null,
+    status: "queued",
+    agentId: session.agentId,
+    chatSessionId: session.id,
+    error: null,
+    ...(input.wokenBy ? { wokenBy: input.wokenBy } : {}),
+    ...(input.inboxMessageIds ? { inboxMessageIds: input.inboxMessageIds } : {}),
+    ...(input.epochId ? { epochId: input.epochId } : {}),
+    ...(input.round !== undefined ? { round: input.round } : {}),
+  };
+  store.put("turns", turn);
+  return turn;
 }
 export function chatPrompt(
   messages: Message[],

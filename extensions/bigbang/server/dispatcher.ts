@@ -5,9 +5,12 @@ import {
   assistantInstructions,
   bindChatSession,
   chatPrompt,
+  laneMessages,
   runnableChatTurns,
   unseenMessages,
 } from "./chat-sessions";
+import { groupPreamble } from "./prompts";
+import { ROUNDTABLE_HISTORY_LIMIT } from "./roundtable";
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -58,6 +61,8 @@ export interface DispatcherDeps {
   cancelTask(taskId: string): Promise<unknown>;
   /** Looks at an execution whose turn was just confirmed as accepted. */
   settle(agentId: string): void;
+  /** A turn ended without its execution ever reporting back (dispatch failed). */
+  turnEnded(turn: Turn): void;
 }
 
 // A turn is persisted `prepared` before anything is sent. If the process dies in between, the
@@ -158,13 +163,9 @@ export class Dispatcher {
   }
   private fail(turn: Turn, error: unknown): void {
     if (this.deps.closed()) return;
-    this.deps.store.transaction(() =>
-      this.deps.store.put("turns", {
-        ...turn,
-        status: failureStatus(error),
-        error: errorMessage(error),
-      }),
-    );
+    const failed: Turn = { ...turn, status: failureStatus(error), error: errorMessage(error) };
+    this.deps.store.transaction(() => this.deps.store.put("turns", failed));
+    this.deps.turnEnded(failed);
   }
   private advanceChatContext(turn: Turn): void {
     if (!turn.chatSessionId || !turn.contextThroughId) return;
@@ -220,17 +221,28 @@ export class Dispatcher {
         "This chat already has an execution with another model. Keep that model or start a new chat; it will not create a second execution automatically.",
       );
     const state = store.snapshot();
-    const delta = unseenMessages(state.messages, session, state.turns);
+    // A roundtable thread's root message is part of the discussion but lives outside the thread.
+    const rootId = turn.kind === "roundtable" ? turn.threadId : null;
+    let delta = unseenMessages(state.messages, session, state.turns, rootId);
+    if (turn.kind === "roundtable") delta = delta.slice(-ROUNDTABLE_HISTORY_LIMIT);
     const instructions = assistantInstructions(assistant);
+    const conversation = store.get("conversations", turn.conversationId);
+    const messages = chatPrompt(delta, assistant, state.assistants);
+    // A private chat prompts with the messages alone; a group says who is here and why it woke you.
     let prompt =
-      chatPrompt(delta, assistant, state.assistants) ||
-      "Continue this roundtable discussion with another useful contribution.";
+      conversation?.kind === "group"
+        ? `${groupPreamble({
+            turn,
+            assistant,
+            conversation,
+            assistants: state.assistants,
+            epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
+          })}\n\n${messages || "(no new messages)"}`
+        : messages || "Continue this roundtable discussion with another useful contribution.";
     if (instructions !== session.lastInstructions)
       prompt = `Updated assistant instructions:\n${instructions}\n\n${prompt}`;
-    const history = state.messages.filter(
-      (message) =>
-        message.conversationId === turn.conversationId && message.threadId === turn.threadId,
-    );
+    const history = laneMessages(state.messages, turn.conversationId, turn.threadId, rootId);
+    const threadUsers = laneMessages(state.messages, turn.conversationId, turn.threadId);
     const prepared: Turn = {
       ...turn,
       agentId: session.agentId,
@@ -241,7 +253,7 @@ export class Dispatcher {
       systemPrompt: instructions,
       prompt,
       contextThroughId: history.at(-1)?.id,
-      seenUserId: history.findLast((message) => message.senderId === "user")?.id,
+      seenUserId: threadUsers.findLast((message) => message.senderId === "user")?.id,
       status: "creating",
     };
     store.transaction(() => store.put("turns", prepared));

@@ -353,7 +353,7 @@ describe("Bigbang durable Chat", () => {
       4,
     );
   });
-  it("reuses each roundtable participant's execution across rounds without sharing assistants", () => {
+  it("does not start a roundtable from the group's default toggle alone", () => {
     const { store, coordinator, assistant } = fixture();
     const grace = coordinator.saveAssistant({ ...assistant, id: randomUUID(), name: "Grace" });
     const conversation = coordinator.createConversation({
@@ -370,14 +370,10 @@ describe("Bigbang durable Chat", () => {
       content: "Discuss this together",
     });
 
-    const turns = store.snapshot().turns;
-    expect(turns).toHaveLength(6);
-    for (const member of [assistant, grace]) {
-      const memberTurns = turns.filter((turn) => turn.assistantId === member.id);
-      expect(memberTurns).toHaveLength(3);
-      expect(new Set(memberTurns.map((turn) => turn.agentId)).size).toBe(1);
-    }
-    expect(new Set(turns.map((turn) => turn.agentId)).size).toBe(2);
+    // Only an explicit responseMode starts one; a plain message goes to the first member.
+    expect(store.snapshot().turns).toEqual([
+      expect.objectContaining({ kind: "reply", assistantId: assistant.id }),
+    ]);
   });
   it("keeps one execution identity when a newer queued message supersedes the old one", () => {
     const { store, coordinator, conversation } = fixture();

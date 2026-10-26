@@ -4,8 +4,19 @@ import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { stateSchema, type ChatState, type Message } from "../shared/contracts";
 import type { ChatSession } from "./chat-sessions";
+import type { Epoch } from "./roundtable";
 
 type Collection = Exclude<keyof ChatState, "cursor" | "generation">;
+/** A peer message waiting to be batched into one peer_inbox turn for `assistantId`. */
+export interface InboxItem {
+  assistantId: string;
+  conversationId: string;
+  threadId: string | null;
+  messageId: string;
+  senderId: string;
+  rootTriggerId: string;
+  createdAt: number;
+}
 export interface AssistantHome {
   assistantId: string;
   workspaceId: string;
@@ -32,8 +43,10 @@ export class ChatStore {
       "CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL)",
     );
     this.indexChatSessionsByAgent();
-    // Server-only tables: never part of the synced snapshot. mention_cooldowns and peer_inbox are
-    // reserved for the group routing milestone and stay empty until then.
+    // Server-only tables: never part of the synced snapshot.
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS roundtable_epochs (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, thread_id TEXT NOT NULL, generation INTEGER NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL); CREATE INDEX IF NOT EXISTS roundtable_epochs_thread ON roundtable_epochs(conversation_id, thread_id, generation);",
+    );
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS mention_cooldowns (key TEXT PRIMARY KEY, at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS peer_inbox (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, thread_id TEXT, assistant_id TEXT NOT NULL, value TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS assistant_homes (assistant_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, directory TEXT NOT NULL);",
     );
@@ -170,6 +183,87 @@ export class ChatStore {
         "INSERT INTO chat_sessions(id,value,agent_id) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,agent_id=excluded.agent_id",
       )
       .run(session.id, JSON.stringify(session), session.agentId);
+  }
+  getEpoch(id: string): Epoch | null {
+    const row = this.db.prepare("SELECT value FROM roundtable_epochs WHERE id=?").get(id) as
+      | { value: string }
+      | undefined;
+    return row ? JSON.parse(row.value) : null;
+  }
+  putEpoch(epoch: Epoch): void {
+    this.db
+      .prepare(
+        "INSERT INTO roundtable_epochs(id,conversation_id,thread_id,generation,status,value) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,value=excluded.value",
+      )
+      .run(
+        epoch.id,
+        epoch.conversationId,
+        epoch.threadId,
+        epoch.generation,
+        epoch.status,
+        JSON.stringify(epoch),
+      );
+  }
+  /** The newest epoch of a roundtable thread; a thread without one is not a roundtable. */
+  latestEpoch(conversationId: string, threadId: string): Epoch | null {
+    const row = this.db
+      .prepare(
+        "SELECT value FROM roundtable_epochs WHERE conversation_id=? AND thread_id=? ORDER BY generation DESC LIMIT 1",
+      )
+      .get(conversationId, threadId) as { value: string } | undefined;
+    return row ? JSON.parse(row.value) : null;
+  }
+  runningEpochs(): Epoch[] {
+    return (
+      this.db
+        .prepare("SELECT value FROM roundtable_epochs WHERE status='running' ORDER BY generation")
+        .all() as Array<{ value: string }>
+    ).map((row) => JSON.parse(row.value));
+  }
+  /** When `key` (one direction in one lane) last woke someone by mention, or null. */
+  getMentionCooldown(key: string): number | null {
+    const row = this.db.prepare("SELECT at FROM mention_cooldowns WHERE key=?").get(key) as
+      | { at: number }
+      | undefined;
+    return row ? row.at : null;
+  }
+  putMentionCooldown(key: string, at: number): void {
+    this.db
+      .prepare(
+        "INSERT INTO mention_cooldowns(key,at) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET at=excluded.at",
+      )
+      .run(key, at);
+  }
+  addInboxItem(item: InboxItem): void {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO peer_inbox(id,conversation_id,thread_id,assistant_id,value,created_at) VALUES (?,?,?,?,?,?)",
+      )
+      .run(
+        `${item.assistantId}:${item.messageId}`,
+        item.conversationId,
+        item.threadId,
+        item.assistantId,
+        JSON.stringify(item),
+        item.createdAt,
+      );
+  }
+  inboxItems(): InboxItem[] {
+    return (
+      this.db.prepare("SELECT value FROM peer_inbox ORDER BY created_at, rowid").all() as Array<{
+        value: string;
+      }>
+    ).map((row) => JSON.parse(row.value));
+  }
+  deleteInboxItems(items: readonly InboxItem[]): void {
+    const remove = this.db.prepare("DELETE FROM peer_inbox WHERE id=?");
+    for (const item of items) remove.run(`${item.assistantId}:${item.messageId}`);
+  }
+  /** Drops every pending peer message of a lane: a newer user message supersedes them. */
+  clearInbox(conversationId: string, threadId: string | null): void {
+    this.db
+      .prepare("DELETE FROM peer_inbox WHERE conversation_id=? AND thread_id IS ?")
+      .run(conversationId, threadId);
   }
   getAssistantHome(assistantId: string): AssistantHome | null {
     const row = this.db
