@@ -2,14 +2,25 @@ import { PluginHookHandlers } from "./lifecycle/index.js";
 import { evaluateBundle } from "./bundle-evaluator.js";
 import {
   PluginProcessRequestSchema,
+  type PluginAgentToolMetadata,
   type PluginProcessMessage,
   type PluginProcessRequest,
 } from "./plugin-process-protocol.js";
 import type { UsageSourceRegistration } from "@getpaseo/plugin/server/usage";
-import type { SettingsDefinition, PluginRpcContract } from "@getpaseo/plugin";
-import type { PluginHandlerContext, PluginServerContribution } from "@getpaseo/plugin/server";
+import {
+  AGENT_TOOL_NAME_PATTERN,
+  type PluginAgentToolContract,
+  type SettingsDefinition,
+  type PluginRpcContract,
+} from "@getpaseo/plugin";
+import type {
+  PluginAgentToolAudience,
+  PluginAgentToolContext,
+  PluginHandlerContext,
+  PluginServerContribution,
+} from "@getpaseo/plugin/server";
 import { fileURLToPath } from "node:url";
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
 import {
   ProviderEventSchema,
   type ProviderConnection,
@@ -63,6 +74,15 @@ export function createPluginWorker(options: {
     send({ type: "hooks.changed", hooks: hooks.catalog() });
   });
   const handlers = new Map<string, RegisteredRpc>();
+  interface RegisteredAgentTool {
+    contract: PluginAgentToolContract;
+    inputSchema: Record<string, unknown>;
+    handler: (input: unknown, context: PluginAgentToolContext) => unknown | Promise<unknown>;
+  }
+  const agentTools = new Map<string, RegisteredAgentTool>();
+  const agentToolCalls = new Map<string, AbortController>();
+  let agentToolAudience: PluginAgentToolAudience = [];
+  let contributed = false;
   const providers = new Map<string, ProviderRegistration>();
   const usageSources = new Map<string, UsageSourceRegistration>();
   const providerConnections = new Map<
@@ -107,6 +127,86 @@ export function createPluginWorker(options: {
     }
     const method = validateMethod(contract.name);
     handlers.set(method, { contract: { ...contract, name: method }, handler });
+  }
+
+  function registerAgentTool(
+    contract: PluginAgentToolContract,
+    handler: RegisteredAgentTool["handler"],
+  ): void {
+    if (contributed) {
+      throw new Error("Plugin agent tools must be registered while contribute() runs");
+    }
+    if (typeof contract.name !== "string" || !AGENT_TOOL_NAME_PATTERN.test(contract.name)) {
+      throw new Error(`Invalid plugin agent tool name: ${String(contract.name)}`);
+    }
+    if (typeof contract.description !== "string" || !contract.description.trim()) {
+      throw new Error(`Plugin agent tool ${contract.name} requires a description`);
+    }
+    if (
+      !contract.input ||
+      typeof contract.input.parseAsync !== "function" ||
+      !contract.output ||
+      typeof contract.output.parseAsync !== "function"
+    ) {
+      throw new Error(`Plugin agent tool ${contract.name} requires input and output schemas`);
+    }
+    if (typeof handler !== "function") {
+      throw new Error(`Plugin agent tool ${contract.name} must provide a handler`);
+    }
+    if (agentTools.has(contract.name)) {
+      throw new Error(`Duplicate plugin agent tool: ${contract.name}`);
+    }
+    const inputSchema = z.toJSONSchema(contract.input, { io: "input" });
+    agentTools.set(contract.name, { contract, inputSchema, handler });
+  }
+
+  function setAgentToolAudience(audience: PluginAgentToolAudience): void {
+    const valid =
+      audience === "all" ||
+      (Array.isArray(audience) &&
+        audience.every((agentId) => typeof agentId === "string" && agentId.length > 0));
+    if (!valid) {
+      throw new Error('Agent tool audience must be "all" or a list of agent IDs');
+    }
+    agentToolAudience = audience === "all" ? "all" : [...new Set(audience)];
+    send({
+      type: "agent_tools.audience",
+      audience: agentToolAudience === "all" ? "all" : [...agentToolAudience],
+    });
+  }
+
+  function agentToolMetadata(): PluginAgentToolMetadata[] {
+    return [...agentTools.values()]
+      .sort((left, right) => left.contract.name.localeCompare(right.contract.name))
+      .map(({ contract, inputSchema }) => ({
+        name: contract.name,
+        description: contract.description,
+        inputSchema,
+      }));
+  }
+
+  function handleAgentToolCall(
+    message: Extract<PluginProcessRequest, { type: "agent_tool.call" }>,
+  ): void {
+    const controller = new AbortController();
+    agentToolCalls.set(message.requestId, controller);
+    void (async () => {
+      const registered = agentTools.get(message.tool);
+      if (!registered) throw new Error(`Unknown agent tool: ${message.tool}`);
+      if (!paseo) throw new Error("Plugin Paseo API is unavailable");
+      const output = await registered.handler(message.input, {
+        caller: { agentId: message.callerAgentId },
+        paseo,
+        signal: controller.signal,
+      });
+      return jsonTransportValue(await registered.contract.output.parseAsync(output));
+    })()
+      .then(
+        (output) => send({ type: "result", requestId: message.requestId, output }),
+        (error) =>
+          send({ type: "error", requestId: message.requestId, error: describeError(error) }),
+      )
+      .finally(() => agentToolCalls.delete(message.requestId));
   }
 
   function registerProvider(provider: ProviderRegistration): void {
@@ -273,7 +373,8 @@ export function createPluginWorker(options: {
       reconnect: { enabled: true },
       transportFactory,
     });
-    paseo = createPaseoApi(daemonClient);
+    const pluginPaseo = createPaseoApi(daemonClient);
+    paseo = pluginPaseo;
     await daemonClient.connect();
     settingsStore = message.settingsDirectory
       ? new PluginSettingsStore(message.settingsDirectory, (settingsId) =>
@@ -281,6 +382,12 @@ export function createPluginWorker(options: {
         )
       : null;
     const contributedCleanup = contribute({
+      paseo: pluginPaseo,
+      registerAgentTool: (contract, handler) =>
+        registerAgentTool(contract, async (input, context) =>
+          handler(await contract.input.parseAsync(input), context),
+        ),
+      setAgentToolAudience,
       handle: (contract, handler) =>
         register(contract, (input, context) => handler(contract.input.parse(input), context)),
       registerProvider,
@@ -293,6 +400,7 @@ export function createPluginWorker(options: {
       throw new Error("Plugin contribution must return a cleanup function");
     }
     cleanup = contributedCleanup;
+    contributed = true;
     const usageSourceMetadata = await Promise.all(
       [...usageSources.values()]
         .sort((a, b) => a.id.localeCompare(b.id))
@@ -312,6 +420,8 @@ export function createPluginWorker(options: {
         .sort((left, right) => left.id.localeCompare(right.id))
         .map(providerMetadata),
       usageSources: usageSourceMetadata,
+      agentTools: agentToolMetadata(),
+      agentToolAudience,
     });
   }
 
@@ -322,6 +432,7 @@ export function createPluginWorker(options: {
       ?.dispose()
       .catch((error) => console.error("Plugin API cleanup failed", error));
     hooks.close();
+    for (const call of agentToolCalls.values()) call.abort();
     for (const pending of pendingProviderConnections.values()) pending.tombstoned = true;
     const currentCleanup = cleanup;
     cleanup = null;
@@ -360,7 +471,8 @@ export function createPluginWorker(options: {
       message.type === "provider.status" ||
       message.type === "provider.catalog_key" ||
       message.type === "usage.fetch" ||
-      message.type === "usage.discover"
+      message.type === "usage.discover" ||
+      message.type === "agent_tool.call"
     ) {
       send({ type: "error", requestId: message.requestId, error: "Plugin is stopping" });
     } else if (message.type === "provider.connect") {
@@ -507,9 +619,15 @@ export function createPluginWorker(options: {
   }
   channel.onMessage(handleMessage);
 
-  function handleHookMessage(
-    message: Extract<PluginProcessRequest, { type: "hook" | "hook.cancel" }>,
-  ): void {
+  function handleHookMessage(message: HookOrToolMessage): void {
+    if (message.type === "agent_tool.call") {
+      handleAgentToolCall(message);
+      return;
+    }
+    if (message.type === "agent_tool.cancel") {
+      agentToolCalls.get(message.requestId)?.abort();
+      return;
+    }
     if (message.type === "hook.cancel") {
       hooks.cancel(message.requestId);
       return;
@@ -535,10 +653,17 @@ export function createPluginWorker(options: {
     }
   }
 
-  function isHookMessage(
-    message: PluginProcessRequest,
-  ): message is Extract<PluginProcessRequest, { type: "hook" | "hook.cancel" }> {
-    return message.type === "hook" || message.type === "hook.cancel";
+  type HookOrToolMessage = Extract<
+    PluginProcessRequest,
+    { type: "hook" | "hook.cancel" | "agent_tool.call" | "agent_tool.cancel" }
+  >;
+  function isHookMessage(message: PluginProcessRequest): message is HookOrToolMessage {
+    return (
+      message.type === "hook" ||
+      message.type === "hook.cancel" ||
+      message.type === "agent_tool.call" ||
+      message.type === "agent_tool.cancel"
+    );
   }
   return { shutdown };
 }

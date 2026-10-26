@@ -1,5 +1,4 @@
 import { compare, hashSync } from "bcryptjs";
-import { timingSafeEqual } from "node:crypto";
 import type { RequestHandler } from "express";
 import { matchesLocalCredential } from "./local-credential.js";
 
@@ -123,33 +122,4 @@ export function shouldBypassBearerAuth(method: string, path: string): boolean {
     return true;
   }
   return isBearerFreeRoute(path);
-}
-
-/**
- * Authorizes a request to the Agent MCP endpoint (/mcp/agents), which is exempt
- * from the global daemon-password middleware. Accepts either the per-daemon-run
- * capability token the daemon injects into its own agents' configs and MCP
- * client, or a valid daemon-password bearer (so existing password-authenticated
- * callers keep working). When no daemon password is configured the endpoint is
- * open, matching the global middleware's behavior.
- */
-export async function isAgentMcpRequestAuthorized(input: {
-  password: string | undefined;
-  capabilityToken: string | null;
-  authorizationHeader: string | undefined;
-}): Promise<boolean> {
-  if (!input.password) {
-    return true;
-  }
-  const token = extractHttpBearerToken(input.authorizationHeader);
-  if (input.capabilityToken !== null && token !== null) {
-    // Constant-time compare; length-guard first because timingSafeEqual throws
-    // on differing buffer lengths.
-    const provided = Buffer.from(token);
-    const expected = Buffer.from(input.capabilityToken);
-    if (provided.length === expected.length && timingSafeEqual(provided, expected)) {
-      return true;
-    }
-  }
-  return isBearerTokenValidAsync({ password: input.password, token });
 }

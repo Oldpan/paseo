@@ -19,6 +19,13 @@ export {
   type PluginAttachmentItem,
   type PluginAttachmentSearchPayload,
 } from "./attachments.js";
+export {
+  AGENT_TOOL_NAME_PATTERN,
+  defineAgentTool,
+  type AgentToolInput,
+  type AgentToolOutput,
+  type PluginAgentToolContract,
+} from "./agent-tools.js";
 export { defineRpc, type PluginRpcContract, type RpcInput, type RpcOutput } from "./rpc.js";
 
 export type { PluginText, PluginMessage } from "./text.js";

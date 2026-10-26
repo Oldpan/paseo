@@ -11,6 +11,7 @@ import {
   ProviderInputSchema,
   ProviderLaunchSchema,
 } from "@getpaseo/plugin/server/provider";
+import { AGENT_TOOL_NAME_PATTERN } from "@getpaseo/plugin";
 import { z } from "zod";
 
 export interface PluginProviderMetadata {
@@ -23,6 +24,15 @@ export interface PluginProviderMetadata {
   description?: string;
   iconPath?: string;
 }
+
+export interface PluginAgentToolMetadata {
+  name: string;
+  description: string;
+  /** JSON Schema generated from the plugin's zod input schema. */
+  inputSchema: Record<string, unknown>;
+}
+
+export type PluginAgentToolAudience = readonly string[] | "all";
 
 export interface PluginUsageSourceMetadata {
   id: string;
@@ -53,6 +63,14 @@ export type PluginProcessRequest =
     }
   | { type: "hook"; requestId: string; kind: "event" | "before"; name: string; input: unknown }
   | { type: "hook.cancel"; requestId: string }
+  | {
+      type: "agent_tool.call";
+      requestId: string;
+      tool: string;
+      input: unknown;
+      callerAgentId: string;
+    }
+  | { type: "agent_tool.cancel"; requestId: string }
   | { type: "usage.fetch"; requestId: string; sourceId: string; input: unknown }
   | { type: "usage.discover"; requestId: string; sourceId: string; scope: UsageScope }
   | { type: "invoke"; requestId: string; method: string; input: unknown }
@@ -76,12 +94,15 @@ export type PluginProcessRequest =
 export type PluginProcessMessage =
   | { type: "settings.changed"; settingsId: string }
   | { type: "hooks.changed"; hooks: { events: string[]; before: string[] } }
+  | { type: "agent_tools.audience"; audience: PluginAgentToolAudience }
   | {
       type: "ready";
       methods: string[];
       providers: PluginProviderMetadata[];
       usageSources?: PluginUsageSourceMetadata[];
       hooks?: { events: string[]; before: string[] };
+      agentTools?: PluginAgentToolMetadata[];
+      agentToolAudience?: PluginAgentToolAudience;
     }
   | { type: "result"; requestId: string; output: unknown }
   | { type: "error"; requestId: string; error: string }
@@ -106,6 +127,15 @@ export type PluginProcessMessage =
   | { type: "paseo_close" };
 
 const hooksSchema = z.object({ events: z.array(z.string()), before: z.array(z.string()) }).strict();
+
+const agentToolAudienceSchema = z.union([z.array(z.string().min(1)), z.literal("all")]);
+const agentToolMetadataSchema = z
+  .object({
+    name: z.string().regex(AGENT_TOOL_NAME_PATTERN),
+    description: z.string().min(1),
+    inputSchema: z.record(z.string(), z.unknown()),
+  })
+  .strict();
 
 const providerMetadataSchema = z
   .object({
@@ -195,6 +225,16 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
     z.object({ type: z.literal("hook.cancel"), requestId: z.string() }).strict(),
     z
       .object({
+        type: z.literal("agent_tool.call"),
+        requestId: z.string().min(1),
+        tool: z.string().regex(AGENT_TOOL_NAME_PATTERN),
+        input: z.unknown(),
+        callerAgentId: z.string().min(1),
+      })
+      .strict(),
+    z.object({ type: z.literal("agent_tool.cancel"), requestId: z.string().min(1) }).strict(),
+    z
+      .object({
         type: z.literal("usage.fetch"),
         requestId: z.string(),
         sourceId: z.string(),
@@ -246,12 +286,17 @@ export const PluginProcessMessageSchema: z.ZodType<PluginProcessMessage> = z.dis
     z.object({ type: z.literal("settings.changed"), settingsId: z.string() }).strict(),
     z.object({ type: z.literal("hooks.changed"), hooks: hooksSchema }).strict(),
     z
+      .object({ type: z.literal("agent_tools.audience"), audience: agentToolAudienceSchema })
+      .strict(),
+    z
       .object({
         type: z.literal("ready"),
         methods: z.array(z.string()),
         providers: z.array(providerMetadataSchema),
         usageSources: z.array(usageSourceMetadataSchema).optional(),
         hooks: hooksSchema.optional(),
+        agentTools: z.array(agentToolMetadataSchema).optional(),
+        agentToolAudience: agentToolAudienceSchema.optional(),
       })
       .strict(),
     z

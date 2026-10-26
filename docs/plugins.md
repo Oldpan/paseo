@@ -437,6 +437,38 @@ Emit from the operation owner, not a client subscription. Provider history repla
 live hooks. Observers must not be awaited inside agent mutations: a callback can send a prompt or
 answer a permission through its own daemon session. Awaiting it there deadlocks that command.
 
+## Agent tools
+
+Plugins expose tools to agents on the daemon's `/mcp/agents` endpoint. The [public reference](../public-docs/plugins/reference.md#agent-tools)
+owns the author API; this section owns the host contract.
+
+- **Identity is the gate.** The endpoint verifies each caller with an HMAC token derived from a
+  per-run secret and the agent ID (`agent/agent-mcp-identity.ts`). Only a verified agent can see
+  plugin tools. `callerAgentId` in the URL is a claim, so an owner-password or anonymous request
+  never gets them. The in-process native tool path is verified by construction. Read
+  [SECURITY.md](../SECURITY.md#agent-mcp-identity) before touching this.
+- **The subprocess owns the schema.** `ready.agentTools` carries JSON Schema generated with
+  `z.toJSONSchema`; the daemon rebuilds a zod schema with `z.fromJSONSchema` only to list the tool
+  and reject malformed input early. The subprocess re-parses with the real schema, so transforms and
+  refinements run there. A tool whose schema cannot round-trip is skipped with a warning.
+- **Audience is daemon state fed by an ordered message.** `setAgentToolAudience` sends
+  `agent_tools.audience` on the same IPC stream as `hooks.changed`, and the initial value rides on
+  `ready` because the daemon drops child messages that arrive before it. The daemon re-checks the
+  audience on every call, so a stale listing cannot call a tool.
+- **Tools register once, during `contribute()`.** The tool list in `ready` is final. Audience is the
+  only thing that changes afterwards.
+- **Calls reuse the plugin RPC path.** `agent_tool.call` goes through `PluginRuntime.request()`
+  with its 30 second timeout; a timeout also sends `agent_tool.cancel` so the handler's `signal`
+  aborts.
+- **Policy still applies.** Plugin tools reach `createToolCatalog` as `additionalTools` and go through
+  the same `registerTool` as built-ins, so `paseoTools.disabledTools` filters them. They are named
+  `<pluginId>__<name>`; plugin IDs cannot contain `_`, so names cannot collide.
+- **Native catalogs are fixed at launch.** Providers that read host tools in-process (opencode, omp)
+  build the catalog when the agent starts. Audience changes reach them on the next start. Provider
+  manifests omit plugin tools.
+- **Do not await the daemon synchronously inside `contribute()`.** `server.paseo` is connected, but
+  the plugin is not ready until `contribute()` returns. Start background recovery and return.
+
 ## Contribute a provider
 
 Register a provider from `index.server.ts`. The provider connection is callback-based and owns all

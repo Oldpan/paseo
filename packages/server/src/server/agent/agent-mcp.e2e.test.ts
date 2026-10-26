@@ -321,74 +321,139 @@ describe("agent MCP end-to-end (offline)", () => {
     }
   }, 30_000);
 
-  test("password-protected daemon authorizes the agent MCP via the capability token", async () => {
-    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
-    const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
-    const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
-    const port = await getAvailablePort();
-
-    const daemonConfig: PaseoDaemonConfig = {
-      listen: `127.0.0.1:${port}`,
-      paseoHome,
-      corsAllowedOrigins: [],
-      hostnames: true,
-      mcpEnabled: true,
-      staticDir,
-      mcpDebug: false,
-      agentClients: createTestAgentClients(),
-      agentStoragePath: path.join(paseoHome, "agents"),
-      auth: { password: hashDaemonPassword("daemon-secret") },
-    };
-
-    const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
-    await daemon.start();
-
-    const mcpUrl = `http://127.0.0.1:${port}/mcp/agents`;
-    const capabilityToken = daemon.agentManager.getMcpAuthToken();
-    expect(typeof capabilityToken).toBe("string");
-
-    let agentId: string | null = null;
-    let client: McpClient | null = null;
-    try {
-      // Remote auth is not weakened: a request without credentials is rejected
-      // before any MCP processing.
-      const unauthorized = await fetch(mcpUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      expect(unauthorized.status).toBe(401);
-
-      // The injected capability token authenticates the full MCP handshake:
-      // creating (and connecting) the client and driving a tool call both go
-      // through the password-gated /mcp/agents route. (The exact bearer header
-      // injected into a child agent's config is covered by the
-      // runtime-mcp-config unit test.)
-      client = await createMcpClient(mcpUrl, capabilityToken!);
-      const result = await client.callTool({
-        name: "create_agent",
-        args: {
-          cwd: agentCwd,
-          title: "Password MCP",
-          provider: "claude/claude-test-model",
-          mode: "bypassPermissions",
-          initialPrompt: "reply with done and stop",
-        },
-      });
-      const payload = getStructuredContent(result);
-      agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
-      expect(agentId).toBeTruthy();
-    } finally {
-      if (agentId) {
-        await client?.callTool({ name: "kill_agent", args: { agentId } });
-      }
-      await client?.close();
-      await daemon.stop();
-      await rm(paseoHome, { recursive: true, force: true });
-      await rm(staticDir, { recursive: true, force: true });
-      await rm(agentCwd, { recursive: true, force: true });
+  describe("per-agent identity", () => {
+    interface PasswordDaemon {
+      daemon: Awaited<ReturnType<typeof createPaseoDaemon>>;
+      mcpUrl: string;
+      cleanup: () => Promise<void>;
     }
-  }, 30_000);
+
+    async function startDaemon(password: string | undefined): Promise<PasswordDaemon> {
+      const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
+      const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
+      const port = await getAvailablePort();
+      const daemon = await createPaseoDaemon(
+        {
+          listen: `127.0.0.1:${port}`,
+          paseoHome,
+          corsAllowedOrigins: [],
+          hostnames: true,
+          mcpEnabled: true,
+          staticDir,
+          mcpDebug: false,
+          agentClients: createTestAgentClients(),
+          agentStoragePath: path.join(paseoHome, "agents"),
+          ...(password ? { auth: { password: hashDaemonPassword(password) } } : {}),
+        },
+        pino({ level: "silent" }),
+      );
+      await daemon.start();
+      return {
+        daemon,
+        mcpUrl: `http://127.0.0.1:${port}/mcp/agents`,
+        cleanup: async () => {
+          await daemon.stop();
+          await rm(paseoHome, { recursive: true, force: true });
+          await rm(staticDir, { recursive: true, force: true });
+        },
+      };
+    }
+
+    async function postInitialize(
+      mcpUrl: string,
+      options: { callerAgentId?: string; bearer?: string },
+    ): Promise<number> {
+      const url = new URL(mcpUrl);
+      if (options.callerAgentId) url.searchParams.set("callerAgentId", options.callerAgentId);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          ...(options.bearer ? { authorization: `Bearer ${options.bearer}` } : {}),
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "identity-test", version: "1.0.0" },
+          },
+        }),
+      });
+      await response.text();
+      return response.status;
+    }
+
+    async function createTwoAgents(
+      daemon: PasswordDaemon["daemon"],
+      cwd: string,
+    ): Promise<[string, string]> {
+      const create = () =>
+        daemon.agentManager.createAgent({ provider: "claude", cwd }, undefined, {
+          workspaceId: undefined,
+        });
+      const first = await create();
+      const second = await create();
+      return [first.id, second.id];
+    }
+
+    test("rejects one agent's token presented for another agent, with or without a password", async () => {
+      for (const password of [undefined, "daemon-secret"]) {
+        const running = await startDaemon(password);
+        const cwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
+        try {
+          const [agentA, agentB] = await createTwoAgents(running.daemon, cwd);
+          const tokenA = running.daemon.agentManager.mcpAuthTokenFor(agentA)!;
+          expect(
+            await postInitialize(running.mcpUrl, { callerAgentId: agentB, bearer: tokenA }),
+          ).toBe(401);
+          expect(await postInitialize(running.mcpUrl, { bearer: tokenA })).toBe(401);
+          expect(
+            await postInitialize(running.mcpUrl, { callerAgentId: agentA, bearer: tokenA }),
+          ).toBe(200);
+        } finally {
+          await running.cleanup();
+          await rm(cwd, { recursive: true, force: true });
+        }
+      }
+    }, 30_000);
+
+    test("a password-protected daemon rejects anonymous callers and accepts the owner password", async () => {
+      const running = await startDaemon("daemon-secret");
+      const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
+      let agentId: string | null = null;
+      let client: McpClient | null = null;
+      try {
+        expect(await postInitialize(running.mcpUrl, {})).toBe(401);
+        expect(await postInitialize(running.mcpUrl, { bearer: "wrong-password" })).toBe(401);
+
+        client = await createMcpClient(running.mcpUrl, "daemon-secret");
+        const result = await client.callTool({
+          name: "create_agent",
+          args: {
+            cwd: agentCwd,
+            title: "Password MCP",
+            provider: "claude/claude-test-model",
+            mode: "bypassPermissions",
+            initialPrompt: "reply with done and stop",
+          },
+        });
+        const payload = getStructuredContent(result);
+        agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
+        expect(agentId).toBeTruthy();
+      } finally {
+        if (agentId) {
+          await client?.callTool({ name: "kill_agent", args: { agentId } });
+        }
+        await client?.close();
+        await running.cleanup();
+        await rm(agentCwd, { recursive: true, force: true });
+      }
+    }, 30_000);
+  });
 
   test("create_agent auto-injects paseo MCP by default and can be disabled", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));

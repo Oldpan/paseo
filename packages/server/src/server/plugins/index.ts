@@ -23,7 +23,7 @@ import { type ManagedPluginCandidate, ManagedPluginSources } from "./managed-sou
 import { readPluginManifest } from "./manifest.js";
 import { expandTilde } from "../../utils/path.js";
 import { runPluginBuild } from "./preparation.js";
-import { PluginRuntime } from "./runtime.js";
+import { PluginRuntime, type PluginAgentToolCall, type PluginAgentToolListing } from "./runtime.js";
 import { BuiltinPluginLoader, type BuiltinPlugin } from "./builtin/index.js";
 import type { PluginProviderMetadata } from "./plugin-process-protocol.js";
 import { readPluginProviderIcon } from "./provider-icon.js";
@@ -46,6 +46,8 @@ interface PluginRuntimePort {
   clearLogs(pluginId: string): void;
   getProviderRegistrations?(pluginId: string): readonly PluginProviderMetadata[];
   getUsageSourceRegistrations(pluginId: string): readonly PluginUsageSourceMetadata[];
+  listAgentTools?: PluginRuntime["listAgentTools"];
+  callAgentTool?: PluginRuntime["callAgentTool"];
   fetchUsage: PluginRuntime["fetchUsage"];
   discoverUsage: PluginRuntime["discoverUsage"];
   connectProvider: PluginRuntime["connectProvider"];
@@ -471,6 +473,15 @@ export class PluginService {
           force: true,
         });
     });
+  }
+
+  listAgentTools(agentId: string): PluginAgentToolListing[] {
+    return this.runtime.listAgentTools?.(agentId) ?? [];
+  }
+
+  callAgentTool(call: PluginAgentToolCall): Promise<unknown> {
+    if (!this.runtime.callAgentTool) throw new Error("Plugin runtime cannot call agent tools");
+    return this.runtime.callAgentTool(call);
   }
 
   invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown> {

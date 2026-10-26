@@ -1170,6 +1170,38 @@ describe("browser MCP tools", () => {
     expect(lookupTool(server, "browser_snapshot")).toBeDefined();
   });
 
+  it("applies the provider disabled-tools policy to additional plugin tools", async () => {
+    const pluginTool = (name: string) => ({
+      name,
+      description: `Plugin tool ${name}`,
+      inputSchema: z.object({}),
+      handler: async () => ({ content: [{ type: "text", text: name }] }),
+    });
+    const server = await createAgentMcpServer({
+      agentManager: new BoundaryAgentManagerFake() as AgentManager,
+      agentStorage: new BoundaryAgentStorageFake() as AgentStorage,
+      providerSnapshotManager:
+        new BoundaryProviderSnapshotManagerFake() as unknown as ProviderSnapshotManager,
+      callerAgentId: "agent-1",
+      additionalTools: [pluginTool("demo__allowed"), pluginTool("demo__blocked")],
+      paseoToolPolicy: { disabledTools: ["demo__blocked"] },
+      logger,
+    });
+    const client = await connectInMemoryMcpClient(server);
+
+    try {
+      const toolNames = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(toolNames).toContain("demo__allowed");
+      expect(toolNames).not.toContain("demo__blocked");
+      await expect(client.callTool({ name: "demo__allowed", arguments: {} })).resolves.toEqual({
+        content: [{ type: "text", text: "demo__allowed" }],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("filters policy-disabled tools from MCP listing and calls", async () => {
     const agentManager = new BoundaryAgentManagerFake();
     const agentStorage = new BoundaryAgentStorageFake();

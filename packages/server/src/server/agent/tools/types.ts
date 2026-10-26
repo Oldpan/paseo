@@ -49,6 +49,11 @@ export interface PaseoToolCatalog {
 
 export interface PaseoToolRuntimeContext {
   callerAgentId?: string;
+  /**
+   * True only when the caller proved it is `callerAgentId` (its per-agent MCP token, or the
+   * in-process native tool path). Plugin agent tools are exposed to verified callers only.
+   */
+  callerVerified?: boolean;
   paseoToolPolicy?: ProviderPaseoToolsPolicy;
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;

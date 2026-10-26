@@ -27,6 +27,8 @@ import { readPluginManifest } from "./manifest.js";
 import type { PluginRequirements } from "@getpaseo/protocol/messages";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
 import type {
+  PluginAgentToolAudience,
+  PluginAgentToolMetadata,
   PluginProcessMessage,
   PluginProcessRequest,
   PluginProviderMetadata,
@@ -75,6 +77,8 @@ interface LoadedPlugin {
   hooks: { events: string[]; before: string[] };
   providers: readonly PluginProviderMetadata[];
   usageSources: readonly PluginUsageSourceMetadata[];
+  agentTools: readonly PluginAgentToolMetadata[];
+  agentToolAudience: PluginAgentToolAudience;
   child: PluginChild | null;
   outputCapture: PluginOutputCapture | null;
   pending: Map<string, PendingInvocation>;
@@ -126,6 +130,23 @@ interface PluginRuntimeDependencies {
   onSettingsChanged?: (pluginId: string, settingsId: string) => void;
   spawnChild?: () => PluginChild;
   sessionHost?: PluginPaseoSessionHost;
+}
+
+export interface PluginAgentToolListing {
+  pluginId: string;
+  tool: PluginAgentToolMetadata;
+}
+
+export interface PluginAgentToolCall {
+  pluginId: string;
+  tool: string;
+  input: unknown;
+  callerAgentId: string;
+}
+
+function admitsAgentTools(loaded: LoadedPlugin, agentId: string): boolean {
+  const audience = loaded.agentToolAudience;
+  return audience === "all" || audience.includes(agentId);
 }
 
 interface PluginLogTail {
@@ -397,6 +418,38 @@ export class PluginRuntime {
     return this.plugins.get(pluginId)?.usageSources ?? [];
   }
 
+  /** Agent tools of every plugin that currently admits `agentId`. */
+  listAgentTools(agentId: string): PluginAgentToolListing[] {
+    const listings: PluginAgentToolListing[] = [];
+    for (const loaded of this.plugins.values()) {
+      if (!admitsAgentTools(loaded, agentId)) continue;
+      for (const tool of loaded.agentTools) listings.push({ pluginId: loaded.id, tool });
+    }
+    return listings.sort(
+      (left, right) =>
+        left.pluginId.localeCompare(right.pluginId) ||
+        left.tool.name.localeCompare(right.tool.name),
+    );
+  }
+
+  async callAgentTool(call: PluginAgentToolCall): Promise<unknown> {
+    const loaded = this.plugins.get(call.pluginId);
+    if (!loaded) throw new Error(`Plugin is not available: ${call.pluginId}`);
+    if (!admitsAgentTools(loaded, call.callerAgentId)) {
+      throw new Error(`Plugin ${call.pluginId} does not expose agent tools to this agent`);
+    }
+    if (!loaded.agentTools.some((tool) => tool.name === call.tool)) {
+      throw new Error(`Plugin ${call.pluginId} does not contribute agent tool ${call.tool}`);
+    }
+    return this.request(loaded, {
+      type: "agent_tool.call",
+      requestId: randomUUID(),
+      tool: call.tool,
+      input: call.input,
+      callerAgentId: call.callerAgentId,
+    });
+  }
+
   fetchUsage(pluginId: string, sourceId: string, input: unknown): Promise<unknown> {
     const loaded = this.plugins.get(pluginId);
     if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
@@ -608,6 +661,9 @@ export class PluginRuntime {
         if (message.type === "hook") {
           void send(child, { type: "hook.cancel", requestId }).catch(() => {});
         }
+        if (message.type === "agent_tool.call") {
+          void send(child, { type: "agent_tool.cancel", requestId }).catch(() => {});
+        }
         reject(new Error(`Plugin RPC timed out: ${pluginId}.${message.type}`));
       }, REQUEST_TIMEOUT_MS);
       loaded.pending.set(requestId, { resolve, reject, timeout });
@@ -647,6 +703,8 @@ export class PluginRuntime {
         hooks: { events: [], before: [] },
         providers: [],
         usageSources: [],
+        agentTools: [],
+        agentToolAudience: [],
         child: null,
         outputCapture: null,
         pending: new Map(),
@@ -775,6 +833,8 @@ export class PluginRuntime {
       hooks: ready.hooks ?? { events: [], before: [] },
       providers: ready.providers ?? [],
       usageSources: ready.usageSources ?? [],
+      agentTools: ready.agentTools ?? [],
+      agentToolAudience: ready.agentToolAudience ?? [],
       child,
       outputCapture,
       pending,
@@ -853,6 +913,10 @@ export class PluginRuntime {
   private handleChildMessage(loaded: LoadedPlugin, message: PluginProcessMessage): void {
     if (message.type === "hooks.changed") {
       loaded.hooks = message.hooks;
+      return;
+    }
+    if (message.type === "agent_tools.audience") {
+      loaded.agentToolAudience = message.audience;
       return;
     }
     if (message.type === "settings.changed") {

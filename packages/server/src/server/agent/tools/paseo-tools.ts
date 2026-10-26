@@ -172,6 +172,8 @@ export interface PaseoToolHostDependencies {
   resolveCallerContext?: (callerAgentId: string) => VoiceCallerContext | null;
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;
+  /** Extra tools (plugin agent tools) registered through the same policy-gated path. */
+  additionalTools?: readonly PaseoToolDefinition[];
   logger: Logger;
 }
 
@@ -3271,6 +3273,10 @@ function createToolCatalog(
       };
     },
   );
+
+  for (const tool of options.additionalTools ?? []) {
+    registerTool(tool.name, tool, tool.handler);
+  }
 
   return toCatalog();
 }

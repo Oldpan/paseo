@@ -963,6 +963,61 @@ saved; environment overrides are not persisted with it.
 
 Read logger output with `paseo plugin logs lifecycle-logger` or the host's `daemon.log`.
 
+## Agent tools
+
+Expose a tool to agents with `defineAgentTool()` from `@getpaseo/plugin` and
+`server.registerAgentTool()`. The daemon lists it on `/mcp/agents` for agents you admit, named
+`<pluginId>__<name>`. Tool names match `^[a-z][a-z0-9_]{0,40}$`.
+
+```ts
+import { defineAgentTool } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { z } from "zod";
+
+const whoami = defineAgentTool({
+  name: "whoami",
+  description: "Returns the ID of the agent calling this tool",
+  input: z.object({}),
+  output: z.object({ agentId: z.string() }),
+});
+
+export default function contribute(server: PluginServerContext) {
+  server.registerAgentTool(whoami, (_input, { caller, paseo, signal }) => ({
+    agentId: caller.agentId,
+  }));
+  server.setAgentToolAudience("all");
+  return () => {};
+}
+```
+
+| API                                         | Behavior                                                                                                                                                       |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.registerAgentTool(tool, handler)`   | Register inside `contribute()`. The handler receives parsed input and `{ caller: { agentId }, paseo, signal }`; its return value is validated against `output` |
+| `server.setAgentToolAudience(ids \| "all")` | Replaces the agent IDs that can see and call your tools. The default is none. Call it before you create an agent that must see them                            |
+| `server.paseo`                              | The plugin's Paseo API, ready when `contribute()` runs                                                                                                         |
+
+`server.paseo` lets you start background recovery or reconciliation without waiting for the first
+RPC or hook. Do not await daemon calls synchronously inside `contribute()`: start them and return
+the cleanup function.
+
+Only a verified agent in your audience sees the tools. The daemon verifies the caller from a
+per-agent token, so `caller.agentId` is trustworthy; the `callerAgentId` a client sends is not.
+Requests that authenticate with the daemon password, or with no credentials on a daemon without a
+password, never see plugin tools. Authorize actions from your own store keyed by `caller.agentId`,
+not from labels or model input.
+
+| Situation                                 | Result                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| Input does not match the schema           | The call returns an MCP error result and the handler does not run |
+| Handler throws or output fails validation | The call returns an MCP error result with the message             |
+| Handler runs longer than 30 seconds       | The call fails and `signal` aborts                                |
+| Plugin reloads, stops, or is removed      | Its tools disappear from the next request                         |
+| Provider disables the tool                | `paseoTools.disabledTools` accepts the full `<pluginId>__<name>`  |
+
+Agents that receive host tools in-process (native Paseo tools) read the tool list once when they
+start, so audience changes reach them only on their next start. Provider tool manifests for plugin
+providers do not include plugin tools.
+
 ## Screens and sidebar items
 
 A screen is a full page of plugin UI. A sidebar item is a component Paseo renders in the sidebar

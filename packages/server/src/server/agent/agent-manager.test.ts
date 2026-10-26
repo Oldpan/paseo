@@ -3277,7 +3277,7 @@ test("createAgent allows best-effort internal MCP when the provider session repo
     registry: storage,
     logger,
     mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
-    mcpAuthToken: "cap-token",
+    mcpAuthTokenFor: (agentId) => `token-for-${agentId}`,
     idFactory: () => "00000000-0000-4000-8000-000000000104",
   });
 
@@ -3290,11 +3290,11 @@ test("createAgent allows best-effort internal MCP when the provider session repo
     { workspaceId: undefined },
   );
 
-  expect(manager.getMcpAuthToken()).toBe("cap-token");
+  expect(manager.mcpAuthTokenFor(snapshot.id)).toBe(`token-for-${snapshot.id}`);
   expect(client.lastConfig?.mcpServers?.paseo).toEqual({
     type: "http",
     url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${snapshot.id}`,
-    headers: { Authorization: "Bearer cap-token" },
+    headers: { Authorization: `Bearer token-for-${snapshot.id}` },
   });
 
   rmSync(workdir, { recursive: true, force: true });

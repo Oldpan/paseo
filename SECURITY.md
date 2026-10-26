@@ -48,7 +48,20 @@ When a daemon password is configured, relay clients send it in the encrypted `he
 
 By default, the daemon binds to `127.0.0.1`. With no password configured, anything that can reach the daemon socket can control the daemon. Loopback is reachable by other users on the machine and by some forwarding tools.
 
-The daemon supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). WebSocket clients send the password in `hello`; the daemon sends no session data before admission. Direct connections still accept bearer headers and WebSocket bearer subprotocols for older clients. HTTP stays bearer-header based. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt; `/api/files/download` and `/mcp/agents` use their own capability tokens.
+The daemon supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). WebSocket clients send the password in `hello`; the daemon sends no session data before admission. Direct connections still accept bearer headers and WebSocket bearer subprotocols for older clients. HTTP stays bearer-header based. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt; `/api/files/download` uses its own single-use token and `/mcp/agents` authenticates per agent (see [Agent MCP identity](#agent-mcp-identity)).
+
+### Agent MCP identity
+
+`/mcp/agents` is the control plane the daemon gives its own agents. Each agent receives its own bearer token, `base64url(HMAC-SHA256(secret, "paseo.agent-mcp.v1\0" + agentId))`, where the secret is random per daemon run and never leaves the daemon. The `callerAgentId` query parameter is only a claim; the token proves it.
+
+| Request                                                                       | Result                                           |
+| ----------------------------------------------------------------------------- | ------------------------------------------------ |
+| Bearer equals the token for `callerAgentId`                                   | Verified agent                                   |
+| Bearer is the daemon password                                                 | Owner; `callerAgentId` stays an unverified claim |
+| No `Authorization` header and no daemon password                              | Open, unverified (the loopback default)          |
+| Anything else, such as one agent's token with another agent's `callerAgentId` | `401`                                            |
+
+Only verified agents receive plugin-contributed tools, and only when the plugin admits them. Owner and open requests keep the built-in control plane but never see plugin tools. Tokens change on every daemon restart, so an agent process that survives a restart must reopen its session to get a new one. As with the daemon password, a same-user process that can read an agent's config or environment can use that agent's token.
 
 The daemon writes a new `$PASEO_HOME/local-credential` on every run with mode `0600` and removes it on shutdown. The CLI and desktop main process read it only for the daemon whose PID lock `listen` matches their connection target. A same-user process can read this credential, so the password protects against network clients and other OS users, not processes running as the daemon user. Protect `$PASEO_HOME` accordingly. Relay traffic remains end-to-end encrypted independently of password admission.
 

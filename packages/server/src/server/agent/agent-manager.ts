@@ -330,7 +330,8 @@ export interface AgentManagerOptions {
   durableTimelineStore?: AgentTimelineStore;
   terminalManager?: TerminalManager | null;
   mcpBaseUrl?: string;
-  mcpAuthToken?: string;
+  /** Mints the bearer token that authenticates a given agent to the Agent MCP endpoint. */
+  mcpAuthTokenFor?: (agentId: string) => string;
   paseoToolsEnabled?: boolean;
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
@@ -761,7 +762,7 @@ export class AgentManager {
   private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly agentStreamCoalescer: AgentStreamCoalescer;
   private mcpBaseUrl: string | null;
-  private readonly mcpAuthToken: string | null;
+  private readonly mcpAuthTokenForAgent: ((agentId: string) => string) | null;
   private paseoToolsEnabled = true;
   private paseoToolCatalogFactory: PaseoToolCatalogFactory | null = null;
   private readonly paseoToolPolicies = new Map<string, ProviderPaseoToolsPolicy | undefined>();
@@ -786,7 +787,7 @@ export class AgentManager {
     this.onAgentAttention = options?.onAgentAttention;
     this.onWorkspaceStateMayHaveChanged = options?.onWorkspaceStateMayHaveChanged;
     this.mcpBaseUrl = options?.mcpBaseUrl ?? null;
-    this.mcpAuthToken = options?.mcpAuthToken ?? null;
+    this.mcpAuthTokenForAgent = options?.mcpAuthTokenFor ?? null;
     this.configurePaseoTools(options);
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
@@ -888,13 +889,11 @@ export class AgentManager {
   }
 
   /**
-   * Capability token the daemon's own MCP clients must present to the Agent MCP
-   * endpoint when a daemon password is configured. Read by the per-client
-   * session to authenticate its own MCP connection. Stays in the daemon — never
-   * sent to remote clients.
+   * Bearer token proving a call to the Agent MCP endpoint comes from this agent.
+   * Injected only into that agent's own MCP config; never sent to remote clients.
    */
-  getMcpAuthToken(): string | null {
-    return this.mcpAuthToken;
+  mcpAuthTokenFor(agentId: string): string | null {
+    return this.mcpAuthTokenForAgent?.(agentId) ?? null;
   }
 
   setAppendSystemPrompt(prompt: string | null | undefined): void {
@@ -5304,7 +5303,7 @@ export class AgentManager {
           this.paseoToolsEnabled && isPaseoToolPolicyEnabled(paseoToolPolicy)
             ? this.mcpBaseUrl
             : null,
-        mcpAuthToken: this.mcpAuthToken,
+        mcpAuthToken: this.mcpAuthTokenFor(agentId),
       }),
     );
     return { storedConfig, launchConfig, paseoToolPolicy };
@@ -5364,6 +5363,7 @@ export class AgentManager {
     ) {
       context.paseoTools = await this.paseoToolCatalogFactory({
         callerAgentId: agentId,
+        callerVerified: true,
         paseoToolPolicy,
       });
     }

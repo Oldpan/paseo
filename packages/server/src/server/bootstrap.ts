@@ -10,7 +10,7 @@ import express from "express";
 import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from "http";
 import { constants, existsSync, unlinkSync } from "fs";
 import { open, rm, stat } from "fs/promises";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { getHostName } from "./host-name.js";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -211,11 +211,9 @@ import {
 import { terminateWithTreeKill } from "../utils/tree-kill.js";
 import { withTimeout } from "../utils/promise-timeout.js";
 import { isHostnameAllowed, type HostnamesConfig } from "./hostnames.js";
-import {
-  createRequireBearerMiddleware,
-  isAgentMcpRequestAuthorized,
-  type DaemonAuthConfig,
-} from "./auth.js";
+import { createRequireBearerMiddleware, type DaemonAuthConfig } from "./auth.js";
+import { createAgentMcpIdentity } from "./agent/agent-mcp-identity.js";
+import { createPluginAgentTools } from "./plugins/agent-tools.js";
 import { deleteLocalCredential, writeLocalCredential } from "./local-credential.js";
 import { createWebUiMiddleware } from "./web-ui.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
@@ -666,14 +664,11 @@ export async function createPaseoDaemon(
     ttlMs: downloadTokenTtlMs,
   });
 
-  // Capability token authenticating the daemon's own agents to the loopback
-  // Agent MCP endpoint (/mcp/agents). Random per daemon run, injected only into
-  // local agent configs and the daemon's own MCP client — never sent to remote
-  // clients — so it cannot be replayed off-box. This lets the injected MCP
-  // authenticate even when the daemon password is set via the app (hash only,
-  // no plaintext available). Mirrors the /api/files/download capability-token
-  // pattern.
-  const agentMcpAuthToken = randomUUID();
+  // Per-agent identity for the loopback Agent MCP endpoint (/mcp/agents). The secret is random
+  // per daemon run; each agent's token is derived from it and injected only into that agent's
+  // own MCP config, never sent to remote clients, so it cannot be replayed off-box or by a
+  // different agent. See agent/agent-mcp-identity.ts.
+  const agentMcpIdentity = createAgentMcpIdentity(randomBytes(32));
 
   const listenTarget = parseListenString(config.listen);
 
@@ -981,7 +976,7 @@ export async function createPaseoDaemon(
     onWorkspaceStateMayHaveChanged: ({ cwd }) => {
       workspaceGitService.onWorkspaceStateMayHaveChanged(cwd);
     },
-    mcpAuthToken: agentMcpAuthToken,
+    mcpAuthTokenFor: (agentId) => agentMcpIdentity.tokenFor(agentId),
     resolvePaseoToolPolicy: (provider) =>
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
@@ -1514,6 +1509,14 @@ export async function createPaseoDaemon(
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
     callerAgentId: runtime.callerAgentId,
+    additionalTools:
+      runtime.callerAgentId && runtime.callerVerified
+        ? createPluginAgentTools({
+            runtime: pluginRuntime,
+            callerAgentId: runtime.callerAgentId,
+            logger,
+          })
+        : [],
     enableVoiceTools: runtime.enableVoiceTools,
     voiceOnly: runtime.voiceOnly,
     resolveSpeakHandler: (agentId) => wsServer?.resolveVoiceSpeakHandler(agentId) ?? null,
@@ -1531,15 +1534,22 @@ export async function createPaseoDaemon(
   agentManager.setPaseoToolsEnabled(config.mcpInjectIntoAgents !== false);
   setAgentProviderToolsEnabled(config.mcpEnabled !== false && config.mcpInjectIntoAgents !== false);
 
+  interface AgentMcpSessionCaller {
+    callerAgentId: string | undefined;
+    callerVerified: boolean;
+  }
+
   let mcpEnabled = config.mcpEnabled ?? true;
   let agentMcpBaseUrl: string | null = null;
   {
     const agentMcpRoute = "/mcp/agents";
 
-    const createAgentMcpSession = async (callerAgentId?: string) => {
+    const createAgentMcpSession = async (caller: AgentMcpSessionCaller) => {
+      const { callerAgentId, callerVerified } = caller;
       const agentMcpServer = await createAgentMcpServer(
         createAgentToolHostDependencies({
           callerAgentId,
+          callerVerified,
           paseoToolPolicy: callerAgentId
             ? agentManager.getPaseoToolPolicy(callerAgentId)
             : undefined,
@@ -1575,19 +1585,12 @@ export async function createPaseoDaemon(
         res.status(404).json({ error: "Agent MCP endpoint disabled" });
         return;
       }
-      // This route is exempt from the global daemon-password middleware, so it
-      // authenticates here using the injected capability token (or a valid
-      // daemon password). Without this, a password-protected daemon would be
-      // wide open on its agent control plane.
-      if (
-        !(await isAgentMcpRequestAuthorized({
-          password: config.auth?.password,
-          capabilityToken: agentMcpAuthToken,
-          authorizationHeader: req.header("authorization"),
-        }))
-      ) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
+      const callerAgentIdRaw = req.query.callerAgentId;
+      let claimedCallerAgentId: string | undefined;
+      if (typeof callerAgentIdRaw === "string") {
+        claimedCallerAgentId = callerAgentIdRaw;
+      } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
+        claimedCallerAgentId = callerAgentIdRaw[0];
       }
       if (config.mcpDebug) {
         logger.debug(
@@ -1600,6 +1603,20 @@ export async function createPaseoDaemon(
           },
           "Agent MCP request",
         );
+      }
+      // This route is exempt from the global daemon-password middleware, so it authenticates
+      // here: a per-agent token proves the caller is `callerAgentId`, a valid daemon password
+      // makes the caller the owner, and an unauthenticated request is open only when no
+      // password is configured. Anything else, including one agent's token presented for
+      // another agent, is rejected.
+      const caller = await agentMcpIdentity.verify({
+        callerAgentId: claimedCallerAgentId,
+        authorizationHeader: req.header("authorization"),
+        password: config.auth?.password,
+      });
+      if (caller.kind === "rejected") {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
       try {
         // Stateless: GET (standalone SSE) and DELETE (session termination) have no
@@ -1616,14 +1633,10 @@ export async function createPaseoDaemon(
           });
           return;
         }
-        const callerAgentIdRaw = req.query.callerAgentId;
-        let callerAgentId: string | undefined;
-        if (typeof callerAgentIdRaw === "string") {
-          callerAgentId = callerAgentIdRaw;
-        } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
-          callerAgentId = callerAgentIdRaw[0];
-        }
-        const { server, transport } = await createAgentMcpSession(callerAgentId);
+        const { server, transport } = await createAgentMcpSession({
+          callerAgentId: claimedCallerAgentId,
+          callerVerified: caller.kind === "agent",
+        });
         res.on("close", () => {
           void transport.close();
           void server.close();

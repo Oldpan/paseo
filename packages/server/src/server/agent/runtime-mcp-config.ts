@@ -31,9 +31,10 @@ export function withRuntimePaseoMcpServer(params: {
   agentId: string;
   mcpBaseUrl: string | null;
   /**
-   * Capability token authenticating the injected connection to the daemon's
-   * Agent MCP endpoint. The daemon password is gated off this route, so without
-   * this header the agent's MCP requests are rejected when a password is set.
+   * This agent's own token (see createAgentMcpIdentity), proving to the daemon's
+   * Agent MCP endpoint that requests carrying `callerAgentId` come from this agent.
+   * The daemon password is gated off this route, so without this header the agent's
+   * MCP requests are rejected when a password is set.
    */
   mcpAuthToken: string | null;
 }): AgentSessionConfig {

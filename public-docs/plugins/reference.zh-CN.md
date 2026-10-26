@@ -825,6 +825,58 @@ Creation request
 
 用 `paseo plugin logs lifecycle-logger` 或主机的 `daemon.log` 读取 logger 的输出。
 
+## Agent 工具 {#agent-tools}
+
+用 `@getpaseo/plugin` 的 `defineAgentTool()` 和 `server.registerAgentTool()` 向 Agent 暴露工具。
+守护进程在 `/mcp/agents` 上，只对你放行的 Agent 列出该工具，名称为 `<pluginId>__<name>`。工具名需匹配
+`^[a-z][a-z0-9_]{0,40}$`。
+
+```ts
+import { defineAgentTool } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { z } from "zod";
+
+const whoami = defineAgentTool({
+  name: "whoami",
+  description: "Returns the ID of the agent calling this tool",
+  input: z.object({}),
+  output: z.object({ agentId: z.string() }),
+});
+
+export default function contribute(server: PluginServerContext) {
+  server.registerAgentTool(whoami, (_input, { caller, paseo, signal }) => ({
+    agentId: caller.agentId,
+  }));
+  server.setAgentToolAudience("all");
+  return () => {};
+}
+```
+
+| API                                         | 行为                                                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `server.registerAgentTool(tool, handler)`   | 在 `contribute()` 内注册。处理函数接收解析后的输入和 `{ caller: { agentId }, paseo, signal }`；返回值会按 `output` 校验 |
+| `server.setAgentToolAudience(ids \| "all")` | 替换可以看到并调用你的工具的 Agent ID。默认没有任何 Agent。需要看到工具的 Agent 要在创建之前调用                        |
+| `server.paseo`                              | 插件的 Paseo API，`contribute()` 运行时已就绪                                                                           |
+
+`server.paseo` 让你无需等第一个 RPC 或钩子，就能启动后台恢复或对账。不要在 `contribute()` 内同步 await
+守护进程调用：启动它们，然后返回清理函数。
+
+只有已验证且在你的放行名单中的 Agent 才能看到这些工具。守护进程根据每个 Agent 各自的令牌验证调用者，
+所以 `caller.agentId` 可信；客户端发送的 `callerAgentId` 不可信。使用守护进程密码认证的请求，以及在没有设置
+密码的守护进程上不带凭据的请求，永远看不到插件工具。授权要依据你自己存储中以 `caller.agentId` 为键的记录，
+不要依据标签或模型输入。
+
+| 情况                         | 结果                                                       |
+| ---------------------------- | ---------------------------------------------------------- |
+| 输入不符合 schema            | 调用返回 MCP 错误结果，处理函数不会运行                    |
+| 处理函数抛错或输出未通过校验 | 调用返回带错误信息的 MCP 错误结果                          |
+| 处理函数运行超过 30 秒       | 调用失败，`signal` 中止                                    |
+| 插件重新加载、停止或被移除   | 其工具从下一次请求起消失                                   |
+| Provider 禁用该工具          | `paseoTools.disabledTools` 接受完整的 `<pluginId>__<name>` |
+
+在进程内接收主机工具（原生 Paseo 工具）的 Agent 在启动时只读取一次工具列表，所以放行名单的变化要到它们下次启动
+才会生效。插件 Provider 的工具清单不包含插件工具。
+
 ## 界面和侧边栏项 {#screens-and-sidebar-items}
 
 界面是一整页的插件 UI。侧边栏项是 Paseo 在侧边栏顶部或底部渲染的组件；按下它时做什么由它决定。先注册界面，再注册一个打开它的项：
