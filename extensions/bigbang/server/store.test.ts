@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatStore } from "./store";
 import { Coordinator } from "./coordinator";
@@ -486,5 +487,88 @@ describe("Bigbang durable Chat", () => {
     const reopened = new ChatStore(path.join(directory, "chat.sqlite"));
     expect(reopened.get("tasks", task.id)).toEqual(store.get("tasks", task.id));
     reopened.close();
+  });
+});
+
+describe("Chat ledger v2 store", () => {
+  it("stamps monotonic message seq numbers and keeps them on rewrite", () => {
+    const { store, conversation } = fixture();
+    const message = (id: string) => ({
+      id,
+      conversationId: conversation.id,
+      threadId: null,
+      senderId: "user",
+      content: id,
+      createdAt: 1,
+      taskId: null,
+    });
+    const first = store.putMessage(message("a"));
+    const second = store.putMessage(message("b"));
+    expect(second.seq).toBe(first.seq! + 1);
+    store.putMessage({ ...first, content: "edited" });
+    expect(store.get("messages", "a")).toMatchObject({ seq: first.seq, content: "edited" });
+    expect(store.putMessage(message("c")).seq).toBe(second.seq! + 1);
+  });
+
+  it("finds a chat session by its agent and backfills the index of an older database", () => {
+    const { directory, store, coordinator, conversation } = fixture();
+    coordinator.send({
+      id: randomUUID(),
+      conversationId: conversation.id,
+      threadId: null,
+      content: "Hello",
+    });
+    const session = store.getChatSession(store.snapshot().turns[0].chatSessionId!)!;
+    expect(store.getChatSessionByAgent(session.agentId)).toEqual(session);
+    expect(store.getChatSessionByAgent("missing")).toBeNull();
+
+    // A database written before agent_id existed.
+    const legacy = new DatabaseSync(path.join(directory, "legacy.sqlite"));
+    legacy.exec(
+      "CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    legacy
+      .prepare("INSERT INTO chat_sessions(id,value) VALUES (?,?)")
+      .run(session.id, JSON.stringify(session));
+    legacy.close();
+    const upgraded = new ChatStore(path.join(directory, "legacy.sqlite"));
+    cleanup.push(() => upgraded.close());
+    expect(upgraded.getChatSessionByAgent(session.agentId)).toEqual(session);
+  });
+
+  it("notifies listeners once per committed transaction and never for a rollback", () => {
+    const { store, assistant } = fixture();
+    const seen: number[] = [];
+    cleanup.push(store.onChange(() => seen.push(store.cursor())));
+    store.transaction(() => {
+      store.put("assistants", { ...assistant, name: "One" });
+      store.put("assistants", { ...assistant, name: "Two" });
+    });
+    expect(seen).toHaveLength(1);
+    const abort = () =>
+      store.transaction(() => {
+        store.put("assistants", { ...assistant, name: "Lost" });
+        throw new Error("abort");
+      });
+    expect(abort).toThrow("abort");
+    expect(seen).toHaveLength(1);
+    store.put("assistants", { ...assistant, name: "Three" });
+    expect(seen).toHaveLength(2);
+  });
+
+  it("keeps assistant homes outside the synced snapshot", () => {
+    const { store, assistant } = fixture();
+    const before = store.snapshot();
+    store.putAssistantHome({
+      assistantId: assistant.id,
+      workspaceId: "wks_1",
+      directory: "/tmp/x",
+    });
+    expect(store.getAssistantHome(assistant.id)).toEqual({
+      assistantId: assistant.id,
+      workspaceId: "wks_1",
+      directory: "/tmp/x",
+    });
+    expect(store.snapshot()).toEqual(before);
   });
 });

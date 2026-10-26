@@ -1,87 +1,197 @@
 import { resolveOrdinaryChannelRoute } from "./routing";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
-import type { RpcInput } from "@getpaseo/plugin";
+import type { PaseoApi } from "@getpaseo/client";
+import type { RpcInput, RpcOutput } from "@getpaseo/plugin";
 import {
   type Assistant,
+  type ChatState,
   type Conversation,
   type Task,
   type Turn,
+  readAssistantMemory,
+  readState,
   sendMessage,
   startTask,
+  writeAssistantMemory,
 } from "../shared/contracts";
 import { findMentionedAgents } from "./mentions";
 import { ChatStore } from "./store";
+import { bindChatSession, restoreChatSessions } from "./chat-sessions";
+import { Dispatcher, KeyedQueue, agentKey, errorMessage, failureStatus } from "./dispatcher";
 import {
-  assistantInstructions,
-  bindChatSession,
-  chatPrompt,
-  unseenMessages,
-  runnableChatTurns,
-  restoreChatSessions,
-} from "./chat-sessions";
+  PaseoExecution,
+  type ExecutionPort,
+  type PermissionInfo,
+  type TaskSpec,
+} from "./execution";
+import { isPass } from "./projection";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-function failureStatus(error: unknown): "failed" | "unknown" {
-  if (error instanceof Error && "code" in error) {
-    const code = String(error.code);
-    if (
-      code.startsWith("DAEMON_") ||
-      code.startsWith("host_") ||
-      code === "PLUGIN_SESSION_CLOSED" ||
-      code.toLowerCase().includes("outcome_unknown")
-    )
-      return "unknown";
-  }
-  return "failed";
-}
-function finishedStatus(status: string): "attention" | "failed" | "completed" {
-  if (status === "permission") return "attention";
-  if (status === "error") return "failed";
-  return "completed";
-}
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
-function requireConfirmedChatExecution(turn: Turn, agent: PaseoAgentHandle): void {
-  if (turn.chatSessionId && agent.status === "closed")
-    throw Object.assign(
-      new Error(
-        "The chat execution closed before its result was confirmed. Inspect the existing execution in Studio; no replacement will be created.",
-      ),
-      { code: "agent_request_outcome_unknown" },
-    );
+const TURN_LIVE = new Set(["running", "attention", "unknown"]);
+const TASK_BUDGET_MS = 30 * 60 * 1000;
+const TASK_QUOTA = 2;
+const DEFAULT_SWEEP_MS = 60_000;
+const INTERRUPTED_MESSAGE =
+  "Interrupted: the execution closed before this reply finished. Send again to continue.";
+const ARCHIVED_MESSAGE =
+  "This execution was archived before the reply finished. Restore it in Studio to continue.";
+
+/** The parts of the plugin lifecycle events the coordinator reads. */
+export interface AgentEvent {
+  agent: { id: string };
+}
+export interface TurnEndedEvent extends AgentEvent {
+  outcome:
+    | { kind: "completed" }
+    | { kind: "failed"; error: { message: string } }
+    | { kind: "canceled"; reason: string };
+}
+export interface PermissionRequestedEvent extends AgentEvent {
+  request: { id: string; name: string; title?: string };
+}
+export interface CoordinatorOptions {
+  execution?: ExecutionPort;
+  /** Safety sweep interval; hooks are best-effort, so the sweep settles what they missed. */
+  sweepMs?: number;
+}
+interface Finish {
+  outcome?: TurnEndedEvent["outcome"];
+  /** The execution was archived or closed (hook), so an unfinished turn is over. */
+  gone?: "archived" | "closed";
 }
 
+function taskSpec(task: Task): TaskSpec {
+  return {
+    id: task.id,
+    prompt: task.prompt,
+    provider: task.provider,
+    isolation: task.isolation,
+    directory: task.directory,
+    serverId: task.serverId,
+  };
+}
+function goneReason(
+  read: { agentClosed: boolean; agentArchived: boolean },
+  finish: Finish,
+): "archived" | "closed" | undefined {
+  if (read.agentArchived) return "archived";
+  return read.agentClosed ? "closed" : finish.gone;
+}
+function permissionOf(permission: PermissionInfo | null): Task["pendingPermission"] {
+  return permission ? { requestId: permission.requestId, title: permission.title } : null;
+}
+
+// Chat state lives in the SQLite ledger. Paseo agent hooks (and, for tasks on other hosts, agent
+// subscriptions) only enqueue work here; every settle is idempotent and re-reads the execution's
+// timeline, so duplicated, reordered or missed events converge on the same ledger.
 export class Coordinator {
-  private api: PaseoApi | null = null;
-  private readonly busy = new Set<string>();
-  private readonly operations = new Set<Promise<void>>();
+  private port: ExecutionPort | null;
+  private readonly injected: boolean;
+  private readonly queue = new KeyedQueue();
+  private readonly dispatcher: Dispatcher;
+  private readonly watches = new Map<string, () => void>();
+  private readonly watching = new Set<string>();
+  private timer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
-  private restoredSessions = false;
-  private readonly timer: ReturnType<typeof setInterval>;
+  private recovered = false;
+  private readonly sweepMs: number;
   constructor(
     readonly store: ChatStore,
     private readonly home: string,
+    options: CoordinatorOptions = {},
   ) {
-    this.timer = setInterval(() => void this.pump(), 1500);
+    this.port = options.execution ?? null;
+    this.injected = Boolean(options.execution);
+    this.sweepMs = options.sweepMs ?? DEFAULT_SWEEP_MS;
+    this.dispatcher = new Dispatcher({
+      store,
+      queue: this.queue,
+      execution: () => this.port,
+      closed: () => this.closed,
+      cancelTask: (id) => this.cancel(id),
+      settle: (agentId) => this.settle(agentId),
+    });
   }
-  attach(api: PaseoApi): void {
-    this.api = api;
-    if (!this.restoredSessions) {
-      restoreChatSessions(this.store);
-      this.restoredSessions = true;
+  /** Binds the plugin's Paseo API once; later calls are ignored. The first call runs recovery. */
+  attach(api?: PaseoApi): void {
+    if (this.closed) return;
+    if (api && !this.injected && !this.port) {
+      this.port = new PaseoExecution(api, this.home, {
+        get: (id) => this.store.getAssistantHome(id),
+        put: (home) => this.store.putAssistantHome(home),
+      });
     }
-    void this.pump();
+    if (this.recovered || !this.port) return;
+    this.recovered = true;
+    restoreChatSessions(this.store);
+    this.timer = setInterval(() => void this.sweep(), this.sweepMs);
+    this.timer.unref();
+    void this.sweep();
   }
-  saveAssistant(assistant: Assistant): Assistant {
-    const directory = path.join(this.home, "assistants", assistant.id);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    writeFileSync(path.join(directory, "MEMORY.md"), assistant.memory, { mode: 0o600 });
+  // Long poll: with `after`, hold the request until the ledger advances past it.
+  async readState(input: RpcInput<typeof readState>): Promise<ChatState> {
+    const { after, generation, waitMs } = input;
+    if (
+      waitMs &&
+      after !== undefined &&
+      (generation === undefined || generation === this.store.currentGeneration)
+    )
+      await this.store.waitForChange(after, waitMs);
+    if (this.closed) throw new Error("The Chat coordinator is shutting down.");
+    return this.store.snapshot(after, generation);
+  }
+  private assistantDirectory(assistantId: string): string {
+    return (
+      this.store.getAssistantHome(assistantId)?.directory ??
+      path.join(this.home, "assistants", assistantId)
+    );
+  }
+  saveAssistant(input: Assistant): Assistant {
+    const existing = this.store.get("assistants", input.id);
+    const directory = this.assistantDirectory(input.id);
+    mkdirSync(path.join(directory, "notes"), { recursive: true, mode: 0o700 });
+    // The agent owns its memory file afterwards; a later save never overwrites it.
+    try {
+      writeFileSync(path.join(directory, "MEMORY.md"), input.memory ?? "", {
+        mode: 0o600,
+        flag: "wx",
+      });
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    }
+    const assistant: Assistant = existing ? { ...input, memory: existing.memory } : input;
     this.store.transaction(() => this.store.put("assistants", assistant));
     return assistant;
+  }
+  private memoryFile(assistantId: string): string {
+    if (!this.store.get("assistants", assistantId)) throw new Error("Assistant no longer exists.");
+    return path.join(this.assistantDirectory(assistantId), "MEMORY.md");
+  }
+  private readMemory(file: string): RpcOutput<typeof readAssistantMemory> {
+    try {
+      return { content: readFileSync(file, "utf8"), mtimeMs: statSync(file).mtimeMs };
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return { content: "", mtimeMs: 0 };
+      throw error;
+    }
+  }
+  readAssistantMemory(input: RpcInput<typeof readAssistantMemory>) {
+    return this.readMemory(this.memoryFile(input.assistantId));
+  }
+  writeAssistantMemory(
+    input: RpcInput<typeof writeAssistantMemory>,
+  ): RpcOutput<typeof writeAssistantMemory> {
+    const file = this.memoryFile(input.assistantId);
+    if (this.readMemory(file).mtimeMs !== input.expectedMtimeMs)
+      throw new Error("The memory changed since it was loaded. Reload it and try again.");
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    writeFileSync(temporary, input.content, { mode: 0o600 });
+    renameSync(temporary, file);
+    return this.readMemory(file);
   }
   createConversation(conversation: Conversation): Conversation {
     if (conversation.members.some((id) => !this.store.get("assistants", id)))
@@ -91,6 +201,7 @@ export class Coordinator {
     this.store.transaction(() => this.store.put("conversations", conversation));
     return conversation;
   }
+
   send(input: RpcInput<typeof sendMessage>): { id: string } {
     const existing = this.store.get("messages", input.id);
     if (existing) {
@@ -146,12 +257,16 @@ export class Coordinator {
         .slice(0, 10);
     if (followupTask)
       orderedResponders = members.filter((member) => member.id === followupTask.assistantId);
+    let turnKind: Turn["kind"] = "reply";
+    if (followupTask) turnKind = "task_followup";
+    else if (conversation.roundtable) turnKind = "roundtable";
     this.store.transaction(() => {
-      this.store.put("messages", {
+      this.store.putMessage({
         ...input,
         senderId: "user",
         createdAt: Date.now(),
         taskId: null,
+        kind: "user",
       });
       for (const previous of state.turns.filter(
         (turn) =>
@@ -168,15 +283,19 @@ export class Coordinator {
         this.store.put("tasks", {
           ...followupTask,
           status: "running",
-          deadline: Date.now() + 30 * 60 * 1000,
+          deadline: Date.now() + TASK_BUDGET_MS,
         });
-      for (const assistant of orderedResponders) {
+      for (const [index, assistant] of orderedResponders.entries()) {
         const id = randomUUID();
         const session = followupTask
           ? null
           : bindChatSession(this.store, conversation.id, input.threadId, assistant);
         this.store.put("turns", {
           id,
+          kind: turnKind,
+          ...(conversation.roundtable && !followupTask
+            ? { round: Math.floor(index / Math.max(responders.length, 1)) }
+            : {}),
           conversationId: conversation.id,
           threadId: input.threadId,
           assistantId: assistant.id,
@@ -192,9 +311,10 @@ export class Coordinator {
         });
       }
     });
-    void this.pump();
+    this.kick();
     return { id: input.id };
   }
+
   task(input: RpcInput<typeof startTask>): Task {
     const existing = this.store.get("tasks", input.id);
     if (existing) {
@@ -217,11 +337,12 @@ export class Coordinator {
       accepted: false,
       error: null,
       createdAt: Date.now(),
-      deadline: Date.now() + 30 * 60 * 1000,
+      deadline: Date.now() + TASK_BUDGET_MS,
+      origin: "user",
     };
     this.store.transaction(() => {
       this.store.put("tasks", task);
-      this.store.put("messages", {
+      this.store.putMessage({
         id: `task:${task.id}`,
         conversationId: task.conversationId,
         senderId: "user",
@@ -229,9 +350,10 @@ export class Coordinator {
         content: task.prompt,
         createdAt: Date.now(),
         taskId: task.id,
+        kind: "user",
       });
     });
-    void this.pump();
+    this.kick();
     return task;
   }
   async cancel(id: string): Promise<Task> {
@@ -242,198 +364,165 @@ export class Coordinator {
       ...task,
       status: "cancelled",
       cancelPending: Boolean(task.execution),
+      pendingPermission: null,
       error: null,
     };
-    this.store.transaction(() => this.store.put("tasks", cancelled));
-    if (task.execution && this.api) {
-      const api = await this.target(task.serverId);
-      try {
-        const agent = api.agents.ref(task.execution.agentId);
-        if (!task.accepted && !(await agent.refresh())) return cancelled;
-        await agent.cancel();
-        const stopped = { ...this.store.get("tasks", id)!, cancelPending: false };
-        this.store.transaction(() => this.store.put("tasks", stopped));
-        return stopped;
-      } finally {
-        if (api !== this.api) await api.dispose();
-      }
+    this.store.transaction(() => {
+      this.store.put("tasks", cancelled);
+      for (const turn of this.store.snapshot().turns)
+        if (turn.taskId === id && LIVE.has(turn.status))
+          this.store.put("turns", { ...turn, status: "cancelled" });
+    });
+    this.stopWatch(id);
+    if (task.execution && this.port) {
+      const stopped = await this.port.cancel(task.execution.agentId, task.serverId);
+      // An execution that was never created cannot be stopped yet; keep the cancel pending.
+      if (!stopped && !task.accepted) return cancelled;
+      const settled = { ...this.store.get("tasks", id)!, cancelPending: false };
+      this.store.transaction(() => this.store.put("tasks", settled));
+      return settled;
     }
     return cancelled;
   }
-  private async target(serverId: string): Promise<PaseoApi> {
-    if (!this.api) throw new Error("Coordinator is not connected.");
-    const directory = await this.api.hosts.list();
-    return directory.self.serverId === serverId ? this.api : this.api.hosts.client(serverId);
+
+  // Hooks: record and enqueue; never await coordinator work from the plugin callback.
+  onTurnStarted(event: AgentEvent): void {
+    this.settle(event.agent.id);
   }
-  private async pump(): Promise<void> {
-    if (this.closed || !this.api) return;
+  onTurnEnded(event: TurnEndedEvent): void {
+    this.settle(event.agent.id, { outcome: event.outcome });
+  }
+  onPermissionRequested(event: PermissionRequestedEvent): void {
+    const permission = {
+      requestId: event.request.id,
+      title: event.request.title ?? event.request.name,
+    };
+    if (this.owns(event.agent.id))
+      void this.queue.run(agentKey(event.agent.id), async () =>
+        this.markAttention(event.agent.id, permission),
+      );
+  }
+  onPermissionResolved(event: AgentEvent): void {
+    if (this.owns(event.agent.id))
+      void this.queue.run(agentKey(event.agent.id), async () =>
+        this.markAttention(event.agent.id, null),
+      );
+  }
+  onAgentGone(event: AgentEvent, reason: "archived" | "closed" = "closed"): void {
+    this.settle(event.agent.id, { gone: reason });
+  }
+  // Hooks fire for every agent on the daemon; only executions this ledger created matter.
+  private owns(agentId: string): boolean {
+    return Boolean(this.store.getChatSessionByAgent(agentId) ?? this.store.get("tasks", agentId));
+  }
+  private settle(agentId: string, finish: Finish = {}): void {
+    if (this.closed || !this.port || !this.owns(agentId)) return;
+    void this.queue.run(agentKey(agentId), () => this.reconcile(agentId, finish));
+  }
+  private kick(): void {
+    this.dispatcher.kick();
+    this.scheduleTasks();
+  }
+  /** Settles everything live, enforces task budgets and restarts stalled work. */
+  async sweep(): Promise<void> {
+    if (this.closed || !this.port) return;
     const state = this.store.snapshot();
-    const liveTasks = state.tasks.filter(
-      (task) => LIVE.has(task.status) && task.status !== "queued",
-    );
-    const queued = state.tasks
+    for (const turn of state.turns)
+      if (turn.accepted && TURN_LIVE.has(turn.status)) this.settle(turn.agentId);
+    for (const task of state.tasks) {
+      if (!task.execution || !task.accepted || !LIVE.has(task.status)) continue;
+      if (task.status !== "cancelled" && Date.now() >= task.deadline)
+        void this.queue.run(agentKey(task.id), async () => void (await this.cancel(task.id)));
+      else this.settle(task.execution.agentId);
+    }
+    this.kick();
+    await this.queue.idle();
+  }
+  /** Resolves when all queued coordination has finished. */
+  idle(): Promise<void> {
+    return this.queue.idle();
+  }
+  private scheduleTasks(): void {
+    if (this.closed || !this.port) return;
+    const tasks = this.store.snapshot().tasks;
+    const live = tasks.filter((task) => LIVE.has(task.status) && task.status !== "queued");
+    const queued = tasks
       .filter((task) => task.status === "queued")
-      .slice(0, Math.max(0, 2 - liveTasks.length));
-    const followed = new Set(
-      state.turns.filter((turn) => turn.taskId && LIVE.has(turn.status)).map((turn) => turn.taskId),
-    );
-    for (const task of [...liveTasks, ...queued].filter((candidate) => !followed.has(candidate.id)))
-      this.launch(task.id, () => this.runTask(task));
-    for (const task of state.tasks.filter(
-      (candidate) => candidate.status === "cancelled" && candidate.cancelPending,
-    ))
-      this.launch(`cancel:${task.id}`, async () => {
-        await this.cancel(task.id);
-      });
-    for (const turn of runnableChatTurns(state.turns)) {
-      const key = `${turn.conversationId}:${turn.threadId ?? "main"}`;
-      this.launch(key, () => this.runTurn(turn));
-    }
+      .slice(0, Math.max(0, TASK_QUOTA - live.length));
+    for (const task of [...live.filter((candidate) => !candidate.accepted), ...queued])
+      void this.queue.run(agentKey(task.id), () => this.runTask(task.id));
+    for (const task of tasks)
+      if (task.status === "cancelled" && task.cancelPending)
+        void this.queue.run(agentKey(task.id), async () => void (await this.cancel(task.id)));
+    for (const task of live) if (task.accepted && task.execution) this.watch(task);
   }
-  private launch(key: string, operation: () => Promise<void>): void {
-    if (this.busy.has(key)) return;
-    this.busy.add(key);
-    const pending = operation()
-      .catch((error) => console.error("Bigbang coordination failed", error))
-      .finally(() => {
-        this.busy.delete(key);
-        this.operations.delete(pending);
-      });
-    this.operations.add(pending);
+  // Hooks only fire for this daemon; a task on another host is observed through its agent.
+  private watch(task: Task): void {
+    const port = this.port;
+    if (!port || !task.execution || this.watches.has(task.id) || this.watching.has(task.id)) return;
+    this.watching.add(task.id);
+    const agentId = task.execution.agentId;
+    void (async () => {
+      try {
+        if (await port.isLocal(task.serverId)) return;
+        const stop = await port.watch(task.serverId, agentId, () => this.settle(agentId));
+        if (this.closed || !LIVE.has(this.store.get("tasks", task.id)?.status ?? "cancelled"))
+          stop();
+        else this.watches.set(task.id, stop);
+      } catch (error) {
+        console.error("Bigbang task observation failed; the sweep will retry", error);
+      } finally {
+        this.watching.delete(task.id);
+      }
+    })();
   }
-  private prepareTurn(turn: Turn, assistant: Assistant): Turn {
-    if (turn.prepared && (turn.taskId || turn.chatSessionId)) return turn;
-    if (!turn.taskId) return this.prepareChatTurn(turn, assistant);
-    const history = this.store
+  private stopWatch(taskId: string): void {
+    this.watches.get(taskId)?.();
+    this.watches.delete(taskId);
+  }
+
+  private liveTurn(agentId: string): Turn | undefined {
+    return this.store
       .snapshot()
-      .messages.filter(
-        (message) =>
-          message.conversationId === turn.conversationId && message.threadId === turn.threadId,
+      .turns.findLast(
+        (turn) => turn.agentId === agentId && turn.accepted && TURN_LIVE.has(turn.status),
+      );
+  }
+  private serverFor(turn: Turn): string | undefined {
+    return turn.taskId ? this.store.get("tasks", turn.taskId)?.serverId : undefined;
+  }
+  // Reads the execution's timeline and brings the ledger in line with it. An execution or turn
+  // that is not ours (a message typed in Studio, a finished turn) has no live ledger entry or no
+  // anchor, so it is ignored.
+  private async reconcile(agentId: string, finish: Finish): Promise<void> {
+    if (this.closed || !this.port) return;
+    try {
+      const turns = this.store.snapshot().turns;
+      const turn = this.liveTurn(agentId);
+      const task = this.store.get("tasks", agentId);
+      if (turn) await this.settleTurn(turn, finish);
+      else if (
+        task?.execution?.agentId === agentId &&
+        !turns.some((item) => item.taskId === task.id && LIVE.has(item.status) && !item.accepted)
       )
-      .slice(-24);
-    const latestUser = history.findLast((message) => message.senderId === "user");
-    const prepared: Turn = {
-      ...turn,
-      prepared: true,
-      provider: assistant.provider,
-      systemPrompt: assistantInstructions(assistant),
-      prompt: history.map((message) => `${message.senderId}: ${message.content}`).join("\n\n"),
-      seenUserId: latestUser?.id,
-      status: "creating",
-    };
-    this.store.transaction(() => this.store.put("turns", prepared));
-    return prepared;
-  }
-  private prepareChatTurn(turn: Turn, assistant: Assistant): Turn {
-    if (!turn.chatSessionId && turn.status !== "queued")
-      throw Object.assign(
-        new Error(
-          "This earlier chat turn has an unconfirmed execution. Inspect its existing agent in Studio before continuing; it will not be sent again.",
-        ),
-        { code: "agent_request_outcome_unknown" },
-      );
-    const session = this.store.transaction(() =>
-      bindChatSession(this.store, turn.conversationId, turn.threadId, assistant),
-    );
-    if (session.provider !== assistant.provider)
-      throw new Error(
-        "This chat already has an execution with another model. Keep that model or start a new chat; it will not create a second execution automatically.",
-      );
-    const state = this.store.snapshot();
-    const delta = unseenMessages(state.messages, session, state.turns);
-    const instructions = assistantInstructions(assistant);
-    let prompt =
-      chatPrompt(delta, assistant, state.assistants) ||
-      "Continue this roundtable discussion with another useful contribution.";
-    if (instructions !== session.lastInstructions)
-      prompt = `Updated assistant instructions:\n${instructions}\n\n${prompt}`;
-    const history = state.messages.filter(
-      (message) =>
-        message.conversationId === turn.conversationId && message.threadId === turn.threadId,
-    );
-    const prepared: Turn = {
-      ...turn,
-      agentId: session.agentId,
-      chatSessionId: session.id,
-      prepared: true,
-      accepted: turn.accepted ?? false,
-      provider: session.provider,
-      systemPrompt: instructions,
-      prompt,
-      contextThroughId: history.at(-1)?.id,
-      seenUserId: history.findLast((message) => message.senderId === "user")?.id,
-      status: "creating",
-    };
-    this.store.transaction(() => this.store.put("turns", prepared));
-    return prepared;
-  }
-  private async chatAgent(
-    api: PaseoApi,
-    turn: Turn,
-    assistant: Assistant,
-  ): Promise<PaseoAgentHandle> {
-    const session = this.store.getChatSession(turn.chatSessionId!);
-    if (!session) throw new Error("Chat execution binding is missing.");
-    let agent = api.agents.ref(session.agentId);
-    await agent.refresh();
-    if (agent.archivedAt)
-      throw new Error("This chat execution is archived. Restore it in Studio before continuing.");
-    if (session.created && !agent.current())
-      throw new Error(
-        "The existing chat execution is unavailable. It will not be replaced automatically.",
-      );
-    if (!session.created) {
-      if (!agent.current()) {
-        const directory = path.join(this.home, "assistants", assistant.id);
-        mkdirSync(directory, { recursive: true, mode: 0o700 });
-        agent = await api.agents.create({
-          agentId: session.agentId,
-          idempotencyKey: `chat-session:${session.agentId}`,
-          cwd: directory,
-          title: `${assistant.name} · Chat`,
-          config: { provider: session.provider, systemPrompt: session.systemPrompt },
-        });
-      }
-      this.store.transaction(() => this.store.putChatSession({ ...session, created: true }));
+        await this.settleTask(task, finish);
+    } catch (error) {
+      console.error("Bigbang settle failed; the sweep will retry", error);
+      if (finish.gone) this.markGone(agentId, finish.gone);
     }
-    return agent;
+    this.kick();
   }
-  private advanceChatContext(turn: Turn, messageId: string | undefined): void {
-    if (!turn.chatSessionId || !messageId) return;
-    const session = this.store.getChatSession(turn.chatSessionId);
-    if (session)
-      this.store.putChatSession({
-        ...session,
-        lastMessageId: messageId,
-        lastInstructions: turn.systemPrompt ?? session.lastInstructions,
-      });
-  }
-  private async dispatchTurn(
-    api: PaseoApi,
-    turn: Turn,
-    assistant: Assistant,
-  ): Promise<PaseoAgentHandle> {
-    if (turn.chatSessionId) {
-      const agent = await this.chatAgent(api, turn, assistant);
-      if (!turn.accepted) {
-        await agent.send(turn.prompt, { messageId: turn.id });
-        await agent.refresh();
-      }
-      return agent;
+  private async settleTurn(turn: Turn, finish: Finish): Promise<void> {
+    const read = await this.port!.readTurn(turn.agentId, turn.id, this.serverFor(turn));
+    if (read.kind === "unknown") return;
+    if (!read.ended) {
+      const gone = goneReason(read, finish);
+      if (gone) this.interrupt(turn, gone);
+      else this.setAttention(turn, read.permission);
+      return;
     }
-    if (turn.accepted) return api.agents.ref(turn.agentId);
-    if (turn.taskId) {
-      const agent = api.agents.ref(turn.agentId);
-      await agent.send(turn.prompt, { messageId: turn.id });
-      return agent;
-    }
-    throw new Error("Chat execution binding is missing.");
-  }
-  private finishTurn(
-    turn: Turn,
-    assistant: Assistant,
-    result: Awaited<ReturnType<PaseoAgentHandle["waitForFinish"]>>,
-  ): void {
+    const assistant = this.store.get("assistants", turn.assistantId);
+    const task = turn.taskId ? this.store.get("tasks", turn.taskId) : null;
     const latestUser = this.store
       .snapshot()
       .messages.findLast(
@@ -442,178 +531,206 @@ export class Coordinator {
           message.threadId === turn.threadId &&
           message.senderId === "user",
       );
-    if (!turn.taskId && latestUser?.id !== turn.seenUserId) {
-      this.store.transaction(() =>
-        this.store.put("turns", {
-          ...turn,
-          status: "cancelled",
-          error: "Superseded by a newer message.",
-        }),
-      );
+    let status: Turn["status"] = "completed";
+    let error: string | null = null;
+    if (task?.status === "cancelled") status = "cancelled";
+    else if (!turn.taskId && latestUser?.id !== turn.seenUserId) {
+      status = "cancelled";
+      error = "Superseded by a newer message.";
+    } else if (finish.outcome?.kind === "canceled") {
+      status = "cancelled";
+      error = finish.outcome.reason;
+    } else if (finish.outcome?.kind === "failed" || read.error) {
+      status = "failed";
+      error = finish.outcome?.kind === "failed" ? finish.outcome.error.message : read.error;
+    }
+    const text = read.text.trim();
+    this.store.transaction(() => {
+      let finalMessageId: string | undefined;
+      if (status === "completed" && assistant && text && !isPass(text)) {
+        finalMessageId = `final:${turn.id}`;
+        if (!this.store.get("messages", finalMessageId))
+          this.store.putMessage({
+            id: finalMessageId,
+            conversationId: turn.conversationId,
+            threadId: turn.threadId,
+            senderId: assistant.id,
+            content: text,
+            createdAt: Date.now(),
+            taskId: turn.taskId ?? null,
+            kind: "final",
+            turnId: turn.id,
+          });
+      }
+      this.store.put("turns", {
+        ...turn,
+        status,
+        error,
+        ...(finalMessageId ? { finalMessageId } : {}),
+      });
+      const latest = task ? this.store.get("tasks", task.id) : null;
+      if (latest && latest.status !== "cancelled")
+        this.store.put("tasks", {
+          ...latest,
+          status: status === "completed" || status === "cancelled" ? status : "failed",
+          error,
+          pendingPermission: null,
+        });
+    });
+    if (turn.taskId) this.stopWatch(turn.taskId);
+  }
+  private async settleTask(task: Task, finish: Finish): Promise<void> {
+    const execution = task.execution;
+    if (!execution || !LIVE.has(task.status) || task.status === "queued") return;
+    const read = await this.port!.readTurn(execution.agentId, task.id, task.serverId);
+    if (read.kind === "unknown") return;
+    if (!read.ended) {
+      const gone = goneReason(read, finish);
+      if (gone) this.interrupt(task, gone);
+      else this.setAttention(task, read.permission);
       return;
     }
-    const status = finishedStatus(result.status);
+    let status: Task["status"] = "completed";
+    let error: string | null = null;
+    if (finish.outcome?.kind === "canceled") {
+      status = "cancelled";
+      error = finish.outcome.reason;
+    } else if (finish.outcome?.kind === "failed" || read.error) {
+      status = "failed";
+      error = finish.outcome?.kind === "failed" ? finish.outcome.error.message : read.error;
+    }
+    const text = read.text.trim();
     this.store.transaction(() => {
-      this.store.put("turns", { ...turn, status, error: result.error });
-      if (turn.taskId) {
-        const latest = this.store.get("tasks", turn.taskId);
-        if (latest) this.store.put("tasks", { ...latest, status, error: result.error });
-      }
-      if (status === "completed" && result.lastMessage) {
-        this.store.put("messages", {
-          id: `reply:${turn.id}`,
-          conversationId: turn.conversationId,
-          threadId: turn.threadId,
-          senderId: assistant.id,
-          content: result.lastMessage,
+      const latest = this.store.get("tasks", task.id)!;
+      if (latest.status === "cancelled") return;
+      if (status === "completed" && text && !this.store.get("messages", `result:${task.id}`))
+        this.store.putMessage({
+          id: `result:${task.id}`,
+          conversationId: task.conversationId,
+          threadId: null,
+          senderId: task.assistantId,
+          content: text,
           createdAt: Date.now(),
-          taskId: turn.taskId ?? null,
+          taskId: task.id,
+          kind: "final",
+          turnId: task.id,
         });
-      }
+      this.store.put("tasks", {
+        ...latest,
+        status,
+        error,
+        accepted: true,
+        pendingPermission: null,
+      });
+    });
+    this.stopWatch(task.id);
+  }
+  // Moves a live turn or task between running and attention (waiting on an approval).
+  private setAttention(target: Turn | Task, permission: PermissionInfo | null): void {
+    const status = permission ? "attention" : "running";
+    this.store.transaction(() => {
+      if ("agentId" in target) {
+        const turn = target;
+        const fresh = this.store.get("turns", turn.id);
+        if (fresh && TURN_LIVE.has(fresh.status) && fresh.status !== status)
+          this.store.put("turns", { ...fresh, status, error: null });
+        if (turn.taskId) this.setTaskAttention(turn.taskId, status, permission);
+      } else this.setTaskAttention(target.id, status, permission);
     });
   }
-  private cancelledTurnTask(turn: Turn): boolean {
-    return Boolean(turn.taskId && this.store.get("tasks", turn.taskId)?.status === "cancelled");
+  private setTaskAttention(
+    taskId: string,
+    status: "running" | "attention",
+    permission: PermissionInfo | null,
+  ): void {
+    const task = this.store.get("tasks", taskId);
+    if (!task || !LIVE.has(task.status) || task.status === "queued" || task.status === "creating")
+      return;
+    const pending = permissionOf(permission);
+    if (task.status !== status || task.pendingPermission?.requestId !== pending?.requestId)
+      this.store.put("tasks", { ...task, status, error: null, pendingPermission: pending });
   }
-  private async runTurn(turn: Turn): Promise<void> {
-    if (!this.api) return;
-    const assistant = this.store.get("assistants", turn.assistantId);
-    if (!assistant) return;
-    let api: PaseoApi | null = null;
-    try {
-      const task = turn.taskId ? this.store.get("tasks", turn.taskId) : null;
-      if (task && Date.now() >= task.deadline && task.status !== "cancelled")
-        await this.cancel(task.id);
-      if (task && this.store.get("tasks", task.id)?.status === "cancelled") {
-        this.store.transaction(() => this.store.put("turns", { ...turn, status: "cancelled" }));
-        return;
-      }
-      turn = this.prepareTurn(turn, assistant);
-      api = task ? await this.target(task.serverId) : this.api;
-      const agent = await this.dispatchTurn(api, turn, assistant);
-      if (this.closed) return;
-      requireConfirmedChatExecution(turn, agent);
-      turn = { ...turn, accepted: true, status: "running" };
-      this.store.transaction(() => {
-        this.store.put("turns", turn);
-        this.advanceChatContext(turn, turn.contextThroughId);
-      });
-      const result = await agent.waitForFinish(500);
-      if (this.closed || result.status === "timeout") return;
-      requireConfirmedChatExecution(turn, agent);
-      if (this.cancelledTurnTask(turn)) return;
-      this.finishTurn(turn, assistant, result);
-    } catch (error) {
-      if (!this.closed)
-        this.store.transaction(() =>
-          this.store.put("turns", {
-            ...turn,
-            status: failureStatus(error),
-            error: errorMessage(error),
-          }),
-        );
-    } finally {
-      if (api && api !== this.api) await api.dispose();
-    }
+  private markAttention(agentId: string, permission: PermissionInfo | null): void {
+    if (this.closed) return;
+    const turn = this.liveTurn(agentId);
+    if (turn) return this.setAttention(turn, permission);
+    const task = this.store.get("tasks", agentId);
+    if (task?.execution?.agentId === agentId && task.accepted) this.setAttention(task, permission);
   }
-  private async prepareTaskWorkspace(api: PaseoApi, task: Task): Promise<Task | null> {
-    if (!task.execution) {
-      this.store.transaction(() => this.store.put("tasks", { ...task, status: "creating" }));
-      const source =
-        task.isolation === "worktree"
-          ? {
-              kind: "worktree" as const,
-              cwd: task.directory,
-              branchName: `codex/bigbang-${task.id.slice(0, 8)}`,
-            }
-          : { kind: "directory" as const, path: task.directory };
-      const workspace = await api.workspaces.create({
-        idempotencyKey: `task-workspace:${task.id}`,
-        source,
-        title: task.prompt.slice(0, 60),
-      });
-      if (this.closed) return null;
-      const latest = this.store.get("tasks", task.id)!;
-      if (latest.status === "cancelled") return null;
-      task = {
-        ...latest,
-        execution: { serverId: task.serverId, workspaceId: workspace.id, agentId: task.id },
-        status: "creating",
-      };
-      this.store.transaction(() => this.store.put("tasks", task));
-    }
-    return task;
+  // An accepted turn or task whose execution closed or was archived before it ended is terminal:
+  // nothing is committed (the partial text is never guessed), the execution stays bound, and the
+  // lane is free so the next message resumes the same agent.
+  private interrupt(target: Turn | Task, reason: "archived" | "closed"): void {
+    const error = reason === "archived" ? ARCHIVED_MESSAGE : INTERRUPTED_MESSAGE;
+    this.store.transaction(() => {
+      const taskId = "agentId" in target ? target.taskId : target.id;
+      if ("agentId" in target) this.store.put("turns", { ...target, status: "failed", error });
+      const task = taskId ? this.store.get("tasks", taskId) : null;
+      if (task && LIVE.has(task.status))
+        this.store.put("tasks", { ...task, status: "failed", error, pendingPermission: null });
+    });
+    const taskId = "agentId" in target ? target.taskId : target.id;
+    if (taskId) this.stopWatch(taskId);
   }
-  private async runTask(task: Task): Promise<void> {
-    let api: PaseoApi | null = null;
+  private markGone(agentId: string, reason: "archived" | "closed"): void {
+    const turn = this.liveTurn(agentId);
+    const task = this.store.get("tasks", agentId);
+    if (turn) this.interrupt(turn, reason);
+    else if (task && LIVE.has(task.status) && task.accepted) this.interrupt(task, reason);
+  }
+  private async runTask(taskId: string): Promise<void> {
+    const port = this.port;
+    let task = this.store.get("tasks", taskId);
+    if (!port || this.closed || !task || !LIVE.has(task.status) || task.accepted) return;
     try {
       if (Date.now() >= task.deadline) {
         await this.cancel(task.id);
         return;
       }
-      api = await this.target(task.serverId);
-      if (this.closed || this.store.get("tasks", task.id)?.status === "cancelled") return;
-      let agent: PaseoAgentHandle;
-      const prepared = await this.prepareTaskWorkspace(api, task);
-      if (!prepared) return;
-      task = prepared;
-      const execution = task.execution!;
-      if (!task.accepted) {
-        agent = await api.workspaces.ref(execution.workspaceId).agents.create({
-          agentId: execution.agentId,
-          idempotencyKey: `task-agent:${task.id}`,
-          config: { provider: task.provider },
-          title: task.prompt.slice(0, 60),
-          prompt: task.prompt,
-        });
+      if (!task.execution) {
+        this.store.transaction(() => this.store.put("tasks", { ...task!, status: "creating" }));
+        const { workspaceId } = await port.createTaskWorkspace(taskSpec(task));
+        if (this.closed) return;
         const latest = this.store.get("tasks", task.id)!;
-        if (latest.status === "cancelled") {
-          this.store.transaction(() =>
-            this.store.put("tasks", { ...latest, accepted: true, cancelPending: true }),
-          );
-          await this.cancel(task.id);
-          return;
-        }
-        task = { ...latest, status: "running", accepted: true };
-        this.store.transaction(() => this.store.put("tasks", task));
-      } else agent = api.agents.ref(execution.agentId);
-      const result = await agent.waitForFinish(500);
-      if (
-        this.closed ||
-        result.status === "timeout" ||
-        this.store.get("tasks", task.id)?.status === "cancelled"
-      )
+        if (latest.status === "cancelled") return;
+        task = {
+          ...latest,
+          execution: { serverId: task.serverId, workspaceId, agentId: task.id },
+          status: "creating",
+        };
+        this.store.transaction(() => this.store.put("tasks", task!));
+      }
+      await port.createTaskAgent(taskSpec(task), task.execution!.workspaceId);
+      const latest = this.store.get("tasks", task.id)!;
+      if (latest.status === "cancelled") {
+        this.store.transaction(() =>
+          this.store.put("tasks", { ...latest, accepted: true, cancelPending: true }),
+        );
+        await this.cancel(task.id);
         return;
-      const status = finishedStatus(result.status);
-      this.store.transaction(() => {
-        this.store.put("tasks", { ...task, status, error: result.error });
-        if (status === "completed" && result.lastMessage)
-          this.store.put("messages", {
-            id: `result:${task.id}`,
-            conversationId: task.conversationId,
-            threadId: null,
-            senderId: task.assistantId,
-            content: result.lastMessage,
-            createdAt: Date.now(),
-            taskId: task.id,
-          });
-      });
+      }
+      task = { ...latest, status: "running", accepted: true };
+      this.store.transaction(() => this.store.put("tasks", task!));
+      this.watch(task);
+      // The hook for a quick turn may have fired before the task was recorded as accepted.
+      this.settle(task.id);
     } catch (error) {
-      if (!this.closed && this.store.get("tasks", task.id)?.status !== "cancelled")
+      if (!this.closed && this.store.get("tasks", taskId)?.status !== "cancelled")
         this.store.transaction(() =>
           this.store.put("tasks", {
-            ...task,
+            ...task!,
             status: failureStatus(error),
             error: errorMessage(error),
           }),
         );
-    } finally {
-      if (api && api !== this.api) await api.dispose();
     }
   }
   async close(): Promise<void> {
     this.closed = true;
-    clearInterval(this.timer);
-    await Promise.allSettled(this.operations);
+    if (this.timer) clearInterval(this.timer);
+    for (const stop of this.watches.values()) stop();
+    this.watches.clear();
+    await this.queue.idle();
+    await this.port?.dispose().catch(() => undefined);
   }
 }

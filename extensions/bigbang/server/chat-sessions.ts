@@ -32,7 +32,9 @@ export function restoreChatSessions(store: ChatStore): void {
   });
 }
 export function assistantInstructions(assistant: Assistant): string {
-  return `${assistant.persona}\nLong-term memory:\n${assistant.memory}\nYou are a personal assistant. Project changes belong in separate Studio tasks.`;
+  return `${assistant.persona}
+You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
+In a group chat, reply with exactly (pass) when you have nothing useful to add.`;
 }
 function legacySessionTurn(turns: Turn[]): Turn | undefined {
   const reverse = turns.toReversed();
@@ -62,7 +64,12 @@ export function bindChatSession(
         !turn.taskId,
     ),
   );
-  const reply = previous && state.messages.find((message) => message.id === `reply:${previous.id}`);
+  // COMPAT(bigbangReplyIds): added in bigbang chat v2, remove after 2027-03-01
+  const reply =
+    previous &&
+    state.messages.find(
+      (message) => message.id === `final:${previous.id}` || message.id === `reply:${previous.id}`,
+    );
   const session: ChatSession = {
     id,
     conversationId,
@@ -90,8 +97,15 @@ export function unseenMessages(
     (message) =>
       message.conversationId === session.conversationId && message.threadId === session.threadId,
   );
+  // The execution already holds its own replies in its native history.
   const nativeReplies = new Set(
-    turns.filter((turn) => turn.agentId === session.agentId).map((turn) => `reply:${turn.id}`),
+    turns
+      .filter((turn) => turn.agentId === session.agentId)
+      .flatMap((turn) => [
+        `final:${turn.id}`,
+        // COMPAT(bigbangReplyIds): added in bigbang chat v2, remove after 2027-03-01
+        `reply:${turn.id}`,
+      ]),
   );
   if (!session.lastMessageId)
     return history.slice(-24).filter((message) => !nativeReplies.has(message.id));

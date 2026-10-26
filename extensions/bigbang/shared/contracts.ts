@@ -6,7 +6,21 @@ export const assistantSchema = z.object({
   name: z.string().min(1),
   provider: z.string().regex(/^[^/]+\/.+$/),
   persona: z.string(),
-  memory: z.string(),
+  // Deprecated: long-term memory lives in the assistant's MEMORY.md; read and write it with
+  // chat.assistant.memory.*. Kept so older clients keep parsing.
+  memory: z.string().optional(),
+  autonomy: z
+    .object({
+      enabled: z.boolean(),
+      targets: z.array(
+        z.object({
+          serverId: z.string(),
+          directory: z.string().min(1),
+          isolation: z.enum(["worktree", "directory"]),
+        }),
+      ),
+    })
+    .optional(),
 });
 export const conversationSchema = z.object({
   id: z.string(),
@@ -23,6 +37,14 @@ export const messageSchema = z.object({
   content: z.string(),
   createdAt: z.number(),
   taskId: z.string().nullable(),
+  kind: z.enum(["user", "final", "system", "task_event"]).optional(),
+  seq: z.number().optional(),
+  turnId: z.string().optional(),
+  quoteOf: z.string().optional(),
+  epochId: z.string().optional(),
+  event: z
+    .object({ type: z.string(), taskId: z.string().optional(), detail: z.string().optional() })
+    .optional(),
 });
 export const executionSchema = z.object({
   serverId: z.string(),
@@ -54,9 +76,26 @@ export const taskSchema = z.object({
   error: z.string().nullable(),
   createdAt: z.number(),
   deadline: z.number(),
+  origin: z.enum(["user", "assistant"]).optional(),
+  requestedByTurnId: z.string().optional(),
+  pendingPermission: z.object({ requestId: z.string(), title: z.string() }).nullable().optional(),
 });
 export const turnSchema = z.object({
   id: z.string(),
+  kind: z
+    .enum([
+      "reply",
+      "awareness",
+      "mention",
+      "peer_inbox",
+      "roundtable",
+      "task_followup",
+      "task_receipt",
+    ])
+    .optional(),
+  epochId: z.string().optional(),
+  round: z.number().optional(),
+  finalMessageId: z.string().optional(),
   accepted: z.boolean().optional(),
   prepared: z.boolean().optional(),
   taskId: z.string().nullable().optional(),
@@ -101,8 +140,28 @@ export type ChatState = z.infer<typeof stateSchema>;
 
 export const readState = defineRpc({
   name: "chat.state",
-  input: z.object({ after: z.number().optional(), generation: z.string().optional() }),
+  input: z.object({
+    after: z.number().optional(),
+    generation: z.string().optional(),
+    // Long poll: with `after`, wait up to this long for the cursor to advance past it.
+    waitMs: z.number().int().min(0).max(20000).optional(),
+  }),
   output: stateSchema,
+});
+export const readAssistantMemory = defineRpc({
+  name: "chat.assistant.memory.read",
+  input: z.object({ assistantId: z.string().uuid() }),
+  output: z.object({ content: z.string(), mtimeMs: z.number() }),
+});
+export const writeAssistantMemory = defineRpc({
+  name: "chat.assistant.memory.write",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    content: z.string().max(1_000_000),
+    // mtimeMs returned by the last read; 0 when the file did not exist.
+    expectedMtimeMs: z.number(),
+  }),
+  output: z.object({ content: z.string(), mtimeMs: z.number() }),
 });
 export const saveAssistant = defineRpc({
   name: "chat.assistant.save",
