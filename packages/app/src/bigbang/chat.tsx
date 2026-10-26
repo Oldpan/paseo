@@ -1,10 +1,14 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { randomUUID } from "expo-crypto";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { useRetainedPanelActive } from "@/components/retained-panel";
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import { useSessionStore } from "@/stores/session-store";
 import {
   sendMessage,
   cancelTask,
+  type Assistant,
   type Task,
   type Turn,
 } from "../../../../extensions/bigbang/shared/contracts";
@@ -13,6 +17,9 @@ import { useBigbangView } from "./store";
 import type { Palette } from "./palette";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane, TaskCard } from "./ui/ChatPane";
+import { LiveTurnItem } from "./live-turn-item";
+import { useAssistantMemory } from "./memory";
+import { sortMessages } from "./model";
 
 interface ChatProps {
   data: BigbangData;
@@ -91,9 +98,35 @@ export function BigbangChat(props: ChatProps) {
         </ScrollView>
       ) : null}
       {tab === "memory" ? (
-        <MemoryPane assistant={assistant} onEdit={assistant ? edit : undefined} />
+        <MemoryTab data={data} assistant={assistant} onEdit={assistant ? edit : undefined} />
       ) : null}
     </View>
+  );
+}
+function MemoryTab({
+  data,
+  assistant,
+  onEdit,
+}: {
+  data: BigbangData;
+  assistant?: Assistant;
+  onEdit?(): void;
+}) {
+  const memory = useAssistantMemory(data, assistant?.id);
+  return (
+    <MemoryPane
+      assistant={assistant}
+      content={memory.content}
+      editorKey={memory.editorKey}
+      loading={memory.loading}
+      saving={memory.saving}
+      dirty={memory.dirty}
+      error={memory.error}
+      onChange={memory.change}
+      onSave={memory.save}
+      onReload={memory.reload}
+      onEdit={onEdit}
+    />
   );
 }
 function ConversationPane({
@@ -141,34 +174,33 @@ function ConversationPane({
   }, [send]);
   const rows = useMemo(
     () =>
-      data.state.messages
-        .filter(
+      sortMessages(
+        data.state.messages.filter(
           (message) =>
             message.conversationId === chatId &&
             (message.threadId === threadId || message.id === threadId),
-        )
-        .sort((a, b) => a.createdAt - b.createdAt)
-        .map((message) => {
-          const task = data.state.tasks.find((item) => item.id === message.taskId);
-          const assistant = data.state.assistants.find((item) => item.id === message.senderId);
-          return {
-            message,
-            task,
-            sender: message.senderId === "user" ? "You" : (assistant?.name ?? "Assistant"),
-            seed: `${assistant?.id}:${assistant?.name}`,
-            replyCount: data.state.messages.filter((item) => item.threadId === message.id).length,
-            reply: threadId ? undefined : () => setThread(message.id),
-            open: () => {
-              if (task) onOpenTask(task);
-            },
-            cancel: () => {
-              if (task)
-                void data
-                  .call(cancelTask, { id: task.id })
-                  .catch((failure: Error) => setError(failure.message));
-            },
-          };
-        }),
+        ),
+      ).map((message) => {
+        const task = data.state.tasks.find((item) => item.id === message.taskId);
+        const assistant = data.state.assistants.find((item) => item.id === message.senderId);
+        return {
+          message,
+          task,
+          sender: message.senderId === "user" ? "You" : (assistant?.name ?? "Assistant"),
+          seed: `${assistant?.id}:${assistant?.name}`,
+          replyCount: data.state.messages.filter((item) => item.threadId === message.id).length,
+          reply: threadId ? undefined : () => setThread(message.id),
+          open: () => {
+            if (task) onOpenTask(task);
+          },
+          cancel: () => {
+            if (task)
+              void data
+                .call(cancelTask, { id: task.id })
+                .catch((failure: Error) => setError(failure.message));
+          },
+        };
+      }),
     [chatId, data, onOpenTask, setThread, threadId],
   );
   const turns = useMemo(
@@ -176,16 +208,32 @@ function ConversationPane({
       data.state.turns
         .filter(
           (turn) =>
-            turn.conversationId === chatId && turn.threadId === threadId && LIVE.has(turn.status),
+            turn.conversationId === chatId &&
+            turn.threadId === threadId &&
+            LIVE.has(turn.status) &&
+            !turn.finalMessageId,
         )
-        .map((turn) => ({
-          turn,
-          name:
-            data.state.assistants.find((assistant) => assistant.id === turn.assistantId)?.name ??
-            "Assistant",
-          open: () => onOpenTurn(turn),
-        })),
-    [chatId, data, onOpenTurn, threadId],
+        .map((turn) => {
+          const assistant = data.state.assistants.find((item) => item.id === turn.assistantId);
+          return {
+            turn,
+            node: (
+              <LiveTurnItem
+                serverId={coordinatorId}
+                turn={turn}
+                name={assistant?.name ?? "Assistant"}
+                seed={`${assistant?.id}:${assistant?.name}`}
+                onOpenTurn={onOpenTurn}
+              />
+            ),
+          };
+        }),
+    [chatId, coordinatorId, data, onOpenTurn, threadId],
+  );
+  useLiveTurnDemand(
+    coordinatorId,
+    `bigbang:${draftKey}`,
+    useMemo(() => turns.map((item) => item.turn.agentId), [turns]),
   );
   return (
     <ChatPane
@@ -202,4 +250,32 @@ function ConversationPane({
       onTask={onTask}
     />
   );
+}
+
+/**
+ * Asks the session for the timelines of this pane's in-flight turns so the live bubble has a
+ * stream to read. Same contract as the workspace screen: replace this owner's visible agents, and
+ * clear them when the pane unmounts or its panel is hidden.
+ */
+function useLiveTurnDemand(serverId: string, owner: string, agentIds: string[]) {
+  const viewedTimelineSync = useSessionStore(
+    (state) => state.sessions[serverId]?.viewedTimelineSync ?? null,
+  );
+  const panelActive = useRetainedPanelActive();
+  // Keyed by content: `agentIds` is a new array whenever the ledger changes, the demand is not.
+  const demandKey = panelActive ? [...new Set(agentIds)].sort().join("\n") : "";
+  const demanded = useMemo(() => (demandKey ? demandKey.split("\n") : []), [demandKey]);
+  useEffect(() => {
+    for (const agentId of demanded) {
+      void getHostRuntimeStore()
+        .prepareAgentTimeline(serverId, agentId)
+        .catch(() => undefined);
+    }
+  }, [demanded, serverId]);
+  useLayoutEffect(() => {
+    viewedTimelineSync?.replaceVisibleAgentIds(owner, demanded);
+  }, [demanded, owner, viewedTimelineSync]);
+  useEffect(() => {
+    return () => viewedTimelineSync?.replaceVisibleAgentIds(owner, []);
+  }, [owner, viewedTimelineSync]);
 }

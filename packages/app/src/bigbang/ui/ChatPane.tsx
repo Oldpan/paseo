@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
+import { isNoteMessage } from "../model";
+import { BigbangInput } from "./FormChrome";
 import type {
   Message,
   Task,
@@ -7,7 +9,7 @@ import type {
   Assistant,
 } from "../../../../../extensions/bigbang/shared/contracts";
 import { Composer } from "./Composer";
-import { ChatMessage, Chip } from "./ChatChrome";
+import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
 import { text as type } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
@@ -23,8 +25,8 @@ export interface MessageRow {
 }
 export interface LiveTurn {
   turn: Turn;
-  name: string;
-  open(): void;
+  /** The host-rendered live bubble (stream text, approvals); keyed by `turn.id`. */
+  node: ReactNode;
 }
 const EMPTY_FILES: never[] = [];
 function ignoreFile() {}
@@ -59,6 +61,10 @@ export function ChatPane({
   useEffect(() => {
     if (atBottom.current) list.current?.scrollToEnd({ animated: false });
   }, [rows.length, turns.length]);
+  // Streaming text grows the content without changing the row count.
+  const followContent = () => {
+    if (atBottom.current) list.current?.scrollToEnd({ animated: false });
+  };
   return (
     <View style={{ flex: 1, minWidth: 0, minHeight: 0, backgroundColor: t.chatSurface }}>
       <ScrollView
@@ -68,36 +74,35 @@ export function ChatPane({
         style={{ flex: 1, minHeight: 0 }}
         contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 12, flexGrow: 1 }}
         scrollEventThrottle={100}
+        onContentSizeChange={followContent}
         onScroll={({ nativeEvent: e }) => {
           atBottom.current =
             e.contentSize.height - e.layoutMeasurement.height - e.contentOffset.y < 80;
         }}
       >
-        {rows.map((row) => (
-          <ChatMessage
-            key={row.message.id}
-            id={row.message.id}
-            content={row.message.content}
-            sender={row.sender}
-            seed={row.seed}
-            user={row.message.senderId === "user"}
-            createdAt={row.message.createdAt}
-            replyCount={row.replyCount}
-            onReply={row.reply}
-          >
-            {row.task ? <TaskCard task={row.task} onOpen={row.open} onCancel={row.cancel} /> : null}
-          </ChatMessage>
-        ))}
+        {rows.map((row) =>
+          isNoteMessage(row.message) ? (
+            <NoteRow key={row.message.id} id={row.message.id} content={row.message.content} />
+          ) : (
+            <ChatMessage
+              key={row.message.id}
+              id={row.message.id}
+              content={row.message.content}
+              sender={row.sender}
+              seed={row.seed}
+              user={row.message.senderId === "user"}
+              createdAt={row.message.createdAt}
+              replyCount={row.replyCount}
+              onReply={row.reply}
+            >
+              {row.task ? (
+                <TaskCard task={row.task} onOpen={row.open} onCancel={row.cancel} />
+              ) : null}
+            </ChatMessage>
+          ),
+        )}
         {turns.map((item) => (
-          <View
-            key={item.turn.id}
-            style={{ paddingHorizontal: 46, paddingVertical: 10, gap: 8, alignItems: "flex-start" }}
-          >
-            <Text style={type(t.textMuted, 12)}>
-              {item.name} · {item.turn.status === "running" ? "Thinking…" : item.turn.status}
-            </Text>
-            <Chip onPress={item.open}>View process / approvals</Chip>
-          </View>
+          <View key={item.turn.id}>{item.node}</View>
         ))}
         {!rows.length ? (
           <View
@@ -196,19 +201,68 @@ export function TaskCard({
     </View>
   );
 }
-export function MemoryPane({ assistant, onEdit }: { assistant?: Assistant; onEdit?(): void }) {
+export function MemoryPane({
+  assistant,
+  content,
+  editorKey,
+  loading,
+  saving,
+  dirty,
+  error,
+  onChange,
+  onSave,
+  onReload,
+  onEdit,
+}: {
+  assistant?: Assistant;
+  content: string;
+  editorKey: number;
+  loading: boolean;
+  saving: boolean;
+  dirty: boolean;
+  error: string | null;
+  onChange(text: string): void;
+  onSave(): void;
+  onReload(): void;
+  onEdit?(): void;
+}) {
   const { palette: t } = useTheme();
   return (
-    <ScrollView contentContainerStyle={{ padding: 24, gap: 16 }}>
+    <ScrollView
+      contentContainerStyle={{ padding: 24, gap: 12 }}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={type(t.textPrimary, 18, { fontWeight: "700" })}>Memory</Text>
-      <Text selectable style={type(t.textSecondary, 14)}>
-        {assistant?.memory || "No memories saved yet."}
+      <Text style={type(t.textMuted, 12)}>
+        {assistant?.name ?? "This assistant"} keeps long-term notes in MEMORY.md and can edit them
+        itself. Changes saved here are read on its next turn.
       </Text>
-      {onEdit ? (
-        <View style={{ alignItems: "flex-start" }}>
-          <Chip onPress={onEdit}>Edit persona and memory</Chip>
-        </View>
+      {assistant ? (
+        <BigbangInput
+          key={editorKey}
+          accessibilityLabel="Assistant memory"
+          initialValue={content}
+          onChangeText={onChange}
+          multiline
+          editable={!loading && !saving}
+          placeholder={loading ? "Loading…" : "No memories saved yet."}
+          style={{ minHeight: 240 }}
+        />
       ) : null}
+      {error ? (
+        <Text accessibilityRole="alert" style={type(t.destructive, 12)}>
+          {error}
+        </Text>
+      ) : null}
+      <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+        <Chip onPress={onSave} disabled={!dirty || saving || loading} accent>
+          {saving ? "Saving…" : "Save memory"}
+        </Chip>
+        <Chip onPress={onReload} disabled={saving || loading}>
+          Reload
+        </Chip>
+        {onEdit ? <Chip onPress={onEdit}>Edit persona and model</Chip> : null}
+      </View>
     </ScrollView>
   );
 }

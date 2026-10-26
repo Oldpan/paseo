@@ -350,6 +350,95 @@ export function ChatMessage({
     </View>
   );
 }
+/** A ledger note (system or task_event row): compact, centred, no avatar. */
+export function NoteRow({ id, content }: { id: string; content: string }) {
+  const { palette: t } = useTheme();
+  return (
+    <View
+      testID={`message-${id}`}
+      style={{ alignItems: "center", paddingHorizontal: 24, paddingVertical: 6 }}
+    >
+      <Text selectable style={type(t.textMuted, 11, { textAlign: "center" })}>
+        {content}
+      </Text>
+    </View>
+  );
+}
+/**
+ * The reply an assistant is still writing. Renders like a committed message once text arrives and
+ * as a status line before that. `children` carry the process chip and any inline approvals.
+ */
+export function LiveTurnBubble({
+  id,
+  sender,
+  seed,
+  text,
+  commentary,
+  activity,
+  statusLabel,
+  createdAt,
+  children,
+}: {
+  id: string;
+  sender: string;
+  seed: string;
+  text: string;
+  commentary: string;
+  activity: string | null;
+  statusLabel: string;
+  createdAt: number;
+  children?: ReactNode;
+}) {
+  const { palette: t, name } = useTheme();
+  const status = (
+    <Text numberOfLines={1} style={type(t.textMuted, 11, { marginTop: 6 })}>
+      {activity ? `${sender} · ${activity}…` : `${sender} · ${statusLabel}`}
+    </Text>
+  );
+  const notes = (
+    <>
+      {commentary ? (
+        <Text numberOfLines={3} style={type(t.textMuted, 11, { marginTop: 6 })}>
+          {commentary}
+        </Text>
+      ) : null}
+      {text && activity ? status : null}
+      {children}
+    </>
+  );
+  if (text)
+    return (
+      <ChatMessage
+        id={id}
+        content={text}
+        sender={sender}
+        seed={seed}
+        user={false}
+        createdAt={createdAt}
+        replyCount={0}
+      >
+        {notes}
+      </ChatMessage>
+    );
+  return (
+    <View
+      testID={`message-${id}`}
+      style={{
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 10,
+        paddingHorizontal: 4,
+        paddingVertical: 6,
+      }}
+    >
+      <AgentAvatar seed={seed} label={sender} size={32} theme={t} name={name} />
+      <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
+        {status}
+        {notes}
+      </View>
+    </View>
+  );
+}
 export function ThreadHeader({ onClose, compact }: { onClose(): void; compact: boolean }) {
   const { palette: t } = useTheme();
   return (

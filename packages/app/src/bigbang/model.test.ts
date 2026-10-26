@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { addStudioColumn, EMPTY_CHAT_STATE, mergeChatState, studioKey } from "./model";
+import type { Message } from "../../../../extensions/bigbang/shared/contracts";
+import {
+  addStudioColumn,
+  EMPTY_CHAT_STATE,
+  isNoteMessage,
+  mergeChatState,
+  sortMessages,
+  studioKey,
+} from "./model";
 
 describe("Bigbang data ownership", () => {
   it("keeps identically named workspaces on different machines distinct", () => {
@@ -27,5 +35,38 @@ describe("Bigbang data ownership", () => {
     expect(mergeChatState(next, { ...EMPTY_CHAT_STATE, cursor: 2 }).assistants).toEqual(
       next.assistants,
     );
+  });
+
+  it("orders messages by seq, with rows that predate seq first by time", () => {
+    const row = (id: string, createdAt: number, seq?: number): Message => ({
+      id,
+      conversationId: "c",
+      threadId: null,
+      senderId: "user",
+      content: id,
+      createdAt,
+      taskId: null,
+      ...(seq === undefined ? {} : { seq }),
+    });
+    const sorted = sortMessages([
+      row("late", 300, 7),
+      row("clock-skewed", 100, 9),
+      row("old-b", 20),
+      row("old-a", 10),
+      row("early", 400, 3),
+    ]);
+    expect(sorted.map((item) => item.id)).toEqual([
+      "old-a",
+      "old-b",
+      "early",
+      "late",
+      "clock-skewed",
+    ]);
+  });
+  it("renders system and task_event rows as notes", () => {
+    expect(isNoteMessage({ kind: "system" })).toBe(true);
+    expect(isNoteMessage({ kind: "task_event" })).toBe(true);
+    expect(isNoteMessage({ kind: "final" })).toBe(false);
+    expect(isNoteMessage({})).toBe(false);
   });
 });

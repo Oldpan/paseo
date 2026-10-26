@@ -1,4 +1,4 @@
-import type { ChatState } from "../../../../extensions/bigbang/shared/contracts";
+import type { ChatState, Message } from "../../../../extensions/bigbang/shared/contracts";
 
 export interface StudioColumn {
   serverId: string;
@@ -40,4 +40,23 @@ export function addStudioColumn(columns: StudioColumn[], column: StudioColumn): 
   return columns.some((item) => studioKey(item) === studioKey(column))
     ? columns
     : [...columns, column];
+}
+
+/**
+ * Ledger order. Rows written before the ledger assigned `seq` have none; they predate every row
+ * that does, so they come first by `createdAt`, then the rest by `seq`. A strict total order
+ * keeps the sort stable when one conversation holds both.
+ */
+export function compareMessages(a: Message, b: Message): number {
+  if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq || a.id.localeCompare(b.id);
+  if (a.seq !== undefined) return 1;
+  if (b.seq !== undefined) return -1;
+  return a.createdAt - b.createdAt || a.id.localeCompare(b.id);
+}
+export function sortMessages(messages: readonly Message[]): Message[] {
+  return [...messages].sort(compareMessages);
+}
+/** System and task_event rows are ledger notes, not speech: they render as compact centred rows. */
+export function isNoteMessage(message: Pick<Message, "kind">): boolean {
+  return message.kind === "system" || message.kind === "task_event";
 }

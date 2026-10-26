@@ -51,7 +51,7 @@ const ASSISTANT_FIELDS = [
   { name: "name", label: "Name", initial: "" },
   { name: "provider", label: "Provider / model", initial: "" },
   { name: "persona", label: "Persona", initial: "", multiline: true },
-  { name: "memory", label: "Memory", initial: "", multiline: true },
+  { name: "memory", label: "Initial memory", initial: "", multiline: true },
 ];
 
 export function BigbangScreen() {
@@ -152,7 +152,8 @@ export function BigbangScreen() {
           name: values.name,
           provider: values.provider,
           persona: values.persona,
-          memory: values.memory,
+          // Only seeds MEMORY.md for a new assistant; an existing one edits it in the Memory tab.
+          ...(editing ? {} : { memory: values.memory }),
         });
         if (!editing) {
           const chat = await data.call(createConversation, {
@@ -230,12 +231,12 @@ export function BigbangScreen() {
     () => [
       { name: "id", label: "", initial: editing ?? randomUUID(), hidden: true },
       { name: "chatId", label: "", initial: randomUUID(), hidden: true },
-      ...ASSISTANT_FIELDS.map((field) => ({
+      ...ASSISTANT_FIELDS.filter((field) => !editing || field.name !== "memory").map((field) => ({
         name: field.name,
         label: field.label,
         modelHost: field.name === "provider" ? coordinatorId : undefined,
         multiline: field.multiline,
-        initial: assistant?.[field.name as "name" | "provider" | "persona" | "memory"] ?? "",
+        initial: assistant?.[field.name as "name" | "provider" | "persona"] ?? "",
       })),
     ],
     [assistant, editing, coordinatorId],
