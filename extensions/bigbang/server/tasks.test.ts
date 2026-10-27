@@ -4,7 +4,7 @@ import type { Assistant, Message, Task, Turn } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS } from "../shared/settings";
 import { fixture, closeFixtures } from "./chat-fixture";
 import { startTaskHandler, startTaskTool, taskStatusHandler, taskStatusTool } from "./agent-tools";
-import { TASK_RECEIPT_LEAD } from "./prompts";
+import { TASK_RECEIPT_LEAD, taskBrief } from "./prompts";
 import { deterministicTaskId } from "./task-events";
 
 afterEach(closeFixtures);
@@ -116,7 +116,8 @@ describe("authorization", () => {
   it("rejects an assistant that left the chat", async () => {
     const f = setup();
     const turn = await f.reply();
-    f.coordinator.createConversation({ ...f.dm, members: [f.bob.id] });
+    // There is no membership edit yet; change the ledger as one would.
+    f.store.transaction(() => f.store.put("conversations", { ...f.dm, members: [f.bob.id] }));
     expect(() => f.call(turn)).toThrow("no longer a member");
     expect(f.store.snapshot().tasks).toHaveLength(0);
   });
@@ -708,7 +709,7 @@ describe("task status", () => {
 });
 
 describe("tool audience", () => {
-  it("admits the chat executions of assistants with autonomy, before they are created", async () => {
+  it("admits every chat execution before it is created; autonomy is checked per call", async () => {
     const admittedAtCreation: boolean[] = [];
     const f = setup();
     const original = f.execution.ensureChatAgent.bind(f.execution);
@@ -718,24 +719,20 @@ describe("tool audience", () => {
     };
     const turn = await f.reply();
     expect(f.audiences.at(-1)).toEqual([turn.agentId]);
-    expect(admittedAtCreation).toEqual([true]);
-    // Bob has no autonomy: his execution is never admitted.
+    // Bob has no autonomy, yet his session lists the tools from the start, so enabling autonomy
+    // later works without restarting a provider that lists MCP tools once per session.
     const bobDm = f.group({ kind: "dm", name: "Bob", members: [f.bob.id] });
     await f.say("Hi Bob", { conversationId: bobDm.id });
     const bobTurn = f.store.snapshot().turns.findLast((item) => item.assistantId === f.bob.id)!;
-    expect(f.audiences.at(-1)).toEqual([turn.agentId]);
-    expect(f.audiences.at(-1)).not.toContain(bobTurn.agentId);
+    expect(admittedAtCreation).toEqual([true, true]);
+    expect(f.audiences.at(-1)).toEqual([turn.agentId, bobTurn.agentId].toSorted());
   });
 
-  it("follows a change of autonomy and survives a restart", async () => {
+  it("keeps the audience through autonomy changes and a restart", async () => {
     const f = setup();
     const turn = await f.reply();
-    f.coordinator.saveAssistant({ ...f.ada, autonomy: { enabled: false, targets: [LOCAL] } });
-    expect(f.audiences.at(-1)).toEqual([]);
-    f.coordinator.saveAssistant({ ...f.ada, autonomy: { enabled: true, targets: [LOCAL] } });
-    expect(f.audiences.at(-1)).toEqual([turn.agentId]);
     const count = f.audiences.length;
-    // Saving the same thing again announces nothing.
+    f.coordinator.saveAssistant({ ...f.ada, autonomy: { enabled: false, targets: [LOCAL] } });
     f.coordinator.saveAssistant({
       ...f.ada,
       autonomy: { enabled: true, targets: [LOCAL, REMOTE] },
@@ -758,5 +755,20 @@ describe("agent tool output", () => {
     expect(task.id).toBe(out.taskId);
     const assistant: Assistant = f.ada;
     expect(assistant.autonomy?.enabled).toBe(true);
+  });
+});
+
+describe("task brief", () => {
+  it("keeps a worktree task inside its worktree even when the brief names the source path", () => {
+    const brief = taskBrief({
+      prompt: "In /work/app, create hello.py.",
+      directory: "/work/app",
+      isolation: "worktree",
+    });
+    expect(brief).toContain("never modify /work/app itself");
+    expect(brief.endsWith("In /work/app, create hello.py.")).toBe(true);
+    expect(taskBrief({ prompt: "Fix it.", directory: "/work/app", isolation: "directory" })).toBe(
+      "Fix it.",
+    );
   });
 });

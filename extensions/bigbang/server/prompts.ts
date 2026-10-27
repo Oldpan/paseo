@@ -8,6 +8,16 @@ const at = (assistant: Assistant) => `@${assistant.name}`;
 /** Opens the prompt of a turn that reports a finished task; the outcome follows as a bracketed line. */
 export const TASK_RECEIPT_LEAD = `A task you started has ended; its outcome is in brackets below. Tell the user what happened in your own words, with what matters to them and what you suggest next. Reply exactly ${PASS_REPLY} only if the user has already seen everything.`;
 
+/**
+ * The first prompt of a task execution. A worktree task's working directory is its own worktree,
+ * but a brief written in chat often names the source checkout by absolute path; without this line
+ * the worker edits that checkout instead of its isolated copy.
+ */
+export function taskBrief(task: { prompt: string; directory: string; isolation: string }): string {
+  if (task.isolation !== "worktree") return task.prompt;
+  return `You are working in an isolated Git worktree created from ${task.directory}; your current working directory is that worktree. Make every change inside your working directory and never modify ${task.directory} itself, even where the brief below names that path.\n\n${task.prompt}`;
+}
+
 function reasonLine(turn: Turn, wokenBy: Assistant | undefined): string {
   switch (turn.kind) {
     case "awareness":

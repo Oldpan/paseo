@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { PaseoAgentPermissionResponse, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import { finalTextAfter, type ProjectionEntry, type TurnProjection } from "./projection";
+import { taskBrief } from "./prompts";
 
 export interface PermissionInfo {
   requestId: string;
@@ -270,7 +271,7 @@ export class PaseoExecution implements ExecutionPort {
       idempotencyKey: `task-agent:${task.id}`,
       config: { provider: task.provider },
       title: taskLabel(task),
-      prompt: task.prompt,
+      prompt: taskBrief(task),
       clientMessageId: task.id,
       // Observation only: authorization never reads labels.
       labels: { "bigbang.task": task.id },

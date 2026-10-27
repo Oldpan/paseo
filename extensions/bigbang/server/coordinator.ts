@@ -230,9 +230,11 @@ export class Coordinator {
   // that must see the tools is created or resumed.
   private syncAudience(): void {
     if (!this.onAudience) return;
+    // Every chat execution sees the task tools; start_task authorizes each call from the ledger.
+    // Providers such as Codex list MCP tools once per session, so admitting only assistants with
+    // autonomy enabled would hide the tools from sessions that started before it was turned on.
     const ids = this.store
       .listChatSessions()
-      .filter((session) => this.store.get("assistants", session.assistantId)?.autonomy?.enabled)
       .map((session) => session.agentId)
       .toSorted();
     const key = ids.join("\n");
