@@ -9,8 +9,11 @@ export interface PreviewMember {
 }
 export interface RoutePreview {
   leadId: string;
-  /** Addressed directly: they get a normal reply turn. */
-  explicitIds: string[];
+  /**
+   * Addressed: they get a normal reply turn. With nobody named or quoted, the message is to the
+   * recent participants, so it is all of them (Bigbang's directAgentIds).
+   */
+  directIds: string[];
   /** Recently active but not addressed: they may stay silent. */
   recentOnlyIds: string[];
   reason: OrdinaryRouteReason;
@@ -37,8 +40,8 @@ export function previewRoute(input: {
   if (!route) return null;
   return {
     leadId: route.leadAgentId,
-    explicitIds: route.explicitAgentIds,
-    recentOnlyIds: route.recentOnlyAgentIds,
+    directIds: route.directAgentIds,
+    recentOnlyIds: route.dispatchAgentIds.filter((id) => !route.directAgentIds.includes(id)),
     reason: route.reason,
   };
 }
@@ -101,7 +104,7 @@ export function formatRouteHint(
   if (!preview) return null;
   const nameOf = (id: string) => members.find((member) => member.id === id)?.name ?? "";
   return formatResponderHint({
-    explicitNames: preview.explicitIds.map(nameOf),
+    explicitNames: preview.directIds.map(nameOf),
     recentNames: preview.recentOnlyIds.map(nameOf),
     discussInOrder: options.discussInOrder,
   });

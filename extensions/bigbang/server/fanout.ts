@@ -96,7 +96,7 @@ export class Fanout {
       });
     // preview already holds each assistant once, so one user message wakes everyone at most once.
     return [
-      ...preview.explicitIds.map((id) => turn(id, "reply")),
+      ...preview.directIds.map((id) => turn(id, "reply")),
       ...preview.recentOnlyIds.map((id) => turn(id, "awareness")),
     ];
   }

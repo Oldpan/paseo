@@ -15,24 +15,35 @@ describe("previewRoute", () => {
         content: "@Beta @Unknown @Alpha @Beta compare",
         recentParticipantIds: ["c", "b"],
       }),
-    ).toEqual({ leadId: "b", explicitIds: ["b", "a"], recentOnlyIds: ["c"], reason: "mention" });
+    ).toEqual({ leadId: "b", directIds: ["b", "a"], recentOnlyIds: ["c"], reason: "mention" });
   });
 
   it("routes a quote to the quoted assistant and ignores a quoted non-member", () => {
     expect(previewRoute({ members, content: "why?", quotedSenderId: "c" })).toMatchObject({
-      explicitIds: ["c"],
+      directIds: ["c"],
       reason: "quote",
     });
     expect(previewRoute({ members, content: "why?", quotedSenderId: "user" })).toMatchObject({
-      explicitIds: ["a"],
+      directIds: ["a"],
       reason: "first_member",
     });
   });
 
+  it("addresses the recent participants when nobody is named or quoted", () => {
+    expect(
+      previewRoute({ members, content: "what next?", recentParticipantIds: ["c", "a"] }),
+    ).toEqual({
+      leadId: "c",
+      directIds: ["c", "a"],
+      recentOnlyIds: [],
+      reason: "recent",
+    });
+  });
+
   it("expands @all and falls back to the default responder, then the first member", () => {
-    expect(previewRoute({ members, content: "@all hi" })?.explicitIds).toEqual(["a", "b", "c"]);
+    expect(previewRoute({ members, content: "@all hi" })?.directIds).toEqual(["a", "b", "c"]);
     expect(previewRoute({ members, content: "hi", defaultResponderId: "c" })).toMatchObject({
-      explicitIds: ["c"],
+      directIds: ["c"],
       reason: "default_responder",
     });
     expect(previewRoute({ members, content: "hi" })?.reason).toBe("first_member");

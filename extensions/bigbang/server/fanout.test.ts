@@ -39,12 +39,12 @@ describe("routing a user message", () => {
     expect(turnsOf(id).every((turn) => turn.rootTriggerId === id)).toBe(true);
   });
 
-  it("wakes every recent participant when a plain message follows replies", async () => {
+  it("asks every recent participant to reply when a plain message follows replies", async () => {
     const { say, run, kinds } = fixture();
     await say("@Ada @Cy hi");
     await run({ Ada: "Ada here", Cy: "Cy here" });
-    // Nobody was addressed, so everyone recent only gets the chance to speak.
-    expect(kinds(await say("what next?"))).toEqual(["awareness:Ada", "awareness:Cy"]);
+    // Nobody was named, so the message is to the recent participants: each gets a reply turn.
+    expect(kinds(await say("what next?"))).toEqual(["reply:Ada", "reply:Cy"]);
   });
 
   it("forgets recent participants after an hour", async () => {
@@ -52,7 +52,7 @@ describe("routing a user message", () => {
     const room = group({ defaultResponderId: cy.id });
     await say("@Ada hi", { conversationId: room.id });
     await run({ Ada: "Hi" });
-    expect(kinds(await say("again", { conversationId: room.id }))).toEqual(["awareness:Ada"]);
+    expect(kinds(await say("again", { conversationId: room.id }))).toEqual(["reply:Ada"]);
     await run();
     clock.t += HOUR + 1;
     expect(kinds(await say("much later", { conversationId: room.id }))).toEqual(["reply:Cy"]);
@@ -122,7 +122,7 @@ describe("routing a user message", () => {
     const id = await say(content);
     expect(kinds(id)).toEqual(
       [
-        ...preview!.explicitIds.map((assistant) => `reply:${nameOf(assistant)}`),
+        ...preview!.directIds.map((assistant) => `reply:${nameOf(assistant)}`),
         ...preview!.recentOnlyIds.map((assistant) => `awareness:${nameOf(assistant)}`),
       ].toSorted(),
     );
@@ -182,8 +182,10 @@ describe("what a woken assistant is told", () => {
     const { say, run, sentTo, turnsOf } = fixture();
     await say("@Ada hi");
     await run({ Ada: "Hi" });
-    const id = await say("anyone?");
-    const prompt = sentTo(turnsOf(id)[0]);
+    const id = await say("@Cy anyone?");
+    // The named assistant runs first; the awareness turn is sent after it.
+    await run({ Cy: "Here" });
+    const prompt = sentTo(turnsOf(id).find((turn) => turn.kind === "awareness")!);
     expect(prompt).toContain("not addressed directly");
     expect(prompt).toContain("Reply exactly (pass)");
   });
@@ -192,9 +194,9 @@ describe("what a woken assistant is told", () => {
     const { say, run, finals } = fixture();
     await say("@Ada hi");
     await run({ Ada: "Hi" });
-    await say("anyone?");
-    await run({ Ada: "(pass)" });
-    expect(finals().map((message) => message.content)).toEqual(["Hi"]);
+    await say("@Cy anyone?");
+    await run({ Ada: "(pass)", Cy: "Here" });
+    expect(finals().map((message) => message.content)).toEqual(["Hi", "Here"]);
   });
 
   it("sends each assistant only the messages its execution has not seen", async () => {

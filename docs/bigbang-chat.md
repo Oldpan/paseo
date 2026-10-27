@@ -39,14 +39,14 @@ The client streams a live reply by reading the bound execution's timeline from t
 
 Routing follows the original Bigbang free-collaboration rules (`shared/routing-preview.ts` is shared with the composer hint):
 
-| Message                        | Who is woken                                                        |
-| ------------------------------ | ------------------------------------------------------------------- |
-| User names members             | Those members, plus recent participants as awareness turns          |
-| User quotes an assistant reply | That assistant, plus recent participants                            |
-| Plain user message             | Recent participants (final in this lane within 1 hour, max 20)      |
-| Nobody recent                  | The default responder, else the first member                        |
-| Assistant final names a member | That member, 60-second cooldown per direction                       |
-| Assistant final names nobody   | Peer Inbox of recent participants, batched at 5 items or 60 seconds |
+| Message                        | Who is woken                                                                           |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| User names members             | Those members, plus recent participants as awareness turns                             |
+| User quotes an assistant reply | That assistant, plus recent participants                                               |
+| Plain user message             | Recent participants, each with a reply turn (final in this lane within 1 hour, max 20) |
+| Nobody recent                  | The default responder, else the first member                                           |
+| Assistant final names a member | That member, 60-second cooldown per direction                                          |
+| Assistant final names nobody   | Peer Inbox of recent participants, batched at 5 items or 60 seconds                    |
 
 Each assistant gets at most one turn per user message. Assistants woken by the same user message never wake each other with that reply, and a user message allows at most 8 assistant-triggered turns. These limits stop two models from talking forever.
 
