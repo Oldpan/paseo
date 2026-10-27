@@ -59,6 +59,10 @@ export class ChatStore {
       }
     ).value;
   }
+  /** The ledger file, for server-only ledgers that share its transactions (mailbox, Studio). */
+  get database(): DatabaseSync {
+    return this.db;
+  }
   get currentGeneration(): string {
     return this.generation;
   }
