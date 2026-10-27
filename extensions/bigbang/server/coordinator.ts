@@ -273,6 +273,17 @@ export class Coordinator {
       throw new Error("Choose existing assistants.");
     if (conversation.kind === "dm" && conversation.members.length !== 1)
       throw new Error("A private chat has exactly one assistant.");
+    // Creation is idempotent for a retried request, never an overwrite: replacing the members
+    // of an existing chat would hand its history and executions to other assistants.
+    const existing = this.store.get("conversations", conversation.id);
+    if (existing) {
+      const same =
+        existing.kind === conversation.kind &&
+        existing.members.length === conversation.members.length &&
+        existing.members.every((id, index) => id === conversation.members[index]);
+      if (!same) throw new Error("Chat ID was already used for another chat.");
+      return existing;
+    }
     this.store.transaction(() => this.store.put("conversations", conversation));
     return conversation;
   }

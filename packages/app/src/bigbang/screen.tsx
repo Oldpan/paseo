@@ -79,6 +79,9 @@ export function BigbangScreen() {
     null,
   );
   const [editing, setEditing] = useState<string | null>(null);
+  // Ids for records a form creates. Fresh on every open so a second creation never reuses the
+  // first one's ids; kept while the form is open so a retried save stays idempotent.
+  const [formIds, setFormIds] = useState(freshFormIds);
   const [error, setError] = useState<string | null>(null);
   const [group, setGroup] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -96,12 +99,16 @@ export function BigbangScreen() {
   }, []);
   const chatMode = useCallback(() => setMode("chat"), [setMode]);
   const studioMode = useCallback(() => setMode("studio"), [setMode]);
+  const openForm = useCallback((next: "assistant" | "group" | "task") => {
+    setFormIds(freshFormIds());
+    setForm(next);
+  }, []);
   const showAssistant = useCallback(() => {
     setEditing(null);
-    setForm("assistant");
-  }, []);
-  const showGroup = useCallback(() => setForm("group"), []);
-  const showTask = useCallback(() => setForm("task"), []);
+    openForm("assistant");
+  }, [openForm]);
+  const showGroup = useCallback(() => openForm("group"), [openForm]);
+  const showTask = useCallback(() => openForm("task"), [openForm]);
   const showWorkspaces = useCallback(() => setForm("workspaces"), []);
   const showHosts = useCallback(() => setForm("hosts"), []);
   const settingsPress = useCallback(() => router.push("/settings"), [router]);
@@ -231,11 +238,14 @@ export function BigbangScreen() {
     },
     [changeChat],
   );
-  const editAssistant = useCallback((id: string) => {
-    setEditing(id);
-    setForm("assistant");
-    setSidebarOpen(false);
-  }, []);
+  const editAssistant = useCallback(
+    (id: string) => {
+      setEditing(id);
+      openForm("assistant");
+      setSidebarOpen(false);
+    },
+    [openForm],
+  );
   const hostRows = useMemo(
     () =>
       hosts.map((host) => ({
@@ -249,8 +259,8 @@ export function BigbangScreen() {
   );
   const assistantFields = useMemo(
     () => [
-      { name: "id", label: "", initial: editing ?? randomUUID(), hidden: true },
-      { name: "chatId", label: "", initial: randomUUID(), hidden: true },
+      { name: "id", label: "", initial: editing ?? formIds.assistant, hidden: true },
+      { name: "chatId", label: "", initial: formIds.chat, hidden: true },
       ...ASSISTANT_FIELDS.filter((field) => !editing || field.name !== "memory").map((field) => ({
         name: field.name,
         label: field.label,
@@ -268,11 +278,11 @@ export function BigbangScreen() {
         },
       },
     ],
-    [assistant, editing, coordinatorId, hosts],
+    [assistant, editing, coordinatorId, hosts, formIds],
   );
   const groupFields = useMemo(
     () => [
-      { name: "id", label: "", initial: randomUUID(), hidden: true },
+      { name: "id", label: "", initial: formIds.group, hidden: true },
       { name: "name", label: "Group name", initial: "" },
       { name: "members", label: "Assistant names, separated by commas", initial: "" },
       {
@@ -298,11 +308,11 @@ export function BigbangScreen() {
         ],
       },
     ],
-    [data.state.assistants],
+    [data.state.assistants, formIds],
   );
   const taskFields = useMemo(
     () => [
-      { name: "id", label: "Task ID", initial: randomUUID(), hidden: true },
+      { name: "id", label: "Task ID", initial: formIds.task, hidden: true },
       { name: "prompt", label: "Task", initial: "", multiline: true },
       {
         name: "assistant",
@@ -346,6 +356,7 @@ export function BigbangScreen() {
       data.state.assistants,
       data.state.conversations,
       hosts,
+      formIds,
     ],
   );
   const groupChange = useCallback((textValue: string) => setGroup(textValue), []);
@@ -519,6 +530,10 @@ function FormHost({
       ) : null}
     </>
   );
+}
+
+function freshFormIds() {
+  return { assistant: randomUUID(), chat: randomUUID(), group: randomUUID(), task: randomUUID() };
 }
 
 function isDarkTheme(preference: string, scheme: string | null | undefined) {

@@ -36,6 +36,21 @@ function fixture() {
   return { directory, store, coordinator, assistant, conversation };
 }
 describe("Bigbang durable Chat", () => {
+  it("never hands an existing chat to another assistant when a chat ID is reused", () => {
+    const { store, coordinator, assistant, conversation } = fixture();
+    const other = coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Bo",
+      provider: "codex/test-model",
+      persona: "",
+      memory: "",
+    });
+    expect(coordinator.createConversation(conversation)).toEqual(conversation);
+    expect(() =>
+      coordinator.createConversation({ ...conversation, name: "Bo", members: [other.id] }),
+    ).toThrow("Chat ID was already used for another chat.");
+    expect(store.get("conversations", conversation.id)?.members).toEqual([assistant.id]);
+  });
   it("reuses one execution agent for consecutive turns in the same private chat", () => {
     const { store, coordinator, conversation } = fixture();
     coordinator.send({
