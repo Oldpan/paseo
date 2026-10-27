@@ -14,6 +14,10 @@ import { randomBytes } from "node:crypto";
 import { getHostName } from "./host-name.js";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  LATEST_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
@@ -364,6 +368,21 @@ function describeMcpDebugPayload(value: unknown): Record<string, unknown> {
     sampled,
     ...(sampled.length < value.length ? { skipped: value.length - sampled.length } : {}),
   };
+}
+
+// COMPAT(mcpProtocolHeader): added 2026-10-27, remove after 2027-04-27 or once
+// @modelcontextprotocol/sdk accepts 2026-07-28. Grok's MCP client keeps sending its own protocol
+// version after initialize negotiated an older one, and the transport answers every such request
+// with 400, so Grok agents got no Paseo tools. The transport reads rawHeaders, not headers.
+function downgradeMcpProtocolHeader(req: IncomingMessage): void {
+  const version = req.headers["mcp-protocol-version"];
+  if (typeof version !== "string" || SUPPORTED_PROTOCOL_VERSIONS.includes(version)) return;
+  req.headers["mcp-protocol-version"] = LATEST_PROTOCOL_VERSION;
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    if (req.rawHeaders[index]?.toLowerCase() === "mcp-protocol-version") {
+      req.rawHeaders[index + 1] = LATEST_PROTOCOL_VERSION;
+    }
+  }
 }
 
 export type PaseoOpenAIConfig = OpenAiSpeechProviderConfig;
@@ -1642,6 +1661,7 @@ export async function createPaseoDaemon(
           void server.close();
         });
 
+        downgradeMcpProtocolHeader(req);
         await transport.handleRequest(
           req as unknown as IncomingMessage,
           res as unknown as ServerResponse,

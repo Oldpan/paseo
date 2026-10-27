@@ -91,6 +91,7 @@ async function createMcpClient(url: string, authToken?: string): Promise<McpClie
 
 interface OfflineMcpDaemon {
   client: McpClient;
+  mcpUrl: string;
   stop: () => Promise<void>;
 }
 
@@ -121,9 +122,11 @@ async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
   });
   try {
     await daemon.start();
-    const client = await createMcpClient(`http://127.0.0.1:${port}/mcp/agents`);
+    const mcpUrl = `http://127.0.0.1:${port}/mcp/agents`;
+    const client = await createMcpClient(mcpUrl);
     return {
       client,
+      mcpUrl,
       stop: async () => {
         await client.close();
         await daemon.stop();
@@ -318,6 +321,26 @@ describe("agent MCP end-to-end (offline)", () => {
     } finally {
       await daemon.stop();
       await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("serves a client that keeps sending a newer protocol version after initialize", async () => {
+    // Grok's MCP client negotiates an older version but still sends its own in this header.
+    const daemon = await startOfflineMcpDaemon();
+    try {
+      const response = await fetch(daemon.mcpUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('"name":"list_workspaces"');
+    } finally {
+      await daemon.stop();
     }
   }, 30_000);
 
