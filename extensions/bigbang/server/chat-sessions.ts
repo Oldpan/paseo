@@ -37,10 +37,21 @@ export function assistantInstructions(assistant: Assistant): string {
 You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
 In a group chat, reply with exactly (pass) when you have nothing useful to add.${autonomyInstructions(assistant)}`;
 }
+/** Authorized task targets as the assistant sees them: machine name, serverId, directory. */
+export function describeTargets(assistant: Assistant): string {
+  const targets = assistant.autonomy?.targets ?? [];
+  if (targets.length === 0) return "none";
+  return targets
+    .map(({ serverId, directory, isolation, label }) => {
+      const host = label ? `${label} (serverId ${serverId})` : `serverId ${serverId}`;
+      return `${directory} on ${host}, ${isolation === "worktree" ? "new Git worktree" : "existing directory"}`;
+    })
+    .join("; ");
+}
 function autonomyInstructions(assistant: Assistant): string {
   if (!assistant.autonomy?.enabled) return "";
   return `
-You may start project work yourself with the bigbang__start_task tool, on the projects bigbang__task_status lists for you. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
+You may start project work yourself with the bigbang__start_task tool. Your authorized projects: ${describeTargets(assistant)}. Pass the chosen one as target {serverId, directory}. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
 }
 function legacySessionTurn(turns: Turn[]): Turn | undefined {
   const reverse = turns.toReversed();

@@ -166,7 +166,10 @@ export function BigbangScreen() {
           (serverId) => hosts.find((host) => host.serverId === serverId)?.label ?? serverId,
         );
         if (problem) throw new Error(problem);
-        const normalized = normalizeAutonomy(autonomy);
+        const normalized = normalizeAutonomy(
+          autonomy,
+          (serverId) => hosts.find((host) => host.serverId === serverId)?.label,
+        );
         await data.call(saveAssistant, {
           id,
           name: values.name,

@@ -10,7 +10,12 @@ import { deterministicTaskId } from "./task-events";
 afterEach(closeFixtures);
 
 const LOCAL = { serverId: "local", directory: "/work/app", isolation: "directory" as const };
-const REMOTE = { serverId: "remote", directory: "/work/remote", isolation: "worktree" as const };
+const REMOTE = {
+  serverId: "remote",
+  directory: "/work/remote",
+  isolation: "worktree" as const,
+  label: "Spark",
+};
 
 // Ada may start tasks on two projects; Bob may not. Both chat privately with the user.
 function setup(options: Parameters<typeof fixture>[0] = {}) {
@@ -136,7 +141,7 @@ describe("authorization", () => {
     const turn = await f.reply();
     expect(() => f.call(turn)).toThrow("Choose a target");
     expect(() => f.call(turn, { target: { serverId: "local", directory: "/work/other" } })).toThrow(
-      /not authorized for you.*\/work\/app on local/,
+      /not authorized for you.*\/work\/app on serverId local.*\/work\/remote on Spark \(serverId remote\)/,
     );
     expect(() =>
       f.call(turn, { target: { serverId: "elsewhere", directory: "/work/app" } }),

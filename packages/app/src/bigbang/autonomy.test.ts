@@ -62,6 +62,12 @@ describe("autonomy save payload", () => {
       }),
     ).toEqual({ enabled: true, targets: [target, { ...target, isolation: "directory" }] });
   });
+  it("records each target's machine name so the assistant can choose it by name", () => {
+    const labels: Record<string, string> = { [target.serverId]: "Spark" };
+    expect(
+      normalizeAutonomy({ enabled: true, targets: [target] }, (serverId) => labels[serverId]),
+    ).toEqual({ enabled: true, targets: [{ ...target, label: "Spark" }] });
+  });
   it("keeps targets while the toggle is off so they are not lost", () => {
     expect(normalizeAutonomy({ enabled: false, targets: [target] })).toEqual({
       enabled: false,

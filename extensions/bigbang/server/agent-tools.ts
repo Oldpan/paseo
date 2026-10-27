@@ -3,6 +3,7 @@ import type { PluginAgentToolContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import type { Assistant, Task } from "../shared/contracts";
 import type { Coordinator } from "./coordinator";
+import { describeTargets } from "./chat-sessions";
 import {
   deterministicTaskId,
   excerpt,
@@ -16,7 +17,10 @@ const targetSchema = z.object({
   directory: z.string().describe("The project's directory on that host."),
 });
 const isolationSchema = z.enum(["worktree", "directory"]);
-const authorizedTargetSchema = targetSchema.extend({ isolation: isolationSchema });
+const authorizedTargetSchema = targetSchema.extend({
+  isolation: isolationSchema,
+  label: z.string().optional().describe("The machine's name."),
+});
 
 export const startTaskTool = defineAgentTool({
   name: "start_task",
@@ -105,14 +109,6 @@ function authorize(coordinator: Coordinator, agentId: string): Caller {
       "You are not allowed to start tasks on your own. Ask the user to enable autonomy for you, or suggest that they start the task.",
     );
   return { assistant, conversationId: conversation.id, threadId: session.threadId };
-}
-function describeTargets(assistant: Assistant): string {
-  const targets = assistant.autonomy?.targets ?? [];
-  return targets.length
-    ? targets
-        .map(({ serverId, directory, isolation }) => `${directory} on ${serverId} (${isolation})`)
-        .join("; ")
-    : "none";
 }
 function resolveTarget(assistant: Assistant, requested?: z.output<typeof targetSchema>) {
   const targets = assistant.autonomy?.targets ?? [];

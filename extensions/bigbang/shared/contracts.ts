@@ -17,6 +17,9 @@ export const assistantSchema = z.object({
           serverId: z.string(),
           directory: z.string().min(1),
           isolation: z.enum(["worktree", "directory"]),
+          // The machine's display name when the target was saved, so the assistant can match
+          // "on Spark" to a serverId. Authorization still matches serverId and directory only.
+          label: z.string().optional(),
         }),
       ),
     })

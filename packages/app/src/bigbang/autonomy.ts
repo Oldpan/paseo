@@ -49,10 +49,14 @@ export function validateAutonomy(
 }
 
 /** What `chat.assistant.save` receives: trimmed, without repeated targets, absent when unused. */
-export function normalizeAutonomy(autonomy: Autonomy): Autonomy | undefined {
+export function normalizeAutonomy(
+  autonomy: Autonomy,
+  labelOf: (serverId: string) => string | undefined = () => undefined,
+): Autonomy | undefined {
   const seen = new Set<string>();
   const targets = autonomy.targets.flatMap((target) => {
-    const next = { ...target, directory: target.directory.trim() };
+    const label = labelOf(target.serverId);
+    const next = { ...target, directory: target.directory.trim(), ...(label ? { label } : {}) };
     const key = JSON.stringify([next.serverId, next.directory, next.isolation]);
     if (seen.has(key)) return [];
     seen.add(key);
