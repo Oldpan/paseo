@@ -37,6 +37,7 @@ import {
   type TaskSpec,
 } from "./execution";
 import { isPass } from "./projection";
+import { Mailbox } from "./mailbox";
 import {
   excerpt,
   eventMessageId,
@@ -51,6 +52,8 @@ import {
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const TURN_LIVE = new Set(["running", "attention", "unknown"]);
 const DEFAULT_SWEEP_MS = 60_000;
+const MAILBOX_SWEEP_MS = 30_000;
+const SUPERSEDED = "Superseded by a newer message.";
 const INTERRUPTED_MESSAGE =
   "Interrupted: the execution closed before this reply finished. Send again to continue.";
 const ARCHIVED_MESSAGE =
@@ -138,6 +141,8 @@ export class Coordinator {
   private readonly dispatcher: Dispatcher;
   private readonly fanout: Fanout;
   private readonly roundtable: Roundtable;
+  readonly mailbox: Mailbox;
+  private mailboxTimer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
   private inboxTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watches = new Map<string, () => void>();
@@ -149,6 +154,7 @@ export class Coordinator {
   private readonly sweepMs: number;
   private readonly machines: MachinePort | undefined;
   private selfServerId: string | undefined;
+  private readonly machineLabels = new Map<string, string>();
   constructor(
     readonly store: ChatStore,
     private readonly home: string,
@@ -162,6 +168,13 @@ export class Coordinator {
     this.machines = options.machines;
     this.fanout = new Fanout(store, this.now);
     this.roundtable = new Roundtable(store, this.now);
+    this.mailbox = new Mailbox(store, {
+      now: this.now,
+      cancelTurn: (turn) =>
+        void this.queue.run(agentKey(turn.agentId), async () => {
+          await this.port?.cancel(turn.agentId, this.serverFor(turn));
+        }),
+    });
     this.dispatcher = new Dispatcher({
       store,
       queue: this.queue,
@@ -170,6 +183,8 @@ export class Coordinator {
       cancelTask: (id) => this.cancel(id, "budget"),
       settle: (agentId) => this.settle(agentId),
       turnEnded: (turn) => this.afterTurn(turn),
+      admit: (turn) => this.mailbox.admit(turn),
+      accepted: (turn) => this.mailbox.accepted(turn),
     });
   }
   /** Binds the plugin's Paseo API once; later calls are ignored. The first call runs recovery. */
@@ -187,6 +202,7 @@ export class Coordinator {
       (serverId) => (this.selfServerId = serverId),
       (error: unknown) => console.error("Bigbang could not read its own serverId", error),
     );
+    void this.machinesList().catch(() => undefined);
     if (this.recovered || !this.port) return;
     this.recovered = true;
     restoreChatSessions(this.store);
@@ -194,8 +210,12 @@ export class Coordinator {
     // came due while it was down.
     this.roundtable.advanceAll();
     this.fanout.flushDue();
+    this.mailbox.recover();
     this.timer = setInterval(() => void this.sweep(), this.sweepMs);
     this.timer.unref();
+    // Mailbox admission waits and replies for lanes that went idle without a hook.
+    this.mailboxTimer = setInterval(() => this.kick(), MAILBOX_SWEEP_MS);
+    this.mailboxTimer.unref();
     void this.sweep();
   }
   // Long poll: with `after`, hold the request until the ledger advances past it.
@@ -299,10 +319,21 @@ export class Coordinator {
       expectedMtimeMs: input.expectedMtimeMs,
     });
   }
+  /** Looks for work after a tool changed the ledger (a mailbox message to deliver). */
+  kickWork(): void {
+    this.kick();
+  }
+  /** A machine's display name for assistants and tools; this daemon when absent. */
+  machineLabel(serverId: string | undefined): string {
+    if (!serverId || serverId === this.selfServerId) return "the coordinator's machine";
+    return this.machineLabels.get(serverId) ?? serverId;
+  }
   /** Machines an assistant can be created on: this daemon and its member machines. */
   async machinesList(): Promise<Machine[]> {
     if (!this.machines) return [];
-    return this.machines.list();
+    const machines = await this.machines.list();
+    for (const machine of machines) this.machineLabels.set(machine.serverId, machine.label);
+    return machines;
   }
   get taskLimits(): TaskLimits {
     return this.limits;
@@ -680,6 +711,8 @@ export class Coordinator {
     void this.queue.run(agentKey(agentId), () => this.reconcile(agentId, finish));
   }
   private kick(): void {
+    if (this.closed) return;
+    this.mailbox.drain();
     this.dispatcher.kick();
     this.scheduleTasks();
     this.armInbox();
@@ -703,6 +736,8 @@ export class Coordinator {
   }
   // A turn ended outside the settle path: the roundtable moves on to its next speaker.
   private afterTurn(turn: Turn): void {
+    // A failed dispatch is retried by the sweep, not here, so a host that is down is not hammered.
+    if (turn.mailboxId && turn.status === "failed") this.mailbox.turnEnded(turn, "");
     if (!turn.epochId || turn.status !== "failed") return;
     this.roundtable.advance(turn.epochId);
     this.kick();
@@ -831,31 +866,12 @@ export class Coordinator {
     }
     const assistant = this.store.get("assistants", turn.assistantId);
     const task = turn.taskId ? this.store.get("tasks", turn.taskId) : null;
-    const latestUser = this.store
-      .snapshot()
-      .messages.findLast(
-        (message) =>
-          message.conversationId === turn.conversationId &&
-          message.threadId === turn.threadId &&
-          message.senderId === "user",
-      );
-    let status: Turn["status"] = "completed";
-    let error: string | null = null;
-    if (task?.status === "cancelled") status = "cancelled";
-    else if (!turn.taskId && latestUser?.id !== turn.seenUserId) {
-      status = "cancelled";
-      error = "Superseded by a newer message.";
-    } else if (finish.outcome?.kind === "canceled") {
-      status = "cancelled";
-      error = finish.outcome.reason;
-    } else if (finish.outcome?.kind === "failed" || read.error) {
-      status = "failed";
-      error = finish.outcome?.kind === "failed" ? finish.outcome.error.message : read.error;
-    }
+    const { status, error } = this.turnOutcome(turn, task, finish, read.error);
     const text = read.text.trim();
     this.store.transaction(() => {
       let final: Message | undefined;
-      if (status === "completed" && assistant && text && !isPass(text)) {
+      // A mailbox turn's answer is a reply to the asking assistant, never a chat message.
+      if (status === "completed" && assistant && text && !isPass(text) && !turn.mailboxId) {
         const id = `final:${turn.id}`;
         final = this.store.get("messages", id) ?? undefined;
         if (!final)
@@ -880,6 +896,7 @@ export class Coordinator {
         ...(final ? { finalMessageId: final.id } : {}),
       };
       this.store.put("turns", settled);
+      this.mailbox.turnEnded(settled, text);
       // What the assistant said may wake others; what the roundtable does next depends on it.
       if (final) this.fanout.onFinal(settled, final);
       if (turn.epochId) this.roundtable.advance(turn.epochId);
@@ -897,6 +914,33 @@ export class Coordinator {
       }
     });
     if (turn.taskId) this.stopWatch(turn.taskId);
+    // Stopping the asking reply withdraws what it asked; a newer user message does not.
+    if (status === "cancelled" && error !== SUPERSEDED) this.mailbox.senderTurnCancelled(turn);
+  }
+  // How an ended turn closes: its task's cancellation, a newer user message, or its own outcome.
+  private turnOutcome(
+    turn: Turn,
+    task: Task | null,
+    finish: Finish,
+    readError: string | null,
+  ): { status: Turn["status"]; error: string | null } {
+    if (task?.status === "cancelled") return { status: "cancelled", error: null };
+    const latestUser = this.store
+      .snapshot()
+      .messages.findLast(
+        (message) =>
+          message.conversationId === turn.conversationId &&
+          message.threadId === turn.threadId &&
+          message.senderId === "user",
+      );
+    if (!turn.taskId && latestUser?.id !== turn.seenUserId)
+      return { status: "cancelled", error: SUPERSEDED };
+    if (finish.outcome?.kind === "canceled")
+      return { status: "cancelled", error: finish.outcome.reason };
+    if (finish.outcome?.kind === "failed")
+      return { status: "failed", error: finish.outcome.error.message };
+    if (readError) return { status: "failed", error: readError };
+    return { status: "completed", error: null };
   }
   private async settleTask(task: Task, finish: Finish): Promise<void> {
     const execution = task.execution;
@@ -992,7 +1036,9 @@ export class Coordinator {
     this.store.transaction(() => {
       const taskId = "agentId" in target ? target.taskId : target.id;
       if ("agentId" in target) {
-        this.store.put("turns", { ...target, status: "failed", error });
+        const failed: Turn = { ...target, status: "failed", error };
+        this.store.put("turns", failed);
+        this.mailbox.turnEnded(failed, "");
         if (target.epochId) this.roundtable.advance(target.epochId);
       }
       const task = taskId ? this.store.get("tasks", taskId) : null;
@@ -1154,6 +1200,7 @@ export class Coordinator {
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.mailboxTimer) clearInterval(this.mailboxTimer);
     if (this.inboxTimer) clearTimeout(this.inboxTimer);
     for (const stop of this.watches.values()) stop();
     this.watches.clear();

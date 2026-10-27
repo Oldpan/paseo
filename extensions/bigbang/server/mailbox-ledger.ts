@@ -618,6 +618,27 @@ export class MailboxLedger {
       .all() as unknown as MailboxMessage[];
   }
 
+  /** Whether a request already has a reply (real or synthetic). */
+  hasReply(requestMailboxId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare("SELECT 1 FROM mailbox_messages WHERE reply_to_mailbox_id=? LIMIT 1")
+        .get(requestMailboxId),
+    );
+  }
+
+  /** Roots a sender turn opened with request or info messages. */
+  rootsSentBy(senderTurnId: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT origin_root_id AS originRootId FROM mailbox_messages
+             WHERE sender_turn_id=? AND kind IN ('request','info')`,
+        )
+        .all(senderTurnId) as Array<{ originRootId: string }>
+    ).map((row) => row.originRootId);
+  }
+
   /** Recipients a root has reached with request or info messages. */
   peersOfRoot(originRootId: string): Set<string> {
     return newPeers(

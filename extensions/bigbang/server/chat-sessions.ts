@@ -17,6 +17,13 @@ export interface ChatSession {
   created: boolean;
   lastMessageId?: string;
 }
+/** The private lane where an assistant handles mailbox requests; it has no visible chat. */
+export function mailboxLaneId(assistantId: string): string {
+  return `mailbox:${assistantId}`;
+}
+export function isMailboxLane(conversationId: string): boolean {
+  return conversationId.startsWith("mailbox:");
+}
 export function chatSessionKey(
   conversationId: string,
   threadId: string | null,
@@ -37,7 +44,8 @@ export function restoreChatSessions(store: ChatStore): void {
 export function assistantInstructions(assistant: Assistant): string {
   return `${assistant.persona}
 You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
-In a group chat, reply with exactly (pass) when you have nothing useful to add.${autonomyInstructions(assistant)}`;
+In a group chat, reply with exactly (pass) when you have nothing useful to add.
+To ask another assistant privately (it may run on another machine), use bigbang-send; bigbang-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.${autonomyInstructions(assistant)}`;
 }
 /** Authorized task targets as the assistant sees them: machine name, serverId, directory. */
 export function describeTargets(assistant: Assistant): string {
@@ -195,6 +203,8 @@ export interface QueuedTurn {
   inboxMessageIds?: string[];
   epochId?: string;
   round?: number;
+  mailboxId?: string;
+  mailboxWakeupIds?: string[];
 }
 /** Persists a queued turn for an assistant in a lane, binding its chat execution. */
 export function queueTurn(store: ChatStore, input: QueuedTurn): Turn {
@@ -220,6 +230,8 @@ export function queueTurn(store: ChatStore, input: QueuedTurn): Turn {
     ...(input.inboxMessageIds ? { inboxMessageIds: input.inboxMessageIds } : {}),
     ...(input.epochId ? { epochId: input.epochId } : {}),
     ...(input.round !== undefined ? { round: input.round } : {}),
+    ...(input.mailboxId ? { mailboxId: input.mailboxId } : {}),
+    ...(input.mailboxWakeupIds ? { mailboxWakeupIds: input.mailboxWakeupIds } : {}),
   };
   store.put("turns", turn);
   return turn;

@@ -4,6 +4,18 @@ import type { Assistant, Task } from "../shared/contracts";
 import type { Coordinator } from "./coordinator";
 import { describeTargets } from "./chat-sessions";
 import {
+  cancelRequestHandler,
+  cancelRequestTool,
+  peersHandler,
+  peersTool,
+  recordsHandler,
+  recordsTool,
+  replyHandler,
+  replyTool,
+  sendHandler,
+  sendTool,
+} from "./peer-tools";
+import {
   deterministicTaskId,
   excerpt,
   resultMessageId,
@@ -229,8 +241,23 @@ export interface AgentToolEntry {
   tool: PluginAgentToolContract;
   run(coordinator: Coordinator, input: unknown, context: Context): unknown;
 }
+function toolEntry<Tool extends PluginAgentToolContract>(
+  tool: Tool,
+  handler: (coordinator: Coordinator) => (input: never, context: Context) => unknown,
+): AgentToolEntry {
+  return {
+    tool,
+    run: (coordinator, input, context) =>
+      handler(coordinator)(tool.input.parse(input) as never, context),
+  };
+}
 /** Every agent tool, registered under the same names on the coordinator and on its members. */
 export const agentTools: readonly AgentToolEntry[] = [
+  toolEntry(peersTool, peersHandler),
+  toolEntry(sendTool, sendHandler),
+  toolEntry(replyTool, replyHandler),
+  toolEntry(recordsTool, recordsHandler),
+  toolEntry(cancelRequestTool, cancelRequestHandler),
   {
     tool: startTaskTool,
     run: (coordinator, input, context) =>

@@ -132,6 +132,26 @@ describe("assistants bound to a machine", () => {
     ]);
   });
 
+  it("runs a mailbox request to a remote assistant on that assistant's machine", async () => {
+    const f = setup();
+    const adaDm = f.group({ kind: "dm", name: "Ada", members: [f.ada.id] });
+    await f.say("Ask Sam about Spark", { conversationId: adaDm.id });
+    const ada = f.running()!;
+    const sent = (await callAgentTool(
+      f.coordinator,
+      { agentId: ada.agentId, serverId: undefined as never },
+      "send",
+      {
+        to: "Sam",
+        text: "What is your hostname?",
+      },
+    )) as { mailboxId: string };
+    await f.coordinator.idle();
+    const request = f.store.get("turns", `mailbox:${sent.mailboxId}`)!;
+    expect(request).toMatchObject({ serverId: SPARK, status: "running" });
+    expect(f.execution.sent.at(-1)).toMatchObject({ messageId: request.id, serverId: SPARK });
+  });
+
   it("authorizes a relayed tool call only from the assistant's own machine", async () => {
     const f = setup();
     await f.say("Status?", { conversationId: f.dm.id });

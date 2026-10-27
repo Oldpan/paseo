@@ -152,6 +152,10 @@ export const turnSchema = z.object({
   chatSessionId: z.string().optional(),
   // The machine the turn's execution runs on; absent means the coordinator's own machine.
   serverId: z.string().optional(),
+  // A mailbox request or info this turn delivers to its assistant's private mailbox lane.
+  mailboxId: z.string().optional(),
+  // The mailbox replies this turn hands back to the assistant that asked.
+  mailboxWakeupIds: z.array(z.string()).optional(),
   contextThroughId: z.string().optional(),
   conversationId: z.string(),
   threadId: z.string().nullable(),

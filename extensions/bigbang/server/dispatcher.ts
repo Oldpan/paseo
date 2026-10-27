@@ -63,6 +63,10 @@ export interface DispatcherDeps {
   settle(agentId: string): void;
   /** A turn ended without its execution ever reporting back (dispatch failed). */
   turnEnded(turn: Turn): void;
+  /** Whether a queued turn may start now; a mailbox turn waits while its assistant is busy. */
+  admit(turn: Turn): boolean;
+  /** The execution confirmed a turn: it has the message. */
+  accepted(turn: Turn): void;
 }
 
 // A turn is persisted `prepared` before anything is sent. If the process dies in between, the
@@ -104,6 +108,7 @@ export class Dispatcher {
         );
         return;
       }
+      if (!this.deps.admit(turn)) return;
       turn = this.prepare(turn, assistant);
       await this.send(turn, assistant);
     } catch (error) {
@@ -135,6 +140,7 @@ export class Dispatcher {
     this.deps.store.transaction(() => {
       this.deps.store.put("turns", accepted);
       this.advanceChatContext(accepted);
+      this.deps.accepted(accepted);
     });
     this.deps.settle(turn.agentId);
   }
@@ -227,21 +233,10 @@ export class Dispatcher {
     let delta = unseenMessages(state.messages, session, state.turns, rootId);
     if (turn.kind === "roundtable") delta = delta.slice(-ROUNDTABLE_HISTORY_LIMIT);
     const instructions = assistantInstructions(assistant);
-    const conversation = store.get("conversations", turn.conversationId);
-    const messages = chatPrompt(delta, assistant, state.assistants);
-    // A private chat prompts with the messages alone; a group says who is here and why it woke you.
-    let prompt =
-      conversation?.kind === "group"
-        ? `${groupPreamble({
-            turn,
-            assistant,
-            conversation,
-            assistants: state.assistants,
-            epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
-          })}\n\n${messages || "(no new messages)"}`
-        : messages || "Continue this roundtable discussion with another useful contribution.";
-    if (turn.kind === "task_receipt" && conversation?.kind !== "group")
-      prompt = `${TASK_RECEIPT_LEAD}\n\n${prompt}`;
+    let prompt = this.turnPrompt(turn, assistant, chatPrompt(delta, assistant, state.assistants));
+    // Returning mailbox replies follow whatever the lane said since the assistant last looked.
+    if (turn.mailboxWakeupIds)
+      prompt = delta.length > 0 ? `${prompt}\n\n${turn.prompt}` : turn.prompt;
     if (instructions !== session.lastInstructions)
       prompt = `Updated assistant instructions:\n${instructions}\n\n${prompt}`;
     const history = laneMessages(state.messages, turn.conversationId, turn.threadId, rootId);
@@ -261,5 +256,23 @@ export class Dispatcher {
     };
     store.transaction(() => store.put("turns", prepared));
     return prepared;
+  }
+  // A private chat prompts with the messages alone; a group says who is here and why it woke you.
+  // A mailbox request carries its own prompt.
+  private turnPrompt(turn: Turn, assistant: Assistant, messages: string): string {
+    if (turn.mailboxId) return turn.prompt;
+    const store = this.deps.store;
+    const conversation = store.get("conversations", turn.conversationId);
+    if (conversation?.kind === "group")
+      return `${groupPreamble({
+        turn,
+        assistant,
+        conversation,
+        assistants: store.snapshot().assistants,
+        epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
+      })}\n\n${messages || "(no new messages)"}`;
+    const prompt =
+      messages || "Continue this roundtable discussion with another useful contribution.";
+    return turn.kind === "task_receipt" ? `${TASK_RECEIPT_LEAD}\n\n${prompt}` : prompt;
   }
 }
