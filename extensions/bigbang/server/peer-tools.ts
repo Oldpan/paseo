@@ -152,7 +152,11 @@ async function resolveCaller(coordinator: Coordinator, caller: ToolCaller): Prom
 
 function nameOf(coordinator: Coordinator, key: string): string {
   const id = key.startsWith("assistant:") ? key.slice("assistant:".length) : null;
-  return (id && coordinator.store.get("assistants", id)?.name) || key;
+  return (
+    (id && coordinator.store.get("assistants", id)?.name) ||
+    coordinator.studio.addressOf(key) ||
+    key
+  );
 }
 function receipt(message: StudioMessage) {
   return {
@@ -179,7 +183,7 @@ export function peersHandler(coordinator: Coordinator) {
           .map((member) => ({
             key: member.key,
             name: member.name,
-            kind: "agent",
+            kind: member.key.startsWith("assistant:") ? "assistant" : "agent",
             machine: member.machine,
             address: member.address,
           })),
@@ -187,16 +191,26 @@ export function peersHandler(coordinator: Coordinator) {
       };
     }
     const self = caller.sender.assistant;
+    const studioMembers = await coordinator.studio.membersForAssistant(self.id);
     return {
-      peers: coordinator.store
-        .snapshot()
-        .assistants.filter((assistant) => assistant.id !== self.id)
-        .map((assistant) => ({
-          key: assistantPeerKey(assistant.id),
-          name: assistant.name,
-          kind: "assistant",
-          machine: coordinator.machineLabel(assistant.serverId),
+      peers: [
+        ...coordinator.store
+          .snapshot()
+          .assistants.filter((assistant) => assistant.id !== self.id)
+          .map((assistant) => ({
+            key: assistantPeerKey(assistant.id),
+            name: assistant.name,
+            kind: "assistant",
+            machine: coordinator.machineLabel(assistant.serverId),
+          })),
+        ...studioMembers.map((member) => ({
+          key: member.key,
+          name: member.name,
+          kind: "agent",
+          machine: member.machine,
+          address: member.address,
         })),
+      ],
     };
   };
 }
@@ -210,7 +224,7 @@ export function sendHandler(coordinator: Coordinator) {
       return { messages: messages.map(receipt) };
     }
     if (targets.length !== 1) throw new Error("Ask one assistant at a time.");
-    const result = coordinator.mailbox.send(caller.sender, {
+    const result = await coordinator.mailbox.send(caller.sender, {
       to: targets[0]!,
       text: input.text,
       ...(input.kind ? { kind: input.kind } : {}),

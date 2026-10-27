@@ -17,7 +17,8 @@ import {
   mailboxWakeupPrompt,
   runErrorText,
 } from "./mailbox-prompts";
-import { assistantIdOfKey, assistantPeerKey } from "./peers";
+import { agentOfKey, assistantIdOfKey, assistantPeerKey } from "./peers";
+import type { BoundMember, Member, StudioMessage } from "./studio";
 import { isPass } from "./projection";
 import type { ChatStore } from "./store";
 
@@ -38,6 +39,30 @@ export interface MailboxDeps {
   admissionMaxWaitMs?: number;
   /** Stops a running mailbox turn whose request was fenced or cancelled. */
   cancelTurn(turn: Turn): void;
+  /** Studio collaboration, for messages between assistants and agents in linked Studios. */
+  studio?: StudioBridge;
+  /** Runs background coordination where the coordinator waits for it (its queue). */
+  background?(work: () => Promise<void>): void;
+}
+/** What the mailbox needs from the Studio to cross between Chat and Studio. */
+export interface StudioBridge {
+  memberForAssistant(
+    assistantId: string,
+    ref: string,
+  ): Promise<{ studioId: string; member: Member; sender: BoundMember } | null>;
+  deliverFromAssistant(input: {
+    studioId: string;
+    sender: BoundMember;
+    recipient: Member;
+    kind: "message" | "reply";
+    replyTo: string | null;
+    text: string;
+    mailboxId: string;
+    recipientToken?: string | null;
+  }): Promise<StudioMessage>;
+  assistantMember(studioId: string, assistantId: string): BoundMember | null;
+  recordOfMailbox(mailboxId: string): { message: StudioMessage; senderToken: string | null } | null;
+  addressOf(key: string): string | null;
 }
 
 /** A chat assistant sending from a live reply in one of its lanes. */
@@ -50,6 +75,21 @@ export interface SendInput {
   text: string;
   kind?: MailboxOutgoingKind;
   idempotencyKey?: string;
+}
+
+export interface SendResult {
+  mailboxId: string;
+  status: string;
+  correlationId: string;
+  created: boolean;
+  recipient: string;
+  messages?: Array<{
+    messageId: string;
+    recipient: string;
+    status: string;
+    code: string;
+    detail: string;
+  }>;
 }
 
 export function mailboxTurnId(mailboxId: string): string {
@@ -107,13 +147,30 @@ export class Mailbox {
     );
   }
 
-  send(sender: AssistantSender, input: SendInput) {
+  async send(sender: AssistantSender, input: SendInput): Promise<SendResult> {
     if (isMailboxLane(sender.turn.conversationId))
       throw new MailboxError(
         "invalid_input",
         "You are answering a mailbox request. Put what you found in your reply instead of asking someone else.",
       );
-    const recipient = this.resolveAssistant(input.to);
+    let recipient: Assistant;
+    try {
+      recipient = this.resolveAssistant(input.to);
+    } catch (error) {
+      if (!(error instanceof MailboxError && error.code === "not_found") || !this.deps.studio)
+        throw error;
+      const target = await this.deps.studio.memberForAssistant(sender.assistant.id, input.to);
+      if (!target) throw error;
+      return this.sendToMember(sender, target, input);
+    }
+    return this.sendToAssistant(sender, recipient, input);
+  }
+
+  private sendToAssistant(
+    sender: AssistantSender,
+    recipient: Assistant,
+    input: SendInput,
+  ): SendResult {
     const kind = input.kind ?? "request";
     const senderKey = assistantPeerKey(sender.assistant.id);
     const recipientKey = assistantPeerKey(recipient.id);
@@ -140,6 +197,150 @@ export class Mailbox {
       created: record.created,
       recipient: recipient.name,
     };
+  }
+
+  // An assistant messages an agent in a Studio linked to it. The mailbox row keeps the fan-out,
+  // fences and the wakeup; the Studio record carries the delivery and its receipt.
+  private async sendToMember(
+    sender: AssistantSender,
+    target: { studioId: string; member: Member; sender: BoundMember },
+    input: SendInput,
+  ): Promise<SendResult> {
+    const kind = input.kind ?? "request";
+    const created = this.store.transaction(() => {
+      const outgoing = this.ledger.createOutgoing({
+        senderKey: assistantPeerKey(sender.assistant.id),
+        recipientKey: target.member.key,
+        kind,
+        originConversationId: sender.turn.conversationId,
+        originThreadId: sender.turn.threadId,
+        originRootId: sender.turn.rootTriggerId ?? sender.turn.triggerId ?? sender.turn.id,
+        senderTurnId: sender.turn.id,
+        payloadText: input.text,
+        idempotencyKey:
+          input.idempotencyKey?.trim() ||
+          defaultIdempotencyKey(kind, target.member.key, input.text),
+        studioId: target.studioId,
+        senderBindingToken: target.sender.bindingToken,
+      });
+      if (outgoing.created)
+        this.ledger.markDelivered(outgoing.record.mailboxId, { targetSessionId: target.studioId });
+      return outgoing;
+    });
+    const result = {
+      mailboxId: created.record.mailboxId,
+      correlationId: created.record.correlationId,
+      created: created.created,
+      recipient: target.member.address,
+    };
+    if (!created.created) return { ...result, status: created.record.status };
+    const message = await this.deps.studio!.deliverFromAssistant({
+      studioId: target.studioId,
+      sender: target.sender,
+      recipient: target.member,
+      kind: "message",
+      replyTo: null,
+      text: input.text,
+      mailboxId: created.record.mailboxId,
+    });
+    this.recordReceipt(created.record, message);
+    return {
+      ...result,
+      status: this.ledger.get(created.record.mailboxId)!.status,
+      messages: [
+        {
+          messageId: message.messageId,
+          recipient: message.recipient.address,
+          status: message.receipt.status,
+          code: message.receipt.code,
+          detail: message.receipt.message,
+        },
+      ],
+    };
+  }
+
+  // The agent has it (acked), it never will (failed, and a request is answered as failed), or the
+  // outcome is unknown (left delivered, never resent).
+  private recordReceipt(record: MailboxMessage, message: StudioMessage): void {
+    const { status, code } = message.receipt;
+    if (status === "accepted" || status === "queued")
+      this.ledger.markAcked(record.mailboxId, { targetTurnId: message.messageId });
+    else if (status === "rejected" || status === "not_attempted")
+      this.store.transaction(() => {
+        this.ledger.markFailed(record.mailboxId, code);
+        if (record.kind === "request")
+          this.syntheticReply(
+            record,
+            message.messageId,
+            `Not delivered: ${message.receipt.message}`,
+          );
+      });
+  }
+
+  /** A Studio member asks an assistant; a fresh root per message. Runs in the Studio's transaction. */
+  receiveFromMember(input: {
+    studioId: string;
+    sender: BoundMember;
+    assistantId: string;
+    text: string;
+    messageId: string;
+  }): string {
+    const recipient = this.store.get("assistants", input.assistantId);
+    if (!recipient) throw new MailboxError("not_found", "That assistant no longer exists.");
+    const created = this.ledger.createOutgoing({
+      senderKey: input.sender.key,
+      recipientKey: assistantPeerKey(recipient.id),
+      kind: "request",
+      originRootId: `studio:${input.messageId}`,
+      payloadText: input.text,
+      idempotencyKey: input.messageId,
+      studioId: input.studioId,
+      senderBindingToken: input.sender.bindingToken,
+    });
+    if (created.created) this.deliver(created.record, input.sender.address, recipient);
+    return created.record.mailboxId;
+  }
+
+  /** A Studio member answers what an assistant asked it; the assistant's lane is woken. */
+  replyFromMember(input: { mailboxId: string; replierKey: string; text: string }): void {
+    this.ledger.createReply({
+      replyToMailboxId: input.mailboxId,
+      replierKey: input.replierKey,
+      outcome: "ok",
+      payloadText: input.text,
+    });
+  }
+
+  // An assistant's answer to a Studio member goes back through the Studio, while the member's
+  // binding is the one it asked from.
+  private answerMember(
+    request: MailboxMessage,
+    reply: { text: string; outcome: MailboxOutcome },
+  ): void {
+    const studio = this.deps.studio;
+    const assistantId = assistantIdOfKey(request.recipientKey);
+    const asked = studio?.recordOfMailbox(request.mailboxId);
+    if (!studio || !assistantId || !asked?.message.sender || !request.studioId) return;
+    const sender = studio.assistantMember(request.studioId, assistantId);
+    if (!sender) return;
+    const work = async () => {
+      await studio
+        .deliverFromAssistant({
+          studioId: request.studioId!,
+          sender,
+          recipient: asked.message.sender!,
+          kind: "reply",
+          replyTo: asked.message.messageId,
+          text: reply.outcome === "ok" ? reply.text : `(failed) ${reply.text}`,
+          mailboxId: request.mailboxId,
+          recipientToken: request.senderBindingToken,
+        })
+        .catch((error: unknown) =>
+          console.error("Bigbang could not answer a Studio member", error),
+        );
+    };
+    if (this.deps.background) this.deps.background(work);
+    else void work();
   }
 
   // Queues the request as a turn in the recipient's mailbox lane, in the sender's transaction.
@@ -274,7 +475,7 @@ export class Mailbox {
     const record = this.ledger.get(turn.mailboxId);
     if (!record || record.kind !== "request" || this.ledger.hasReply(record.mailboxId)) return;
     if (record.status === "cancelled") return;
-    this.store.transaction(() => {
+    const answer = this.store.transaction(() => {
       if (turn.status === "completed" && text && !isPass(text)) {
         this.ledger.createReply({
           replyToMailboxId: record.mailboxId,
@@ -283,17 +484,17 @@ export class Mailbox {
           outcome: "ok",
           payloadText: text,
         });
-        return;
+        return { text, outcome: "ok" as const };
       }
       const failed = turn.status === "failed" || turn.status === "unknown";
       if (record.status !== "failed")
         this.ledger.markFailed(record.mailboxId, failed ? "run_error" : "no_reply");
-      this.syntheticReply(
-        record,
-        turn.id,
-        failed ? runErrorText(turn.error ?? "unknown error") : NO_REPLY_TEXT,
-      );
+      const payload = failed ? runErrorText(turn.error ?? "unknown error") : NO_REPLY_TEXT;
+      this.syntheticReply(record, turn.id, payload);
+      return { text: payload, outcome: "failed" as const };
     });
+    // A Studio member has no chat lane to wake: it is answered through the Studio.
+    if (agentOfKey(record.senderKey)) this.answerMember(record, answer);
   }
 
   private syntheticReply(record: MailboxMessage, turnId: string, payloadText: string): void {
@@ -371,7 +572,11 @@ export class Mailbox {
       const reply = this.ledger.get(wakeup.replyMailboxId);
       const sender = this.store.get("assistants", assistantIdOfKey(reply?.senderKey ?? "") ?? "");
       return {
-        senderName: sender?.name ?? reply?.senderKey ?? "peer",
+        senderName:
+          sender?.name ??
+          (reply && this.deps.studio?.addressOf(reply.senderKey)) ??
+          reply?.senderKey ??
+          "peer",
         outcome: reply?.outcome ?? "ok",
         correlationId: reply?.correlationId ?? "",
         requestMailboxId: wakeup.requestMailboxId,

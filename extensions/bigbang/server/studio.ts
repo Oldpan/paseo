@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Peer, PeerMessage, Studio as StudioRecord } from "../shared/contracts";
 import { errorMessage, failureStatus } from "./dispatcher";
 import type { ExecutionPort } from "./execution";
-import { agentOfKey, agentPeerKey } from "./peers";
+import { agentOfKey, agentPeerKey, assistantIdOfKey, assistantPeerKey } from "./peers";
 import type { ChatStore } from "./store";
 
 // Studio collaboration between agents in bound workspaces, ported from Bigbang Core's
@@ -71,6 +71,16 @@ export interface StudioDeps {
   online(serverId: string): Promise<boolean>;
   /** Bigbang's own executions (chat lanes, mailbox lanes, tasks) are never Studio members. */
   isExecution(agentId: string): boolean;
+  /** A Studio member asks a linked assistant: queued as a mailbox request; returns its id. */
+  toAssistant(input: {
+    studioId: string;
+    sender: BoundMember;
+    assistantId: string;
+    text: string;
+    messageId: string;
+  }): string;
+  /** A Studio member answers a message an assistant sent it (a mailbox request). */
+  replyToAssistant(input: { mailboxId: string; replierKey: string; text: string }): void;
   now?: () => number;
   deliveryTimeoutMs?: number;
 }
@@ -103,7 +113,7 @@ CREATE TABLE IF NOT EXISTS studio_records (
   recipient_json TEXT NOT NULL,
   recipient_binding_token TEXT NOT NULL,
   notice_key TEXT,
-  origin_json TEXT,
+  mailbox_id TEXT,
   text TEXT NOT NULL,
   delivery_status TEXT NOT NULL,
   receipt_code TEXT NOT NULL,
@@ -112,6 +122,14 @@ CREATE TABLE IF NOT EXISTS studio_records (
   observed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS studio_records_studio ON studio_records(studio_id, created_at);
+CREATE INDEX IF NOT EXISTS studio_records_mailbox ON studio_records(mailbox_id);
+CREATE TABLE IF NOT EXISTS studio_links (
+  studio_id TEXT NOT NULL,
+  assistant_id TEXT NOT NULL,
+  link_token TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(studio_id, assistant_id)
+);
 CREATE UNIQUE INDEX IF NOT EXISTS studio_records_notice ON studio_records(studio_id, notice_key)
   WHERE kind = 'notice';`;
 
@@ -126,6 +144,7 @@ interface RecordRow {
   recipient_key: string;
   recipient_json: string;
   recipient_binding_token: string;
+  mailbox_id: string | null;
   text: string;
   delivery_status: ReceiptStatus | "attempting";
   receipt_code: string;
@@ -208,6 +227,7 @@ export class Studio {
     this.store.transaction(() => {
       this.db.prepare("UPDATE studios SET status='archived' WHERE studio_id=?").run(studioId);
       this.db.prepare("DELETE FROM studio_bindings WHERE studio_id=?").run(studioId);
+      this.db.prepare("DELETE FROM studio_links WHERE studio_id=?").run(studioId);
       this.project(studioId);
     });
     return this.studio(studioId)!;
@@ -266,6 +286,141 @@ export class Studio {
     return this.studio(existing.studioId);
   }
 
+  /** Sets the assistants a Studio's members may reach; a newly linked one gets a new link token. */
+  setAssistants(input: { studioId: string; assistantIds: readonly string[] }): StudioRecord {
+    this.requireActive(input.studioId);
+    for (const id of input.assistantIds)
+      if (!this.store.get("assistants", id))
+        throw new StudioError("studio_assistant_not_found", "Choose existing assistants.");
+    this.store.transaction(() => {
+      const keep = new Set(input.assistantIds);
+      for (const id of this.linkedAssistantIds(input.studioId))
+        if (!keep.has(id))
+          this.db
+            .prepare("DELETE FROM studio_links WHERE studio_id=? AND assistant_id=?")
+            .run(input.studioId, id);
+      for (const id of keep)
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO studio_links(studio_id, assistant_id, link_token, created_at)
+               VALUES (?, ?, ?, ?)`,
+          )
+          .run(input.studioId, id, randomUUID(), this.now());
+      this.project(input.studioId);
+    });
+    return this.studio(input.studioId)!;
+  }
+
+  private linkedAssistantIds(studioId: string): string[] {
+    return this.studio(studioId)?.assistantIds ?? [];
+  }
+
+  private linkToken(studioId: string, assistantId: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT l.link_token AS token FROM studio_links l JOIN studios s ON s.studio_id=l.studio_id
+           WHERE l.studio_id=? AND l.assistant_id=? AND s.status='active'`,
+      )
+      .get(studioId, assistantId) as { token: string } | undefined;
+    return row?.token ?? null;
+  }
+
+  /** A linked assistant as a Studio participant, bound by its link token. */
+  assistantMember(studioId: string, assistantId: string): BoundMember | null {
+    const token = this.linkToken(studioId, assistantId);
+    const assistant = this.store.get("assistants", assistantId);
+    if (!token || !assistant) return null;
+    const serverId = assistant.serverId ?? this.deps.selfId();
+    const machine = this.deps.machineLabel(serverId);
+    return {
+      key: assistantPeerKey(assistantId),
+      serverId,
+      agentId: "",
+      workspaceId: "",
+      name: assistant.name,
+      workspace: "Chat",
+      machine,
+      address: [machine, "Chat", assistant.name].map(addressSegment).join("/"),
+      studioId,
+      bindingToken: token,
+    };
+  }
+
+  /** The current token of a participant in a Studio: its workspace binding, or its assistant link. */
+  private currentToken(studioId: string, member: Member): string | null {
+    const assistantId = assistantIdOfKey(member.key);
+    if (assistantId) return this.linkToken(studioId, assistantId);
+    const binding = this.binding(member.serverId, member.workspaceId);
+    return binding?.studioId === studioId ? binding.bindingToken : null;
+  }
+
+  /**
+   * The Studio agent an assistant means by `ref`, among the Studios linked to it. Null when no
+   * linked Studio has such a member.
+   */
+  async memberForAssistant(
+    assistantId: string,
+    ref: string,
+  ): Promise<{ studioId: string; member: Member; sender: BoundMember } | null> {
+    const studios = this.db
+      .prepare(
+        `SELECT l.studio_id AS id FROM studio_links l JOIN studios s ON s.studio_id=l.studio_id
+           WHERE l.assistant_id=? AND s.status='active'`,
+      )
+      .all(assistantId) as Array<{ id: string }>;
+    const found: Array<{ studioId: string; member: Member }> = [];
+    for (const { id } of studios) {
+      const { members } = await this.members(id);
+      for (const member of members)
+        if (!assistantIdOfKey(member.key) && memberMatches(member, ref))
+          found.push({ studioId: id, member });
+    }
+    if (found.length > 1)
+      throw new StudioError(
+        "studio_member_ambiguous",
+        `"${ref}" matches several Studio members: ${found.map((item) => `${item.member.address} [${item.member.key}]`).join(", ")}. Use a full address or key.`,
+      );
+    const match = found[0];
+    const sender = match ? this.assistantMember(match.studioId, assistantId) : null;
+    return match && sender ? { ...match, sender } : null;
+  }
+
+  /** Studio members an assistant may reach through the Studios linked to it. */
+  async membersForAssistant(assistantId: string): Promise<Member[]> {
+    const studios = this.db
+      .prepare(
+        `SELECT l.studio_id AS id FROM studio_links l JOIN studios s ON s.studio_id=l.studio_id
+           WHERE l.assistant_id=? AND s.status='active'`,
+      )
+      .all(assistantId) as Array<{ id: string }>;
+    const members: Member[] = [];
+    for (const { id } of studios)
+      for (const member of (await this.members(id)).members)
+        if (!assistantIdOfKey(member.key)) members.push(member);
+    return members;
+  }
+
+  /** The last known address of a Studio participant, for naming it in mailbox records. */
+  addressOf(key: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT recipient_json AS json FROM studio_records WHERE recipient_key=?
+           UNION ALL SELECT sender_json AS json FROM studio_records WHERE sender_key=? LIMIT 1`,
+      )
+      .get(key, key) as { json: string } | undefined;
+    return row ? (JSON.parse(row.json) as Member).address : null;
+  }
+
+  /** The Studio message that carried a mailbox message, with its sender's token then. */
+  recordOfMailbox(
+    mailboxId: string,
+  ): { message: StudioMessage; senderToken: string | null } | null {
+    const row = this.db
+      .prepare("SELECT * FROM studio_records WHERE mailbox_id=? AND kind='message' LIMIT 1")
+      .get(mailboxId) as RecordRow | undefined;
+    return row ? { message: this.map(row), senderToken: row.sender_binding_token } : null;
+  }
+
   studio(studioId: string): StudioRecord | null {
     const row = this.db
       .prepare(
@@ -279,7 +434,14 @@ export class Studio {
            WHERE studio_id=? ORDER BY created_at, server_id, workspace_id`,
       )
       .all(studioId) as StudioRecord["workspaces"];
-    return { ...row, workspaces };
+    const assistantIds = (
+      this.db
+        .prepare(
+          "SELECT assistant_id AS id FROM studio_links WHERE studio_id=? ORDER BY created_at, assistant_id",
+        )
+        .all(studioId) as Array<{ id: string }>
+    ).map((link) => link.id);
+    return { ...row, workspaces, assistantIds };
   }
 
   private requireActive(studioId: string): void {
@@ -367,6 +529,10 @@ export class Studio {
         }
       }),
     );
+    for (const assistantId of studio?.assistantIds ?? []) {
+      const member = this.assistantMember(studioId, assistantId);
+      if (member) members.push(stripBinding(member));
+    }
     members.sort((a, b) => a.address.localeCompare(b.address));
     return { members, unavailable };
   }
@@ -408,9 +574,7 @@ export class Studio {
       )
       .get(studioId, key, studioId, key) as { json: string } | undefined;
     const member = row ? (JSON.parse(row.json) as Member) : null;
-    return member && this.binding(member.serverId, member.workspaceId)?.studioId === studioId
-      ? member
-      : null;
+    return member && this.currentToken(studioId, member) ? member : null;
   }
 
   // ---- Messages ----
@@ -422,14 +586,16 @@ export class Studio {
     const sent: StudioMessage[] = [];
     for (const recipient of recipients)
       sent.push(
-        await this.deliver({
-          studioId: sender.studioId,
-          sender,
-          recipient,
-          kind: "message",
-          replyTo: null,
-          text,
-        }),
+        assistantIdOfKey(recipient.key)
+          ? this.toAssistant(sender, recipient, text)
+          : await this.deliver({
+              studioId: sender.studioId,
+              sender,
+              recipient,
+              kind: "message",
+              replyTo: null,
+              text,
+            }),
       );
     return sent;
   }
@@ -448,9 +614,27 @@ export class Studio {
     )
       throw forbidden();
     const sender = original.sender;
-    const binding = this.binding(sender.serverId, sender.workspaceId);
-    if (binding?.studioId !== replier.studioId || binding.bindingToken !== row.sender_binding_token)
-      throw forbidden();
+    if (this.currentToken(replier.studioId, sender) !== row.sender_binding_token) throw forbidden();
+    if (assistantIdOfKey(sender.key)) {
+      if (!row.mailbox_id) throw forbidden();
+      const mailboxId = row.mailbox_id;
+      return this.recordLocal({
+        studioId: replier.studioId,
+        kind: "reply",
+        replyTo: original.messageId,
+        sender: replier,
+        recipient: sender,
+        text,
+        mailboxId,
+        receipt: {
+          status: "accepted",
+          code: "mailbox_reply",
+          message: `Delivered to ${sender.name}'s chat once it is free.`,
+          observedAt: this.now(),
+        },
+        before: () => this.deps.replyToAssistant({ mailboxId, replierKey: replier.key, text }),
+      });
+    }
     return this.deliver({
       studioId: replier.studioId,
       sender: replier,
@@ -459,6 +643,142 @@ export class Studio {
       replyTo: original.messageId,
       text,
     });
+  }
+
+  // A Studio member asks a linked assistant: the mailbox carries it, the record keeps the history.
+  private toAssistant(sender: BoundMember, recipient: Member, text: string): StudioMessage {
+    const assistantId = assistantIdOfKey(recipient.key)!;
+    const messageId = randomUUID();
+    let mailboxId = "";
+    return this.recordLocal({
+      messageId,
+      studioId: sender.studioId,
+      kind: "message",
+      replyTo: null,
+      sender,
+      recipient,
+      text,
+      receipt: {
+        status: "queued",
+        code: "mailbox_queued",
+        message: `Queued for ${recipient.name}; the answer comes back to you as a Studio reply.`,
+        observedAt: this.now(),
+      },
+      before: () => {
+        mailboxId = this.deps.toAssistant({
+          studioId: sender.studioId,
+          sender,
+          assistantId,
+          text,
+          messageId,
+        });
+      },
+      mailboxId: () => mailboxId,
+    });
+  }
+
+  /**
+   * Records a message the coordinator handled itself (through the mailbox), after `before` runs in
+   * the same transaction, with both participants' tokens checked.
+   */
+  private recordLocal(input: {
+    messageId?: string;
+    studioId: string;
+    kind: StudioMessage["kind"];
+    replyTo: string | null;
+    sender: BoundMember;
+    recipient: Member;
+    text: string;
+    receipt: Receipt;
+    mailboxId: string | (() => string);
+    before(): void;
+  }): StudioMessage {
+    const messageId = input.messageId ?? randomUUID();
+    this.store.transaction(() => {
+      if (this.currentToken(input.studioId, input.sender) !== input.sender.bindingToken)
+        throw forbidden();
+      const recipientToken = this.currentToken(input.studioId, input.recipient);
+      if (!recipientToken) throw forbidden();
+      input.before();
+      this.insertRecord({
+        messageId,
+        studioId: input.studioId,
+        kind: input.kind,
+        replyTo: input.replyTo,
+        sender: input.sender,
+        recipient: input.recipient,
+        recipientToken,
+        mailboxId: typeof input.mailboxId === "function" ? input.mailboxId() : input.mailboxId,
+        text: input.text,
+        receipt: input.receipt,
+      });
+    });
+    return this.map(this.row(messageId)!);
+  }
+
+  /** An assistant messages a Studio agent (or answers one) on behalf of the mailbox. */
+  deliverFromAssistant(input: {
+    studioId: string;
+    sender: BoundMember;
+    recipient: Member;
+    kind: "message" | "reply";
+    replyTo: string | null;
+    text: string;
+    mailboxId: string;
+    /** For a reply: the recipient's binding when it asked, which must still hold. */
+    recipientToken?: string | null;
+  }): Promise<StudioMessage> {
+    if (
+      input.recipientToken !== undefined &&
+      this.currentToken(input.studioId, input.recipient) !== input.recipientToken
+    )
+      throw forbidden();
+    return this.deliver(input);
+  }
+
+  private insertRecord(input: {
+    messageId: string;
+    studioId: string;
+    kind: StudioMessage["kind"];
+    replyTo: string | null;
+    sender: BoundMember | null;
+    recipient: Member;
+    recipientToken: string;
+    noticeKey?: string;
+    mailboxId?: string | null;
+    text: string;
+    receipt: Receipt | null;
+  }): void {
+    const createdAt = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO studio_records(message_id, studio_id, kind, reply_to, sender_key, sender_json,
+           sender_binding_token, recipient_key, recipient_json, recipient_binding_token, notice_key,
+           mailbox_id, text, delivery_status, receipt_code, receipt_message, created_at, observed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.messageId,
+        input.studioId,
+        input.kind,
+        input.replyTo,
+        input.sender?.key ?? null,
+        input.sender ? JSON.stringify(stripBinding(input.sender)) : null,
+        input.sender?.bindingToken ?? null,
+        input.recipient.key,
+        JSON.stringify(stripBinding(input.recipient)),
+        input.recipientToken,
+        input.noticeKey ?? null,
+        input.mailboxId ?? null,
+        input.text,
+        input.receipt?.status ?? "attempting",
+        input.receipt?.code ?? "delivery_in_progress",
+        input.receipt?.message ??
+          "A single delivery is in progress. Do not resend while the receipt is unknown.",
+        createdAt,
+        input.receipt?.observedAt ?? createdAt,
+      );
+    this.projectRecord(input.messageId);
   }
 
   records(
@@ -507,15 +827,13 @@ export class Studio {
     replyTo: string | null;
     text: string;
     noticeKey?: string;
+    mailboxId?: string;
   }): Promise<StudioMessage> {
     const { recipient, sender } = input;
     const binding = this.binding(recipient.serverId, recipient.workspaceId);
     if (binding?.studioId !== input.studioId) throw forbidden();
-    if (sender) {
-      const current = this.binding(sender.serverId, sender.workspaceId);
-      if (current?.studioId !== input.studioId || current.bindingToken !== sender.bindingToken)
-        throw forbidden();
-    }
+    if (sender && this.currentToken(input.studioId, sender) !== sender.bindingToken)
+      throw forbidden();
     let receipt: Receipt | undefined;
     if (!(await this.deps.online(recipient.serverId)))
       receipt = {
@@ -525,7 +843,6 @@ export class Studio {
         observedAt: this.now(),
       };
     const messageId = randomUUID();
-    const createdAt = this.now();
     // This synchronous insert is the attempt's ordering point relative to unbinding.
     const inserted = this.store.transaction(() => {
       const again = this.binding(recipient.serverId, recipient.workspaceId);
@@ -539,34 +856,19 @@ export class Studio {
           .get(input.studioId, input.noticeKey) as { id: string } | undefined;
         if (previous) return previous.id;
       }
-      this.db
-        .prepare(
-          `INSERT INTO studio_records(message_id, studio_id, kind, reply_to, sender_key, sender_json,
-             sender_binding_token, recipient_key, recipient_json, recipient_binding_token, notice_key,
-             text, delivery_status, receipt_code, receipt_message, created_at, observed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          messageId,
-          input.studioId,
-          input.kind,
-          input.replyTo,
-          sender?.key ?? null,
-          sender ? JSON.stringify(stripBinding(sender)) : null,
-          sender?.bindingToken ?? null,
-          recipient.key,
-          JSON.stringify(stripBinding(recipient)),
-          binding.bindingToken,
-          input.noticeKey ?? null,
-          input.text,
-          receipt?.status ?? "attempting",
-          receipt?.code ?? "delivery_in_progress",
-          receipt?.message ??
-            "A single delivery is in progress. Do not resend while the receipt is unknown.",
-          createdAt,
-          receipt?.observedAt ?? createdAt,
-        );
-      this.projectRecord(messageId);
+      this.insertRecord({
+        messageId,
+        studioId: input.studioId,
+        kind: input.kind,
+        replyTo: input.replyTo,
+        sender,
+        recipient,
+        recipientToken: binding.bindingToken,
+        ...(input.noticeKey ? { noticeKey: input.noticeKey } : {}),
+        mailboxId: input.mailboxId ?? null,
+        text: input.text,
+        receipt: receipt ?? null,
+      });
       return messageId;
     });
     if (inserted !== messageId) return this.map(this.row(inserted)!);
@@ -597,8 +899,9 @@ export class Studio {
       await Promise.race([
         this.requirePort().deliverMessage(this.local(recipient.serverId), recipient.agentId, text, {
           messageId,
-          ...(sender ? { sourceAgentId: sender.agentId } : {}),
-          ...(sender && sender.serverId !== recipient.serverId
+          // An assistant has no agent to name; the header says who wrote it.
+          ...(sender?.agentId ? { sourceAgentId: sender.agentId } : {}),
+          ...(sender?.agentId && sender.serverId !== recipient.serverId
             ? { sourceAgentServerId: sender.serverId }
             : {}),
         }),
@@ -751,7 +1054,7 @@ function stripBinding(member: Member | BoundMember): Member {
 function peerOf(member: Member): Peer {
   return {
     key: member.key,
-    kind: "agent",
+    kind: assistantIdOfKey(member.key) ? "assistant" : "agent",
     name: member.name,
     serverId: member.serverId,
     machine: member.machine,

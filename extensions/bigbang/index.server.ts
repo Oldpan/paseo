@@ -16,6 +16,7 @@ import {
   unbindStudioWorkspace,
   archiveStudio,
   listStudioMembers,
+  setStudioAssistants,
 } from "./shared/contracts";
 import {
   MEMBER_PROTOCOL,
@@ -98,6 +99,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(bindStudioWorkspace, (input) => chat().studio.bind(input));
   server.handle(unbindStudioWorkspace, (input) => ({ studio: chat().studio.unbind(input) }));
   server.handle(archiveStudio, (input) => chat().studio.archive(input.id));
+  server.handle(setStudioAssistants, (input) => chat().studio.setAssistants(input));
   server.handle(listStudioMembers, async (input) => {
     const listing = await chat().studio.members(input.studioId);
     return {

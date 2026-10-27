@@ -178,10 +178,21 @@ export class Coordinator {
         serverId === this.selfId() || !this.machines ? true : this.machines.online(serverId),
       isExecution: (agentId) =>
         Boolean(this.store.getChatSessionByAgent(agentId) ?? this.store.get("tasks", agentId)),
+      toAssistant: (input) => {
+        const mailboxId = this.mailbox.receiveFromMember(input);
+        queueMicrotask(() => this.kick());
+        return mailboxId;
+      },
+      replyToAssistant: (input) => {
+        this.mailbox.replyFromMember(input);
+        queueMicrotask(() => this.kick());
+      },
       now: this.now,
     });
     this.mailbox = new Mailbox(store, {
       now: this.now,
+      studio: this.studio,
+      background: (work) => void this.queue.run("studio-answers", work),
       cancelTurn: (turn) =>
         void this.queue.run(agentKey(turn.agentId), async () => {
           await this.port?.cancel(turn.agentId, this.serverFor(turn));

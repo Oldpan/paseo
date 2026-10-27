@@ -372,3 +372,11 @@ export const listStudioMembers = defineRpc({
     ),
   }),
 });
+export const setStudioAssistants = defineRpc({
+  name: "studio.assistants.set",
+  input: z.object({
+    studioId: z.string().min(1),
+    assistantIds: z.array(z.string().uuid()).max(20),
+  }),
+  output: studioSchema,
+});
