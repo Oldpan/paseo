@@ -254,7 +254,7 @@ export class PaseoExecution implements ExecutionPort {
         ? {
             kind: "worktree" as const,
             cwd: task.directory,
-            branchName: `codex/bigbang-${task.id.slice(0, 8)}`,
+            branchName: `bigbang/task-${task.id.slice(0, 8)}`,
           }
         : { kind: "directory" as const, path: task.directory };
     const workspace = await api.workspaces.create({

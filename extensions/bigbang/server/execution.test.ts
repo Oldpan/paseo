@@ -76,6 +76,30 @@ describe("PaseoExecution", () => {
     expect(homes.rows.get("assistant-1")?.workspaceId).toBe("wks_home");
   });
 
+  it("names a task's worktree branch after the task, whatever its provider", async () => {
+    const workspaceCreate = vi.fn(async () => ({ id: "wks_task" }));
+    const api = {
+      hosts: { list: async () => ({ self: { serverId: "srv_self" } }) },
+      workspaces: { create: workspaceCreate },
+    } as unknown as PaseoApi;
+    const execution = new PaseoExecution(api, directory(), memoryHomes());
+
+    await execution.createTaskWorkspace({
+      id: "63cbd6c1-1916-5faa-bf3a-7eb11170525d",
+      prompt: "Create and run grok_hello.py",
+      provider: "grok/grok-4.7",
+      isolation: "worktree",
+      directory: "/work/app",
+      serverId: "srv_self",
+    });
+
+    expect(workspaceCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: { kind: "worktree", cwd: "/work/app", branchName: "bigbang/task-63cbd6c1" },
+      }),
+    );
+  });
+
   it("moves the home to a private subdirectory when the daemon reuses a visible workspace", async () => {
     const home = directory();
     const homes = memoryHomes();
