@@ -24,7 +24,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | Doc                                                                  | What's in it                                                                                                                   |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [docs/bigbang-roadmap.md](docs/bigbang-roadmap.md)                   | Bigbang Chat/Studio integration decisions, source/UI migration scope, milestones and pending choices                           |
-| [docs/bigbang-chat.md](docs/bigbang-chat.md)                         | Bigbang Chat coordination: ledger vs executions, turn anchoring, hook recovery, group routing, roundtable, assistant tasks     |
+| [docs/bigbang-chat.md](docs/bigbang-chat.md)                         | Bigbang Chat: ledger vs executions, machines and member relay, anchoring, recovery, routing, tasks, mailbox, Studio            |
 | [docs/product.md](docs/product.md)                                   | What Paseo is, who it's for, where it's going                                                                                  |
 | [docs/architecture.md](docs/architecture.md)                         | System design, package layering, WebSocket protocol, agent lifecycle, data flow                                                |
 | [docs/agent-lifecycle.md](docs/agent-lifecycle.md)                   | Agent states, parent/child relationships, archive semantics, tabs vs archive, subagents track                                  |
