@@ -9,6 +9,8 @@ export interface ChatSession {
   threadId: string | null;
   assistantId: string;
   agentId: string;
+  /** The machine the execution runs on; absent means the coordinator's own daemon. */
+  serverId?: string;
   provider: string;
   systemPrompt: string;
   lastInstructions: string;

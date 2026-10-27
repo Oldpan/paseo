@@ -1,5 +1,4 @@
-import { defineAgentTool } from "@getpaseo/plugin";
-import type { PluginAgentToolContext } from "@getpaseo/plugin/server";
+import { defineAgentTool, type PluginAgentToolContract } from "@getpaseo/plugin";
 import { z } from "zod";
 import type { Assistant, Task } from "../shared/contracts";
 import type { Coordinator } from "./coordinator";
@@ -82,7 +81,15 @@ export const taskStatusTool = defineAgentTool({
   }),
 });
 
-type Context = Pick<PluginAgentToolContext, "caller">;
+/** The verified agent making a call, and the machine whose daemon verified it. */
+export interface ToolCaller {
+  agentId: string;
+  /** The member machine that relayed the call; absent when the agent runs on the coordinator. */
+  serverId?: string;
+}
+interface Context {
+  caller: ToolCaller;
+}
 const normalize = (directory: string) => directory.trim().replace(/\/+$/, "") || "/";
 
 interface Caller {
@@ -93,12 +100,14 @@ interface Caller {
 
 // The caller is the verified agent id the daemon hands over. Which assistant that is, which chat
 // it is in and what it may touch come from the ledger, never from tool input or agent labels.
-function authorize(coordinator: Coordinator, agentId: string): Caller {
+function authorize(coordinator: Coordinator, caller: ToolCaller): Caller {
   const { store } = coordinator;
-  if (store.get("tasks", agentId))
+  if (store.get("tasks", caller.agentId))
     throw new Error("Task agents cannot start tasks. Report what you need in your result instead.");
-  const session = store.getChatSessionByAgent(agentId);
-  if (!session) throw new Error("This tool is only available to a Chat assistant in its chat.");
+  const session = store.getChatSessionByAgent(caller.agentId);
+  // An agent id is only meaningful on the machine that verified it.
+  if (!session || (session.serverId ?? null) !== (caller.serverId ?? null))
+    throw new Error("This tool is only available to a Chat assistant in its chat.");
   const assistant = store.get("assistants", session.assistantId);
   if (!assistant) throw new Error("This assistant no longer exists.");
   const conversation = store.get("conversations", session.conversationId);
@@ -145,7 +154,7 @@ function report(task: Task, message: string) {
 
 export function startTaskHandler(coordinator: Coordinator) {
   return (input: z.output<typeof startTaskTool.input>, context: Context) => {
-    const caller = authorize(coordinator, context.caller.agentId);
+    const caller = authorize(coordinator, context.caller);
     const target = resolveTarget(caller.assistant, input.target);
     // A worktree is the stricter choice; the project's own setting may only be tightened.
     if (input.isolation === "directory" && target.isolation === "worktree")
@@ -183,7 +192,7 @@ export function startTaskHandler(coordinator: Coordinator) {
 
 export function taskStatusHandler(coordinator: Coordinator) {
   return (input: z.output<typeof taskStatusTool.input>, context: Context) => {
-    const caller = authorize(coordinator, context.caller.agentId);
+    const caller = authorize(coordinator, context.caller);
     const own = coordinator.store
       .snapshot()
       .tasks.filter(
@@ -213,4 +222,36 @@ export function taskStatusHandler(coordinator: Coordinator) {
       limits: coordinator.taskLimits,
     };
   };
+}
+
+/** One agent tool: its contract, and how the coordinator runs a call to it. */
+export interface AgentToolEntry {
+  tool: PluginAgentToolContract;
+  run(coordinator: Coordinator, input: unknown, context: Context): unknown;
+}
+/** Every agent tool, registered under the same names on the coordinator and on its members. */
+export const agentTools: readonly AgentToolEntry[] = [
+  {
+    tool: startTaskTool,
+    run: (coordinator, input, context) =>
+      startTaskHandler(coordinator)(startTaskTool.input.parse(input), context),
+  },
+  {
+    tool: taskStatusTool,
+    run: (coordinator, input, context) =>
+      taskStatusHandler(coordinator)(taskStatusTool.input.parse(input), context),
+  },
+];
+
+/** Runs a tool call a member relayed; the member's daemon already verified the agent. */
+export async function callAgentTool(
+  coordinator: Coordinator,
+  caller: Required<ToolCaller>,
+  name: string,
+  input: unknown,
+): Promise<unknown> {
+  const entry = agentTools.find(({ tool }) => tool.name === name);
+  if (!entry)
+    throw new Error(`Unknown Bigbang tool ${name}. Update the Bigbang plugin on this machine.`);
+  return entry.run(coordinator, input, { caller });
 }

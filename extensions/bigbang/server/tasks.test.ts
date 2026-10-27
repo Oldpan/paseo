@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Assistant, Message, Task, Turn } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS } from "../shared/settings";
 import { fixture, closeFixtures } from "./chat-fixture";
-import { startTaskHandler, startTaskTool, taskStatusHandler, taskStatusTool } from "./agent-tools";
+import {
+  callAgentTool,
+  startTaskHandler,
+  startTaskTool,
+  taskStatusHandler,
+  taskStatusTool,
+} from "./agent-tools";
 import { TASK_RECEIPT_LEAD, taskBrief } from "./prompts";
 import { deterministicTaskId } from "./task-events";
 
@@ -19,12 +25,7 @@ const REMOTE = {
 
 // Ada may start tasks on two projects; Bob may not. Both chat privately with the user.
 function setup(options: Parameters<typeof fixture>[0] = {}) {
-  const audiences: string[][] = [];
-  const f = fixture({
-    names: ["Ada", "Bob"],
-    ...options,
-    onAudience: (ids) => audiences.push(ids),
-  });
+  const f = fixture({ names: ["Ada", "Bob"], ...options });
   const ada = f.coordinator.saveAssistant({
     ...f.ada,
     autonomy: { enabled: true, targets: [LOCAL, REMOTE] },
@@ -68,7 +69,6 @@ function setup(options: Parameters<typeof fixture>[0] = {}) {
     ...f,
     ada,
     dm,
-    audiences,
     start,
     status,
     reply,
@@ -713,38 +713,42 @@ describe("task status", () => {
   });
 });
 
-describe("tool audience", () => {
-  it("admits every chat execution before it is created; autonomy is checked per call", async () => {
-    const admittedAtCreation: boolean[] = [];
+describe("tool callers", () => {
+  it("lets every chat execution call the tools; autonomy is checked per call", async () => {
     const f = setup();
-    const original = f.execution.ensureChatAgent.bind(f.execution);
-    f.execution.ensureChatAgent = async (spec) => {
-      admittedAtCreation.push(f.audiences.at(-1)?.includes(spec.agentId) ?? false);
-      return original(spec);
-    };
-    const turn = await f.reply();
-    expect(f.audiences.at(-1)).toEqual([turn.agentId]);
-    // Bob has no autonomy, yet his session lists the tools from the start, so enabling autonomy
-    // later works without restarting a provider that lists MCP tools once per session.
     const bobDm = f.group({ kind: "dm", name: "Bob", members: [f.bob.id] });
     await f.say("Hi Bob", { conversationId: bobDm.id });
     const bobTurn = f.store.snapshot().turns.findLast((item) => item.assistantId === f.bob.id)!;
-    expect(admittedAtCreation).toEqual([true, true]);
-    expect(f.audiences.at(-1)).toEqual([turn.agentId, bobTurn.agentId].toSorted());
+    expect(() =>
+      f.start({ prompt: "Do it" } as never, { caller: { agentId: bobTurn.agentId } }),
+    ).toThrow("not allowed to start tasks on your own");
   });
 
-  it("keeps the audience through autonomy changes and a restart", async () => {
+  it("refuses an execution's id when another machine relays it", async () => {
     const f = setup();
     const turn = await f.reply();
-    const count = f.audiences.length;
-    f.coordinator.saveAssistant({ ...f.ada, autonomy: { enabled: false, targets: [LOCAL] } });
-    f.coordinator.saveAssistant({
-      ...f.ada,
-      autonomy: { enabled: true, targets: [LOCAL, REMOTE] },
-    });
-    expect(f.audiences).toHaveLength(count);
-    await f.restart();
-    expect(f.audiences.at(-1)).toEqual([turn.agentId]);
+    expect(() =>
+      f.start({ prompt: "Do it", target: LOCAL } as never, {
+        caller: { agentId: turn.agentId, serverId: "srv_spark" },
+      }),
+    ).toThrow("only available to a Chat assistant");
+    expect(f.call(turn, { target: LOCAL }).status).toBeDefined();
+  });
+
+  it("runs a relayed call by name and validates its input", async () => {
+    const f = setup();
+    const turn = await f.reply();
+    await expect(
+      callAgentTool(f.coordinator, { agentId: turn.agentId, serverId: "srv_spark" }, "nope", {}),
+    ).rejects.toThrow("Unknown Bigbang tool nope");
+    await expect(
+      callAgentTool(
+        f.coordinator,
+        { agentId: turn.agentId, serverId: "srv_spark" },
+        "start_task",
+        {},
+      ),
+    ).rejects.toThrow();
   });
 });
 

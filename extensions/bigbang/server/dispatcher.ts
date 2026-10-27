@@ -63,8 +63,6 @@ export interface DispatcherDeps {
   settle(agentId: string): void;
   /** A turn ended without its execution ever reporting back (dispatch failed). */
   turnEnded(turn: Turn): void;
-  /** A chat execution is about to be created or resumed; its tools must already be admitted. */
-  beforeChatAgent(): void;
 }
 
 // A turn is persisted `prepared` before anything is sent. If the process dies in between, the
@@ -146,7 +144,6 @@ export class Dispatcher {
     if (turn.chatSessionId) {
       const session = this.deps.store.getChatSession(turn.chatSessionId);
       if (!session) throw new Error("Chat execution binding is missing.");
-      this.deps.beforeChatAgent();
       await port.ensureChatAgent({
         agentId: session.agentId,
         assistantId: assistant.id,

@@ -21,3 +21,20 @@ export const DEFAULT_TASK_LIMITS: TaskLimits = {
   maxWorkAgentsPerTask: 3,
   autonomousBudgetMinutes: 30,
 };
+
+/**
+ * Which part this daemon plays in Bigbang Chat. A coordinator keeps the ledger; a member runs the
+ * executions of assistants bound to it and relays its agents' tool calls to its coordinator.
+ * Changing the role takes effect when the plugin reloads.
+ */
+export const roleSettings = defineSettings({
+  id: "role",
+  scope: "host",
+  version: 1,
+  schema: z.object({
+    mode: z.enum(["coordinator", "member"]).default("coordinator"),
+    // The coordinator's serverId; a member answers only that coordinator's polls.
+    coordinatorServerId: z.string().trim().min(1).optional(),
+  }),
+});
+export type RoleSettings = z.output<typeof roleSettings.schema>;

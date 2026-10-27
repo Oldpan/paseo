@@ -18,6 +18,7 @@ import {
   writeAssistantMemory,
 } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS, type TaskLimits } from "../shared/settings";
+import type { MemberEvent } from "../shared/member";
 import { ChatStore } from "./store";
 import { queueTurn, restoreChatSessions } from "./chat-sessions";
 import { Fanout } from "./fanout";
@@ -84,8 +85,6 @@ export interface CoordinatorOptions {
   now?: () => number;
   /** Task limits; the plugin settings replace them with `setLimits`. */
   limits?: TaskLimits;
-  /** Receives the chat executions whose agent tools are admitted, whenever that set changes. */
-  onAudience?: (agentIds: string[]) => void;
 }
 interface Finish {
   outcome?: TurnEndedEvent["outcome"];
@@ -139,8 +138,6 @@ export class Coordinator {
   private closed = false;
   private recovered = false;
   private limits: TaskLimits;
-  private audienceKey: string | null = null;
-  private readonly onAudience: ((agentIds: string[]) => void) | undefined;
   private readonly sweepMs: number;
   constructor(
     readonly store: ChatStore,
@@ -152,7 +149,6 @@ export class Coordinator {
     this.sweepMs = options.sweepMs ?? DEFAULT_SWEEP_MS;
     this.now = options.now ?? Date.now;
     this.limits = options.limits ?? DEFAULT_TASK_LIMITS;
-    this.onAudience = options.onAudience;
     this.fanout = new Fanout(store, this.now);
     this.roundtable = new Roundtable(store, this.now);
     this.dispatcher = new Dispatcher({
@@ -163,7 +159,6 @@ export class Coordinator {
       cancelTask: (id) => this.cancel(id, "budget"),
       settle: (agentId) => this.settle(agentId),
       turnEnded: (turn) => this.afterTurn(turn),
-      beforeChatAgent: () => this.syncAudience(),
     });
   }
   /** Binds the plugin's Paseo API once; later calls are ignored. The first call runs recovery. */
@@ -178,7 +173,6 @@ export class Coordinator {
     if (this.recovered || !this.port) return;
     this.recovered = true;
     restoreChatSessions(this.store);
-    this.syncAudience();
     // Resume what the last process left: roundtable epochs between turns, and peer batches that
     // came due while it was down.
     this.roundtable.advanceAll();
@@ -220,7 +214,6 @@ export class Coordinator {
     }
     const assistant: Assistant = existing ? { ...input, memory: existing.memory } : input;
     this.store.transaction(() => this.store.put("assistants", assistant));
-    this.syncAudience();
     return assistant;
   }
   get taskLimits(): TaskLimits {
@@ -230,23 +223,6 @@ export class Coordinator {
   setLimits(limits: TaskLimits): void {
     this.limits = limits;
     this.kick();
-  }
-  // The agent tools are offered to the chat executions of assistants allowed to act on their own.
-  // The daemon checks the audience on every call, so it only needs to be right before an execution
-  // that must see the tools is created or resumed.
-  private syncAudience(): void {
-    if (!this.onAudience) return;
-    // Every chat execution sees the task tools; start_task authorizes each call from the ledger.
-    // Providers such as Codex list MCP tools once per session, so admitting only assistants with
-    // autonomy enabled would hide the tools from sessions that started before it was turned on.
-    const ids = this.store
-      .listChatSessions()
-      .map((session) => session.agentId)
-      .toSorted();
-    const key = ids.join("\n");
-    if (key === this.audienceKey) return;
-    this.audienceKey = key;
-    this.onAudience(ids);
   }
   private memoryFile(assistantId: string): string {
     if (!this.store.get("assistants", assistantId)) throw new Error("Assistant no longer exists.");
@@ -606,6 +582,34 @@ export class Coordinator {
   }
   onAgentGone(event: AgentEvent, reason: "archived" | "closed" = "closed"): void {
     this.settle(event.agent.id, { gone: reason });
+  }
+  /** A hook that fired on a member machine, relayed over its link. */
+  onMemberEvent(event: MemberEvent): void {
+    const agent = { id: event.agentId };
+    switch (event.name) {
+      case "agent.turn_started":
+        return this.onTurnStarted({ agent });
+      case "agent.turn_ended":
+        return event.outcome
+          ? this.onTurnEnded({ agent, outcome: event.outcome })
+          : this.settle(agent.id);
+      case "agent.permission_requested":
+        return event.request
+          ? this.onPermissionRequested({ agent, request: event.request })
+          : this.settle(agent.id);
+      case "agent.permission_resolved":
+        return this.onPermissionResolved({ agent });
+      case "agent.archived":
+        return this.onAgentGone({ agent }, "archived");
+      case "agent.closed":
+        return this.onAgentGone({ agent }, "closed");
+      case "agent.created":
+        return;
+    }
+  }
+  /** A member's link came back or its plugin restarted: the hooks it fired meanwhile are lost. */
+  onMemberReconnected(): void {
+    void this.sweep();
   }
   // Hooks fire for every agent on the daemon; only executions this ledger created matter.
   private owns(agentId: string): boolean {

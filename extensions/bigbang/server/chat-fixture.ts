@@ -21,7 +21,6 @@ export function fixture(
     sweepMs?: number;
     directory?: string;
     limits?: TaskLimits;
-    onAudience?: (agentIds: string[]) => void;
   } = {},
 ) {
   const directory = options.directory ?? mkdtempSync(path.join(tmpdir(), "bigbang-fanout-"));
@@ -42,7 +41,6 @@ export function fixture(
       now: () => clock.t,
       sweepMs: options.sweepMs ?? 1e9,
       ...(options.limits ? { limits: options.limits } : {}),
-      ...(options.onAudience ? { onAudience: options.onAudience } : {}),
     });
     cleanup.push(() => coordinator.close());
     coordinator.attach();
