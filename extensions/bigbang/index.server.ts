@@ -11,6 +11,11 @@ import {
   cancelTask,
   respondTaskPermission,
   listMachines,
+  saveStudio,
+  bindStudioWorkspace,
+  unbindStudioWorkspace,
+  archiveStudio,
+  listStudioMembers,
 } from "./shared/contracts";
 import {
   MEMBER_PROTOCOL,
@@ -89,6 +94,24 @@ export default function contribute(server: PluginServerContext) {
     };
   });
   server.handle(listMachines, async () => ({ machines: await chat().machinesList() }));
+  server.handle(saveStudio, (input) => chat().studio.save(input));
+  server.handle(bindStudioWorkspace, (input) => chat().studio.bind(input));
+  server.handle(unbindStudioWorkspace, (input) => ({ studio: chat().studio.unbind(input) }));
+  server.handle(archiveStudio, (input) => chat().studio.archive(input.id));
+  server.handle(listStudioMembers, async (input) => {
+    const listing = await chat().studio.members(input.studioId);
+    return {
+      members: listing.members.map((member) => ({
+        key: member.key,
+        kind: "agent",
+        name: member.name,
+        serverId: member.serverId,
+        machine: member.machine,
+        address: member.address,
+      })),
+      unavailable: listing.unavailable,
+    };
+  });
   server.handle(memberPoll, (input) => relay.poll(input));
   // An assistant bound to this machine keeps its home here; only its coordinator calls these.
   const memberHome = (input: { assistantId: string; subdirectory?: boolean }) => {
@@ -153,7 +176,8 @@ export default function contribute(server: PluginServerContext) {
     else relayEvent("agent.closed", event.agent);
   });
   server.on("agent.created", (event) => {
-    if (!coordinator) relayEvent("agent.created", event.agent);
+    if (coordinator) coordinator.onAgentCreated(event);
+    else relayEvent("agent.created", event.agent);
   });
   function relayEvent(
     name: Parameters<MemberRelay["event"]>[0]["name"],
@@ -192,6 +216,8 @@ export default function contribute(server: PluginServerContext) {
     const machines: MachinePort = {
       self: () => hosts.self(),
       isMember: (serverId) => links?.state(serverId)?.kind === "member",
+      online: async (serverId) =>
+        (await hosts.list()).some((host) => host.serverId === serverId && host.online),
       call: (serverId, contract, input) =>
         callPluginRpc(contract, (method, value) => hosts.invoke(serverId, method, value), input),
       list: async () => {
@@ -226,7 +252,7 @@ export default function contribute(server: PluginServerContext) {
     links = new MemberLinks(hosts, {
       call: (serverId, call) =>
         callAgentTool(active, { agentId: call.agentId, serverId }, call.tool, call.input),
-      event: (_serverId, event) => active.onMemberEvent(event),
+      event: (serverId, event) => active.onMemberEvent(serverId, event),
       reconnected: () => active.onMemberReconnected(),
     });
     links.start();

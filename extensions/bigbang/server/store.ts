@@ -76,6 +76,8 @@ export class ChatStore {
       messages: [],
       tasks: [],
       turns: [],
+      studios: [],
+      peerMessages: [],
     };
     const rows = this.db
       .prepare("SELECT collection, value FROM records WHERE seq > ? ORDER BY seq")
@@ -83,13 +85,13 @@ export class ChatStore {
     for (const row of rows) (result[row.collection] as unknown[]).push(JSON.parse(row.value));
     return stateSchema.parse(result);
   }
-  get<K extends Collection>(collection: K, id: string): ChatState[K][number] | null {
+  get<K extends Collection>(collection: K, id: string): NonNullable<ChatState[K]>[number] | null {
     const row = this.db
       .prepare("SELECT value FROM records WHERE collection=? AND id=?")
       .get(collection, id) as { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
   }
-  put<K extends Collection>(collection: K, value: ChatState[K][number]): void {
+  put<K extends Collection>(collection: K, value: NonNullable<ChatState[K]>[number]): void {
     const event = this.db
       .prepare("INSERT INTO changes(collection,id) VALUES (?,?)")
       .run(collection, value.id);

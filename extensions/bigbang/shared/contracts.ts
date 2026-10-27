@@ -174,6 +174,49 @@ export const turnSchema = z.object({
   agentId: z.string(),
   error: z.string().nullable(),
 });
+// A Studio whose bound workspaces' agents may message each other across machines.
+export const studioSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  // active or archived
+  status: z.string(),
+  workspaces: z.array(
+    z.object({ serverId: z.string(), workspaceId: z.string(), name: z.string() }),
+  ),
+  // Assistants that Studio members may reach, and that may reach them.
+  assistantIds: z.array(z.string()).optional(),
+  createdAt: z.number(),
+});
+const peerSchema = z.object({
+  key: z.string(),
+  // assistant or agent
+  kind: z.string(),
+  name: z.string(),
+  serverId: z.string().optional(),
+  machine: z.string().optional(),
+  address: z.string().optional(),
+});
+// One message between peers, from the mailbox or a Studio's records, as the client shows it.
+export const peerMessageSchema = z.object({
+  id: z.string(),
+  // mailbox or studio
+  ledger: z.string(),
+  // request, info, reply, message or notice
+  kind: z.string(),
+  studioId: z.string().nullable(),
+  sender: peerSchema.nullable(),
+  recipient: peerSchema,
+  text: z.string(),
+  replyTo: z.string().nullable(),
+  // Mailbox status, or the Studio receipt status (accepted, queued, rejected, not_attempted, unknown).
+  status: z.string(),
+  code: z.string().optional(),
+  detail: z.string().optional(),
+  // The chat lane a request came from.
+  conversationId: z.string().nullable().optional(),
+  threadId: z.string().nullable().optional(),
+  createdAt: z.number(),
+});
 export const stateSchema = z.object({
   generation: z.string(),
   cursor: z.number(),
@@ -182,7 +225,12 @@ export const stateSchema = z.object({
   messages: z.array(messageSchema),
   tasks: z.array(taskSchema),
   turns: z.array(turnSchema),
+  studios: z.array(studioSchema).optional(),
+  peerMessages: z.array(peerMessageSchema).optional(),
 });
+export type Studio = z.infer<typeof studioSchema>;
+export type PeerMessage = z.infer<typeof peerMessageSchema>;
+export type Peer = z.infer<typeof peerSchema>;
 export type Assistant = z.infer<typeof assistantSchema>;
 export type Conversation = z.infer<typeof conversationSchema>;
 export type Message = z.infer<typeof messageSchema>;
@@ -287,4 +335,40 @@ export const listMachines = defineRpc({
   name: "chat.machines",
   input: z.object({}),
   output: z.object({ machines: z.array(machineSchema) }),
+});
+
+export const saveStudio = defineRpc({
+  name: "studio.save",
+  input: z.object({ id: z.string().min(1), name: z.string().trim().min(1).max(80) }),
+  output: studioSchema,
+});
+export const bindStudioWorkspace = defineRpc({
+  name: "studio.bind",
+  input: z.object({
+    studioId: z.string().min(1),
+    serverId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    name: z.string().trim().min(1).max(120),
+  }),
+  output: studioSchema,
+});
+export const unbindStudioWorkspace = defineRpc({
+  name: "studio.unbind",
+  input: z.object({ serverId: z.string().min(1), workspaceId: z.string().min(1) }),
+  output: z.object({ studio: studioSchema.nullable() }),
+});
+export const archiveStudio = defineRpc({
+  name: "studio.archive",
+  input: z.object({ id: z.string().min(1) }),
+  output: studioSchema,
+});
+export const listStudioMembers = defineRpc({
+  name: "studio.members",
+  input: z.object({ studioId: z.string().min(1) }),
+  output: z.object({
+    members: z.array(peerSchema),
+    unavailable: z.array(
+      z.object({ machine: z.string(), workspace: z.string(), reason: z.string() }),
+    ),
+  }),
 });

@@ -216,7 +216,7 @@ describe("mailbox in Chat", () => {
     };
     await f.coordinator.idle();
     const bob = f.turn(mailboxTurnId(sent.mailboxId));
-    await f.tool(bob.agentId, "reply", { mailboxId: sent.mailboxId, text: "Green." });
+    await f.tool(bob.agentId, "reply", { messageId: sent.mailboxId, text: "Green." });
     await f.answer(bob, "I replied with the tool.");
     const replies = f.ledger
       .listByRoot(f.ledger.get(sent.mailboxId)!.originRootId)
@@ -248,8 +248,8 @@ describe("mailbox in Chat", () => {
       mailboxId: string;
     };
     await expect(
-      f.tool(ada.agentId, "cancel_request", { mailboxId: sent.mailboxId }),
-    ).resolves.toEqual({ mailboxId: sent.mailboxId, status: "cancelled" });
+      f.tool(ada.agentId, "cancel_request", { messageId: sent.mailboxId }),
+    ).resolves.toEqual({ messageId: sent.mailboxId, status: "cancelled" });
     expect(f.turn(mailboxTurnId(sent.mailboxId)).status).toBe("cancelled");
   });
 

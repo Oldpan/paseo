@@ -2,6 +2,8 @@ import type { PaseoAgentPermissionResponse } from "@getpaseo/client";
 import type {
   ChatAgentSpec,
   ChildAgent,
+  DeliverOptions,
+  WorkspaceAgent,
   ExecutionPort,
   PermissionInfo,
   TaskSpec,
@@ -141,6 +143,44 @@ export class FakeExecution implements ExecutionPort {
     set.add(onChange);
     this.watchers.set(agentId, set);
     return () => void set.delete(onChange);
+  }
+  /** Studio workspaces: agents by `${serverId}\n${workspaceId}`. */
+  readonly workspaceAgents = new Map<string, WorkspaceAgent[]>();
+  readonly delivered: Array<{ serverId?: string; agentId: string; text: string } & DeliverOptions> =
+    [];
+  /** Fails the next delivery with this error; a pending promise models a hung host. */
+  failNextDelivery: Error | "hang" | null = null;
+  addWorkspaceAgent(serverId: string, workspaceId: string, id: string, title: string): void {
+    const key = `${serverId}\n${workspaceId}`;
+    this.workspaceAgents.set(key, [
+      ...(this.workspaceAgents.get(key) ?? []),
+      { id, title, workspaceId, archived: false },
+    ]);
+  }
+  async listWorkspaceAgents(serverId: string | undefined, workspaceId: string) {
+    return (
+      this.workspaceAgents.get(`${serverId ?? this.localServerId}\n${workspaceId}`) ?? []
+    ).filter((agent) => !agent.archived);
+  }
+  async agentInfo(serverId: string | undefined, agentId: string) {
+    for (const [key, agents] of this.workspaceAgents)
+      if (key.startsWith(`${serverId ?? this.localServerId}\n`)) {
+        const found = agents.find((agent) => agent.id === agentId);
+        if (found) return found;
+      }
+    return null;
+  }
+  async deliverMessage(
+    serverId: string | undefined,
+    agentId: string,
+    text: string,
+    options: DeliverOptions,
+  ): Promise<void> {
+    const failure = this.failNextDelivery;
+    this.failNextDelivery = null;
+    if (failure === "hang") return new Promise(() => {});
+    if (failure) throw failure;
+    this.delivered.push({ ...(serverId ? { serverId } : {}), agentId, text, ...options });
   }
   async dispose(): Promise<void> {}
 

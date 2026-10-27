@@ -38,6 +38,7 @@ import {
 } from "./execution";
 import { isPass } from "./projection";
 import { Mailbox } from "./mailbox";
+import { Studio } from "./studio";
 import {
   excerpt,
   eventMessageId,
@@ -142,6 +143,7 @@ export class Coordinator {
   private readonly fanout: Fanout;
   private readonly roundtable: Roundtable;
   readonly mailbox: Mailbox;
+  readonly studio: Studio;
   private mailboxTimer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
   private inboxTimer: ReturnType<typeof setTimeout> | null = null;
@@ -168,6 +170,16 @@ export class Coordinator {
     this.machines = options.machines;
     this.fanout = new Fanout(store, this.now);
     this.roundtable = new Roundtable(store, this.now);
+    this.studio = new Studio(store, {
+      port: () => this.port,
+      selfId: () => this.selfId(),
+      machineLabel: (serverId) => this.machineLabel(serverId),
+      online: async (serverId) =>
+        serverId === this.selfId() || !this.machines ? true : this.machines.online(serverId),
+      isExecution: (agentId) =>
+        Boolean(this.store.getChatSessionByAgent(agentId) ?? this.store.get("tasks", agentId)),
+      now: this.now,
+    });
     this.mailbox = new Mailbox(store, {
       now: this.now,
       cancelTurn: (turn) =>
@@ -325,8 +337,12 @@ export class Coordinator {
   }
   /** A machine's display name for assistants and tools; this daemon when absent. */
   machineLabel(serverId: string | undefined): string {
-    if (!serverId || serverId === this.selfServerId) return "the coordinator's machine";
-    return this.machineLabels.get(serverId) ?? serverId;
+    const id = serverId ?? this.selfId();
+    return this.machineLabels.get(id) ?? (id === this.selfId() ? "the coordinator's machine" : id);
+  }
+  /** This daemon's serverId; "local" until it is known (and in tests without machines). */
+  selfId(): string {
+    return this.selfServerId ?? "local";
   }
   /** Machines an assistant can be created on: this daemon and its member machines. */
   async machinesList(): Promise<Machine[]> {
@@ -674,8 +690,19 @@ export class Coordinator {
   onAgentGone(event: AgentEvent, reason: "archived" | "closed" = "closed"): void {
     this.settle(event.agent.id, { gone: reason });
   }
+  /** An agent appeared on this daemon; in a Studio workspace it is told how to collaborate. */
+  onAgentCreated(
+    event: { agent: { id: string; workspaceId: string | null; title: string | null } },
+    serverId = this.selfId(),
+  ): void {
+    const { agent } = event;
+    if (!agent.workspaceId || this.closed) return;
+    void this.studio
+      .noticeAgent(serverId, agent.workspaceId, agent)
+      .catch((error: unknown) => console.error("Bigbang Studio notice failed", error));
+  }
   /** A hook that fired on a member machine, relayed over its link. */
-  onMemberEvent(event: MemberEvent): void {
+  onMemberEvent(serverId: string, event: MemberEvent): void {
     const agent = { id: event.agentId };
     switch (event.name) {
       case "agent.turn_started":
@@ -695,6 +722,22 @@ export class Coordinator {
       case "agent.closed":
         return this.onAgentGone({ agent }, "closed");
       case "agent.created":
+        if (event.workspaceId)
+          void this.port
+            ?.agentInfo(serverId, event.agentId)
+            .then((info) =>
+              this.onAgentCreated(
+                {
+                  agent: {
+                    id: event.agentId,
+                    workspaceId: event.workspaceId,
+                    title: info?.title ?? null,
+                  },
+                },
+                serverId,
+              ),
+            )
+            .catch(() => undefined);
         return;
     }
   }

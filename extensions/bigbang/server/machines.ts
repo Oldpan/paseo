@@ -17,6 +17,8 @@ export interface MachinePort {
   /** The host's Bigbang plugin is linked to this coordinator right now. */
   isMember(serverId: string): boolean;
   list(): Promise<Machine[]>;
+  /** Whether a saved host is reachable now. */
+  online(serverId: string): Promise<boolean>;
   call<Input extends ZodType, Output extends ZodType>(
     serverId: string,
     contract: PluginRpcContract<Input, Output>,

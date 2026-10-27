@@ -16,6 +16,7 @@ function machines(members = new Set([SPARK])) {
   const port: MachinePort = {
     self: async () => "srv_mac",
     isMember: (serverId) => members.has(serverId),
+    online: async (serverId) => members.has(serverId),
     list: async () => [
       { serverId: "srv_mac", label: "Mac", role: "coordinator" },
       { serverId: SPARK, label: "Spark", role: members.has(SPARK) ? "member" : "unavailable" },
@@ -68,7 +69,7 @@ describe("assistants bound to a machine", () => {
 
     f.execution.say(turn.agentId, "Spark", `m-${turn.id}`);
     f.execution.finish(turn.agentId);
-    f.coordinator.onMemberEvent({
+    f.coordinator.onMemberEvent(SPARK, {
       seq: 1,
       type: "event",
       name: "agent.turn_ended",

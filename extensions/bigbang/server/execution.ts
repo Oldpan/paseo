@@ -53,6 +53,20 @@ export interface ChildAgent {
   active: boolean;
   createdAt: string;
 }
+/** An agent in a workspace, as Studio collaboration sees it. */
+export interface WorkspaceAgent {
+  id: string;
+  title: string | null;
+  workspaceId: string | null;
+  archived: boolean;
+}
+export interface DeliverOptions {
+  /** Recorded as the message's id in the recipient's timeline. */
+  messageId: string;
+  /** The agent the message comes from, so the recipient sees who wrote it. */
+  sourceAgentId?: string;
+  sourceAgentServerId?: string;
+}
 export interface AssistantHomes {
   get(assistantId: string): { workspaceId: string; directory: string } | null;
   put(home: { assistantId: string; workspaceId: string; directory: string }): void;
@@ -80,6 +94,16 @@ export interface ExecutionPort {
   createTaskAgent(task: TaskSpec, workspaceId: string): Promise<void>;
   /** Agents the execution started through Paseo, oldest first. */
   listChildren(agentId: string, serverId?: string): Promise<ChildAgent[]>;
+  /** Agents in a workspace on a host, archived ones excluded. */
+  listWorkspaceAgents(serverId: string | undefined, workspaceId: string): Promise<WorkspaceAgent[]>;
+  agentInfo(serverId: string | undefined, agentId: string): Promise<WorkspaceAgent | null>;
+  /** Sends a message into an agent without interrupting a turn in progress. */
+  deliverMessage(
+    serverId: string | undefined,
+    agentId: string,
+    text: string,
+    options: DeliverOptions,
+  ): Promise<void>;
   /** Calls `onChange` when the execution's state moves, for hosts whose hooks never fire here. */
   watch(serverId: string, agentId: string, onChange: () => void): Promise<() => void>;
   dispose(): Promise<void>;
@@ -307,6 +331,44 @@ export class PaseoExecution implements ExecutionPort {
         createdAt: agent.createdAt,
       }))
       .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  async listWorkspaceAgents(
+    serverId: string | undefined,
+    workspaceId: string,
+  ): Promise<WorkspaceAgent[]> {
+    const api = await this.on(serverId);
+    const result = await api.agents.list({ includeBackground: true, page: { limit: 200 } });
+    return result.entries
+      .filter(({ agent }) => agent.workspaceId === workspaceId && !agent.archivedAt)
+      .map(({ agent }) => ({
+        id: agent.id,
+        title: agent.title ?? null,
+        workspaceId: agent.workspaceId ?? null,
+        archived: false,
+      }));
+  }
+  async agentInfo(serverId: string | undefined, agentId: string): Promise<WorkspaceAgent | null> {
+    const agent = (await (await this.on(serverId)).agents.ref(agentId).refresh())?.agent;
+    if (!agent) return null;
+    return {
+      id: agent.id,
+      title: agent.title ?? null,
+      workspaceId: agent.workspaceId ?? null,
+      archived: Boolean(agent.archivedAt),
+    };
+  }
+  async deliverMessage(
+    serverId: string | undefined,
+    agentId: string,
+    text: string,
+    options: DeliverOptions,
+  ): Promise<void> {
+    await (await this.on(serverId)).agents.ref(agentId).send(text, {
+      messageId: options.messageId,
+      activeTurnBehavior: "steer",
+      ...(options.sourceAgentId ? { sourceAgentId: options.sourceAgentId } : {}),
+      ...(options.sourceAgentServerId ? { sourceAgentServerId: options.sourceAgentServerId } : {}),
+    });
   }
   async watch(serverId: string, agentId: string, onChange: () => void): Promise<() => void> {
     const api = await this.on(serverId);
