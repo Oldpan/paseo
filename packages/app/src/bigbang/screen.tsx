@@ -443,6 +443,7 @@ export function BigbangScreen() {
             <RetainedPanel active={!form && mode === "studio"}>
               <Studio
                 palette={palette}
+                data={data}
                 active={!form && mode === "studio"}
                 onAdd={showWorkspaces}
                 onSidebar={compact ? showSidebar : undefined}

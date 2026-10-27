@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { ResourceChoice } from "./ui/ResourceChoice";
 import { RetainedPanel } from "@/components/retained-panel";
@@ -10,6 +10,8 @@ import { useBigbangView } from "./store";
 import { StudioBar, WorkspaceChrome, StudioEmpty } from "./ui/StudioChrome";
 import { studioKey, type StudioColumn } from "./model";
 import type { Palette } from "./palette";
+import type { BigbangData } from "./data";
+import { Collaboration } from "./collaboration";
 
 const FILL = { flex: 1, minHeight: 0 };
 const HORIZONTAL = { flexDirection: "row", flex: 1 } as const;
@@ -18,14 +20,20 @@ const SCROLL_CONTENT = { flexGrow: 1 };
 export function Studio({
   palette,
   active,
+  data,
   onAdd,
   onSidebar,
 }: {
   palette: Palette;
   active: boolean;
+  /** The Chat ledger, which holds the Studios that collaborate across machines. */
+  data: BigbangData;
   onAdd(): void;
   onSidebar?(): void;
 }) {
+  const [collaborating, setCollaborating] = useState(false);
+  const openCollaboration = useCallback(() => setCollaborating(true), []);
+  const closeCollaboration = useCallback(() => setCollaborating(false), []);
   const columns = useBigbangView((state) => state.columns);
   const activeKey = useBigbangView((state) => state.activeColumn);
   const compact = useIsCompactFormFactor();
@@ -45,24 +53,37 @@ export function Studio({
         onClose={close}
         onAdd={onAdd}
         onSidebar={onSidebar}
+        onCollaborate={openCollaboration}
       />
       {!columns.length ? <StudioEmpty onAdd={onAdd} /> : null}
-      <ScrollView horizontal style={FILL} contentContainerStyle={SCROLL_CONTENT}>
-        <View style={HORIZONTAL}>
-          {columns.map((column) => (
-            <StudioWorkspace
-              key={studioKey(column)}
-              column={column}
-              palette={palette}
-              compact={compact}
-              selected={studioKey(column) === activeKey}
-              visible={
-                active && (compact ? studioKey(column) === activeKey : column.group === activeGroup)
-              }
-            />
-          ))}
-        </View>
-      </ScrollView>
+      <View style={HORIZONTAL}>
+        <ScrollView horizontal style={FILL} contentContainerStyle={SCROLL_CONTENT}>
+          <View style={HORIZONTAL}>
+            {columns.map((column) => (
+              <StudioWorkspace
+                key={studioKey(column)}
+                column={column}
+                palette={palette}
+                compact={compact}
+                selected={studioKey(column) === activeKey}
+                visible={
+                  active &&
+                  (compact ? studioKey(column) === activeKey : column.group === activeGroup)
+                }
+              />
+            ))}
+          </View>
+        </ScrollView>
+        {collaborating ? (
+          <Collaboration
+            data={data}
+            group={activeGroup}
+            columns={columns}
+            compact={compact}
+            onClose={closeCollaboration}
+          />
+        ) : null}
+      </View>
     </View>
   );
 }

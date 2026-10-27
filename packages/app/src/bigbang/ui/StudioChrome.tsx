@@ -13,6 +13,7 @@ export function StudioBar({
   onClose,
   onAdd,
   onSidebar,
+  onCollaborate,
 }: {
   columns: StudioColumn[];
   active: string | null;
@@ -20,6 +21,8 @@ export function StudioBar({
   onClose(key: string): void;
   onAdd(): void;
   onSidebar?(): void;
+  /** Opens the collaboration panel for the active tab group (Paseo addition). */
+  onCollaborate?(): void;
 }) {
   const { palette: t, name } = useTheme();
   const groups = [...new Set(columns.map((column) => column.group))];
@@ -47,6 +50,7 @@ export function StudioBar({
         ) : null}
         <BoxesIcon color={t.brandAccent} size={18} />
         <Text style={type(t.textPrimary, 14, { fontWeight: "700", flex: 1 })}>Studio</Text>
+        {onCollaborate ? <Chip onPress={onCollaborate}>Collaboration</Chip> : null}
         <Chip onPress={onAdd}>Add workspace</Chip>
       </View>
       <ScrollView

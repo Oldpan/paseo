@@ -210,12 +210,20 @@ export class MailboxLedger {
   private readonly maxNewPeersPerRoot: number;
   private readonly now: () => number;
 
+  private readonly onChange: ((record: MailboxMessage) => void) | undefined;
+
   constructor(
     private readonly store: ChatStore,
-    options: { maxNewPeersPerRoot?: number; now?: () => number } = {},
+    options: {
+      maxNewPeersPerRoot?: number;
+      now?: () => number;
+      /** Called for every row a write changes, inside the write's transaction. */
+      onChange?: (record: MailboxMessage) => void;
+    } = {},
   ) {
     this.maxNewPeersPerRoot = options.maxNewPeersPerRoot ?? 1;
     this.now = options.now ?? Date.now;
+    this.onChange = options.onChange;
     store.database.exec(SCHEMA);
   }
 
@@ -297,7 +305,7 @@ export class MailboxLedger {
         if (raced?.payloadFingerprint === fingerprint) return { record: raced, created: false };
         fail("idempotency_conflict", "idempotency key reused with a different payload fingerprint");
       }
-      return { record: this.requireMessage(mailboxId), created: true };
+      return { record: this.notify(mailboxId), created: true };
     });
   }
 
@@ -403,7 +411,7 @@ export class MailboxLedger {
         fail("idempotency_conflict", "idempotency key reused with a different payload fingerprint");
       }
       return {
-        record: this.requireMessage(mailboxId),
+        record: this.notify(mailboxId),
         wakeup: wakeupId ? this.requireWakeup(wakeupId) : null,
         created: true,
       };
@@ -436,7 +444,7 @@ export class MailboxLedger {
              delivered_at=?, updated_at=? WHERE mailbox_id=?`,
         )
         .run(input.targetSessionId, input.targetTurnId ?? null, now, now, mailboxId);
-      return this.requireMessage(mailboxId);
+      return this.notify(mailboxId);
     });
   }
 
@@ -450,7 +458,7 @@ export class MailboxLedger {
              WHERE mailbox_id=?`,
         )
         .run(input.targetTurnId, now, now, mailboxId);
-      return this.requireMessage(mailboxId);
+      return this.notify(mailboxId);
     });
   }
 
@@ -464,7 +472,7 @@ export class MailboxLedger {
              WHERE mailbox_id=?`,
         )
         .run(reason, now, now, mailboxId);
-      return this.requireMessage(mailboxId);
+      return this.notify(mailboxId);
     });
   }
 
@@ -477,7 +485,7 @@ export class MailboxLedger {
            WHERE mailbox_id=?`,
       )
       .run(now, now, mailboxId);
-    return this.requireMessage(mailboxId);
+    return this.notify(mailboxId);
   }
 
   cancel(mailboxId: string): MailboxMessage {
@@ -490,7 +498,7 @@ export class MailboxLedger {
       const now = this.now();
       this.applyCancel(mailboxId, now);
       this.fencePendingWakeupsForRequest(mailboxId, now);
-      return this.requireMessage(mailboxId);
+      return this.notify(mailboxId);
     });
   }
 
@@ -701,6 +709,7 @@ export class MailboxLedger {
              updated_at=? WHERE mailbox_id=?`,
         )
         .run(input.turnId, now, now, reply.mailboxId);
+      this.notify(reply.mailboxId);
       return this.requireWakeup(wakeupId);
     });
   }
@@ -730,6 +739,7 @@ export class MailboxLedger {
                  updated_at=? WHERE mailbox_id=?`,
             )
             .run(error, now, now, reply.mailboxId);
+        this.notify(reply.mailboxId);
       }
       return this.requireWakeup(wakeupId);
     });
@@ -778,6 +788,7 @@ export class MailboxLedger {
         "UPDATE mailbox_messages SET status='cancelled', cancelled_at=?, updated_at=? WHERE mailbox_id=?",
       )
       .run(now, now, mailboxId);
+    this.notify(mailboxId);
   }
 
   private fenceWakeupAndCancelReply(wakeupId: string, replyMailboxId: string, now: number): void {
@@ -798,6 +809,13 @@ export class MailboxLedger {
       .all(requestMailboxId) as Array<{ wakeupId: string; replyMailboxId: string }>;
     for (const wakeup of pending)
       this.fenceWakeupAndCancelReply(wakeup.wakeupId, wakeup.replyMailboxId, now);
+  }
+
+  // Tells the owner a row changed, inside the same transaction, so a projection stays atomic.
+  private notify(mailboxId: string): MailboxMessage {
+    const record = this.requireMessage(mailboxId);
+    this.onChange?.(record);
+    return record;
   }
 
   private requireMessage(mailboxId: string): MailboxMessage {

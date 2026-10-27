@@ -193,6 +193,7 @@ export class Coordinator {
       now: this.now,
       studio: this.studio,
       background: (work) => void this.queue.run("studio-answers", work),
+      machineLabel: (serverId) => this.machineLabel(serverId),
       cancelTurn: (turn) =>
         void this.queue.run(agentKey(turn.agentId), async () => {
           await this.port?.cancel(turn.agentId, this.serverFor(turn));

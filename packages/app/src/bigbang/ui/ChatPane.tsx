@@ -65,6 +65,7 @@ export function ChatPane({
   onTask,
   group,
   locked = false,
+  peers,
 }: {
   rows: MessageRow[];
   turns: LiveTurn[];
@@ -81,6 +82,8 @@ export function ChatPane({
   group?: GroupComposerState;
   /** The composer cannot send (a task thread whose task takes no follow-up). */
   locked?: boolean;
+  /** Peer requests this lane has open (Paseo-hosted mailbox and Studio traffic). */
+  peers?: ReactNode;
 }) {
   const { palette: t } = useTheme();
   const list = useRef<ScrollView>(null);
@@ -147,6 +150,7 @@ export function ChatPane({
         {turns.map((item) => (
           <View key={item.turn.id}>{item.node}</View>
         ))}
+        {peers}
         {!rows.length ? (
           <View
             style={{

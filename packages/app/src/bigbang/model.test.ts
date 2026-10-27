@@ -37,6 +37,21 @@ describe("Bigbang data ownership", () => {
     );
   });
 
+  it("merges Studios and peer messages, and accepts a coordinator that sends neither", () => {
+    const studio = { id: "s1", name: "Lab", status: "active", workspaces: [], createdAt: 0 };
+    const first = mergeChatState(EMPTY_CHAT_STATE, {
+      ...EMPTY_CHAT_STATE,
+      cursor: 1,
+      studios: [studio],
+    });
+    const old = { ...EMPTY_CHAT_STATE, cursor: 2 };
+    delete (old as Partial<typeof old>).studios;
+    delete (old as Partial<typeof old>).peerMessages;
+    const next = mergeChatState(first, old);
+    expect(next.studios).toEqual([studio]);
+    expect(next.peerMessages).toEqual([]);
+  });
+
   it("orders messages by seq, with rows that predate seq first by time", () => {
     const row = (id: string, createdAt: number, seq?: number): Message => ({
       id,

@@ -23,6 +23,8 @@ import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane } from "./ui/ChatPane";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
 import { LiveTurnItem } from "./live-turn-item";
+import { openExchanges } from "./peer-activity";
+import { PeerActivity } from "./ui/PeerActivity";
 import { useAssistantMemory } from "./memory";
 import { isNoteMessage, sortMessages } from "./model";
 import {
@@ -428,6 +430,14 @@ function ConversationPane({
       [coordinatorId, turns],
     ),
   );
+  const exchanges = useMemo(
+    () => openExchanges(data.state.peerMessages ?? [], chatId, threadId),
+    [chatId, data.state.peerMessages, threadId],
+  );
+  const peers = useMemo(
+    () => (exchanges.length > 0 ? <PeerActivity items={exchanges} /> : null),
+    [exchanges],
+  );
   const hintDraft = useDebouncedValue(draft, HINT_DEBOUNCE_MS);
   const hint = useMemo(
     () =>
@@ -513,6 +523,7 @@ function ConversationPane({
       onTask={onTask}
       group={group}
       locked={followUp ? !followUp.allowed : false}
+      peers={peers}
     />
   );
 }

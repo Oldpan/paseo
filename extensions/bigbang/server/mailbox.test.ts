@@ -86,6 +86,21 @@ describe("mailbox in Chat", () => {
     expect(wakeup).toMatchObject({ conversationId: f.adaDm.id, assistantId: f.ada!.id });
     expect(f.sentTo(wakeup)).toContain("[System: Mailbox replies] 1 internal reply");
     expect(f.sentTo(wakeup)).toContain("Yes, main is green.");
+    // The app sees the exchange beside Ada's lane.
+    expect(
+      f.store
+        .snapshot()
+        .peerMessages?.map((row) => [
+          row.kind,
+          row.sender?.name,
+          row.recipient.name,
+          row.status,
+          row.conversationId,
+        ]),
+    ).toEqual([
+      ["request", "Ada", "Bob", "acked", f.adaDm.id],
+      ["reply", "Bob", "Ada", "delivered", f.adaDm.id],
+    ]);
     await f.answer(wakeup, "Bob says main is green.");
     expect(f.finals().map((message) => message.content)).toEqual([
       "I asked Bob; I'll tell you when he answers.",

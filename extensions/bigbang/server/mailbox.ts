@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Assistant, Turn } from "../shared/contracts";
+import type { Assistant, Peer, Turn } from "../shared/contracts";
 import { isMailboxLane, mailboxLaneId, queueTurn } from "./chat-sessions";
 import {
   MailboxError,
@@ -43,6 +43,8 @@ export interface MailboxDeps {
   studio?: StudioBridge;
   /** Runs background coordination where the coordinator waits for it (its queue). */
   background?(work: () => Promise<void>): void;
+  /** A machine's display name, for the projected peers. */
+  machineLabel?(serverId: string | undefined): string;
 }
 /** What the mailbox needs from the Studio to cross between Chat and Studio. */
 export interface StudioBridge {
@@ -122,7 +124,51 @@ export class Mailbox {
   ) {
     this.now = deps.now ?? Date.now;
     this.admissionMaxWaitMs = deps.admissionMaxWaitMs ?? DEFAULT_ADMISSION_MAX_WAIT_MS;
-    this.ledger = new MailboxLedger(store, { now: this.now });
+    this.ledger = new MailboxLedger(store, {
+      now: this.now,
+      onChange: (record) => this.project(record),
+    });
+  }
+
+  // The app shows mailbox traffic beside the chat lane that asked, from the synced snapshot.
+  private project(record: MailboxMessage): void {
+    this.store.put("peerMessages", {
+      id: record.mailboxId,
+      ledger: "mailbox",
+      kind: record.kind,
+      studioId: record.studioId,
+      sender: this.describe(record.senderKey),
+      recipient: this.describe(record.recipientKey),
+      text: record.payloadText,
+      replyTo: record.replyToMailboxId,
+      status: record.status,
+      ...(record.failureReason ? { code: record.failureReason } : {}),
+      ...(record.outcome ? { detail: record.outcome } : {}),
+      conversationId: record.originConversationId,
+      threadId: record.originThreadId,
+      createdAt: record.createdAt,
+    });
+  }
+
+  private describe(key: string): Peer {
+    const assistant = this.store.get("assistants", assistantIdOfKey(key) ?? "");
+    if (assistant)
+      return {
+        key,
+        kind: "assistant",
+        name: assistant.name,
+        ...(assistant.serverId ? { serverId: assistant.serverId } : {}),
+        ...(this.deps.machineLabel ? { machine: this.deps.machineLabel(assistant.serverId) } : {}),
+      };
+    const address = this.deps.studio?.addressOf(key) ?? null;
+    const agent = agentOfKey(key);
+    return {
+      key,
+      kind: "agent",
+      name: address?.split("/").at(-1) ?? agent?.agentId.slice(0, 8) ?? key,
+      ...(agent ? { serverId: agent.serverId } : {}),
+      ...(address ? { address, machine: address.split("/")[0] } : {}),
+    };
   }
 
   /** Resolves an assistant by id, key or unique name (an optional leading @ is ignored). */
