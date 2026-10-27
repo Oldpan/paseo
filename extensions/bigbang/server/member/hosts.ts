@@ -25,7 +25,13 @@ export function hostDirectory(api: PaseoApi): HostDirectoryPort & { dispose(): P
       const directory = await api.hosts.list();
       return directory.hosts.flatMap((host) =>
         host.serverId && host.enabled
-          ? [{ serverId: host.serverId, online: host.status === "online" }]
+          ? [
+              {
+                serverId: host.serverId,
+                label: host.label ?? host.serverId,
+                online: host.status === "online",
+              },
+            ]
           : [],
       );
     },

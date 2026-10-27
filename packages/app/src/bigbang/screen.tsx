@@ -6,7 +6,7 @@ import { useRouter } from "expo-router";
 import { BigbangInput as FormTextInput, FormFrame } from "./ui/FormChrome";
 import { ResourceChoice } from "./ui/ResourceChoice";
 import { RetainedPanel } from "@/components/retained-panel";
-import { useHosts, useHostRuntimeClient, getHostRuntimeStore } from "@/runtime/host-runtime";
+import { useHosts, getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
@@ -14,11 +14,13 @@ import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
 import {
   createConversation,
   saveAssistant,
+  type Assistant,
+  type MachineInfo,
   startTask,
   type Task,
   type Turn,
 } from "../../../../extensions/bigbang/shared/contracts";
-import { useBigbangData } from "./data";
+import { useAssistantMachines, useBigbangData } from "./data";
 import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
 import { taskTitle } from "./task-view";
 import { useBigbangTitle, chatReadError } from "./title";
@@ -56,6 +58,52 @@ const ASSISTANT_FIELDS = [
   { name: "memory", label: "Initial memory", initial: "", multiline: true },
 ];
 
+function assistantFormFields(input: {
+  assistant: Assistant | undefined;
+  editing: string | null;
+  coordinatorId: string;
+  hosts: Array<{ serverId: string; label: string }>;
+  formIds: ReturnType<typeof freshFormIds>;
+  machines: MachineInfo[];
+}) {
+  const { assistant, editing, coordinatorId, hosts, formIds, machines } = input;
+  const machineId = assistant?.serverId ?? coordinatorId;
+  return [
+    { name: "id", label: "", initial: editing ?? formIds.assistant, hidden: true },
+    { name: "chatId", label: "", initial: formIds.chat, hidden: true },
+    // The model list follows the machine: a new assistant picks one; an existing one keeps its own.
+    {
+      name: "server",
+      label: "Machine",
+      initial: machineId,
+      hidden: Boolean(editing) || machines.length < 2,
+      options: machines
+        .filter((machine) => machine.role === "coordinator" || machine.role === "member")
+        .map((machine) => ({
+          id: machine.serverId,
+          value: machine.serverId,
+          label: machine.label,
+        })),
+    },
+    ...ASSISTANT_FIELDS.filter((field) => !editing || field.name !== "memory").map((field) => ({
+      name: field.name,
+      label: field.label,
+      modelHost: field.name === "provider" ? machineId : undefined,
+      multiline: field.multiline,
+      initial: assistant?.[field.name as "name" | "provider" | "persona"] ?? "",
+    })),
+    {
+      name: "autonomy",
+      label: "Tasks",
+      initial: serializeAutonomy(assistant?.autonomy),
+      autonomy: {
+        hosts: hosts.map((host) => ({ value: host.serverId, label: host.label })),
+        defaultHost: coordinatorId,
+      },
+    },
+  ];
+}
+
 // Option value for "no default responder": a plain message then goes to the first member.
 const NO_DEFAULT_RESPONDER = "first";
 
@@ -71,7 +119,6 @@ export function BigbangScreen() {
   const chatId = useBigbangView((state) => state.chatId);
   const mode = useBigbangView((state) => state.mode);
   const setMode = useBigbangView((state) => state.setMode);
-  const client = useHostRuntimeClient(coordinatorId);
   const data = useBigbangData(coordinatorId);
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
   useBigbangTitle(mode, conversationTitle);
@@ -125,35 +172,10 @@ export function BigbangScreen() {
       .openColumn({ serverId, workspaceId, name: taskTitle(task).slice(0, 40), group: "Tasks" });
   }, []);
   const openTurn = useCallback(
-    (turn: Turn) => {
-      if (!client) return;
-      void client
-        .fetchAgent({ agentId: turn.agentId })
-        .then((result) => {
-          if (!result?.agent.workspaceId)
-            throw new Error("Execution workspace is not available yet.");
-          const workspaceId = result.agent.workspaceId;
-          prepareWorkspaceTab(
-            {
-              serverId: coordinatorId,
-              workspaceId,
-              target: { kind: "agent", agentId: turn.agentId },
-              pin: true,
-            },
-            { openTab: useWorkspaceLayoutStore.getState().deferOpenTab },
-          );
-          useBigbangView.getState().openColumn({
-            serverId: coordinatorId,
-            workspaceId,
-            name: "Assistant process",
-            group: "Chat",
-          });
-          return getHostRuntimeStore().prepareWorkspaceRoute(coordinatorId, workspaceId);
-        })
-        .catch((failure: Error) => setError(failure.message));
-    },
-    [client, coordinatorId],
+    (turn: Turn) => openTurnProcess(turn, coordinatorId, setError),
+    [coordinatorId],
   );
+  const machines = useAssistantMachines(data.invoke, form, editing);
   const assistant = data.state.assistants.find((item) => item.id === editing);
   const save = useCallback(
     async (values: Record<string, string>) => {
@@ -170,11 +192,14 @@ export function BigbangScreen() {
           autonomy,
           (serverId) => hosts.find((host) => host.serverId === serverId)?.label,
         );
+        // The machine is chosen once, at creation; edits resend it unchanged.
+        const serverId = editing ? assistant?.serverId : values.server;
         await data.call(saveAssistant, {
           id,
           name: values.name,
           provider: values.provider,
           persona: values.persona,
+          ...(serverId && serverId !== coordinatorId ? { serverId } : {}),
           ...(normalized ? { autonomy: normalized } : {}),
           // Only seeds MEMORY.md for a new assistant; an existing one edits it in the Memory tab.
           ...(editing ? {} : { memory: values.memory }),
@@ -231,7 +256,7 @@ export function BigbangScreen() {
       }
       close();
     },
-    [changeChat, chatId, close, data, editing, form, hosts],
+    [assistant, changeChat, chatId, close, coordinatorId, data, editing, form, hosts],
   );
   const selectChat = useCallback(
     (id: string) => {
@@ -261,27 +286,8 @@ export function BigbangScreen() {
     [close, hosts],
   );
   const assistantFields = useMemo(
-    () => [
-      { name: "id", label: "", initial: editing ?? formIds.assistant, hidden: true },
-      { name: "chatId", label: "", initial: formIds.chat, hidden: true },
-      ...ASSISTANT_FIELDS.filter((field) => !editing || field.name !== "memory").map((field) => ({
-        name: field.name,
-        label: field.label,
-        modelHost: field.name === "provider" ? coordinatorId : undefined,
-        multiline: field.multiline,
-        initial: assistant?.[field.name as "name" | "provider" | "persona"] ?? "",
-      })),
-      {
-        name: "autonomy",
-        label: "Tasks",
-        initial: serializeAutonomy(assistant?.autonomy),
-        autonomy: {
-          hosts: hosts.map((host) => ({ value: host.serverId, label: host.label })),
-          defaultHost: coordinatorId,
-        },
-      },
-    ],
-    [assistant, editing, coordinatorId, hosts, formIds],
+    () => assistantFormFields({ assistant, editing, coordinatorId, hosts, formIds, machines }),
+    [assistant, editing, coordinatorId, hosts, formIds, machines],
   );
   const groupFields = useMemo(
     () => [
@@ -533,6 +539,31 @@ function FormHost({
       ) : null}
     </>
   );
+}
+
+// Opens a chat execution in Studio. An assistant bound to another machine runs its executions there.
+function openTurnProcess(turn: Turn, coordinatorId: string, setError: (error: string) => void) {
+  const serverId = turn.serverId ?? coordinatorId;
+  const host = getHostRuntimeStore().getClient(serverId);
+  if (!host) {
+    setError("That assistant's machine is not connected in this app. Add it as a host first.");
+    return;
+  }
+  void host
+    .fetchAgent({ agentId: turn.agentId })
+    .then((result) => {
+      if (!result?.agent.workspaceId) throw new Error("Execution workspace is not available yet.");
+      const workspaceId = result.agent.workspaceId;
+      prepareWorkspaceTab(
+        { serverId, workspaceId, target: { kind: "agent", agentId: turn.agentId }, pin: true },
+        { openTab: useWorkspaceLayoutStore.getState().deferOpenTab },
+      );
+      useBigbangView
+        .getState()
+        .openColumn({ serverId, workspaceId, name: "Assistant process", group: "Chat" });
+      return getHostRuntimeStore().prepareWorkspaceRoute(serverId, workspaceId);
+    })
+    .catch((failure: Error) => setError(failure.message));
 }
 
 function freshFormIds() {

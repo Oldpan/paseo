@@ -20,7 +20,11 @@ function directory(members: Record<string, FakeMember>): HostDirectoryPort {
   return {
     self: async () => "srv_coord",
     list: async () =>
-      Object.entries(members).map(([serverId, member]) => ({ serverId, online: member.online })),
+      Object.entries(members).map(([serverId, entry]) => ({
+        serverId,
+        label: serverId,
+        online: entry.online,
+      })),
     invoke: async (serverId, method, input) => {
       const member = members[serverId];
       if (!member?.online) throw new Error("host offline");

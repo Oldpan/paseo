@@ -84,3 +84,28 @@ export const memberRespond = defineRpc({
   // False when the call already timed out on the member; the agent was told the outcome is unknown.
   output: z.object({ accepted: z.boolean() }),
 });
+
+const assistantHomeInput = z.object({
+  assistantId: z.string().uuid(),
+  // The private `home` subdirectory, used when the daemon reused a visible workspace for the root.
+  subdirectory: z.boolean().optional(),
+});
+export const memberHomePrepare = defineRpc({
+  name: "member.home.prepare",
+  input: assistantHomeInput.extend({ seed: z.string().max(1_000_000) }),
+  output: z.object({ directory: z.string() }),
+});
+const memoryOutput = z.object({ content: z.string(), mtimeMs: z.number() });
+export const memberMemoryRead = defineRpc({
+  name: "member.memory.read",
+  input: assistantHomeInput,
+  output: memoryOutput,
+});
+export const memberMemoryWrite = defineRpc({
+  name: "member.memory.write",
+  input: assistantHomeInput.extend({
+    content: z.string().max(1_000_000),
+    expectedMtimeMs: z.number(),
+  }),
+  output: memoryOutput,
+});

@@ -6,6 +6,9 @@ export const assistantSchema = z.object({
   name: z.string().min(1),
   provider: z.string().regex(/^[^/]+\/.+$/),
   persona: z.string(),
+  // The machine (serverId) the assistant's executions and home live on, fixed at creation.
+  // Absent means the Chat coordinator's own machine.
+  serverId: z.string().min(1).optional(),
   // Deprecated: long-term memory lives in the assistant's MEMORY.md; read and write it with
   // chat.assistant.memory.*. Kept so older clients keep parsing.
   memory: z.string().optional(),
@@ -147,6 +150,8 @@ export const turnSchema = z.object({
   triggerId: z.string().optional(),
   seenUserId: z.string().optional(),
   chatSessionId: z.string().optional(),
+  // The machine the turn's execution runs on; absent means the coordinator's own machine.
+  serverId: z.string().optional(),
   contextThroughId: z.string().optional(),
   conversationId: z.string(),
   threadId: z.string().nullable(),
@@ -264,4 +269,18 @@ export const respondTaskPermission = defineRpc({
     message: z.string().optional(),
   }),
   output: taskSchema,
+});
+export const machineSchema = z.object({
+  serverId: z.string(),
+  label: z.string(),
+  // coordinator: the machine holding Chat; member: its Bigbang plugin serves this coordinator.
+  role: z.string(),
+  reason: z.string().optional(),
+});
+export type MachineInfo = z.infer<typeof machineSchema>;
+/** Machines an assistant can be created on; new assistants pick one, and it never changes. */
+export const listMachines = defineRpc({
+  name: "chat.machines",
+  input: z.object({}),
+  output: z.object({ machines: z.array(machineSchema) }),
 });

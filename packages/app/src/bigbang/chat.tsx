@@ -7,6 +7,7 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
+import { useShallow } from "zustand/shallow";
 import {
   sendMessage,
   cancelTask,
@@ -404,7 +405,7 @@ function ConversationPane({
             turn,
             node: (
               <LiveTurnItem
-                serverId={coordinatorId}
+                serverId={turn.serverId ?? coordinatorId}
                 turn={turn}
                 name={assistant?.name ?? "Assistant"}
                 seed={`${assistant?.id}:${assistant?.name}`}
@@ -416,9 +417,16 @@ function ConversationPane({
     [chatId, coordinatorId, data, onOpenTurn, threadId],
   );
   useLiveTurnDemand(
-    coordinatorId,
     `bigbang:${draftKey}`,
-    useMemo(() => turns.map((item) => item.turn.agentId), [turns]),
+    useMemo(
+      () =>
+        turns.map((item) => ({
+          // An assistant bound to another machine streams from that machine's session.
+          serverId: item.turn.serverId ?? coordinatorId,
+          agentId: item.turn.agentId,
+        })),
+      [coordinatorId, turns],
+    ),
   );
   const hintDraft = useDebouncedValue(draft, HINT_DEBOUNCE_MS);
   const hint = useMemo(
@@ -514,25 +522,46 @@ function ConversationPane({
  * stream to read. Same contract as the workspace screen: replace this owner's visible agents, and
  * clear them when the pane unmounts or its panel is hidden.
  */
-function useLiveTurnDemand(serverId: string, owner: string, agentIds: string[]) {
-  const viewedTimelineSync = useSessionStore(
-    (state) => state.sessions[serverId]?.viewedTimelineSync ?? null,
-  );
+function useLiveTurnDemand(
+  owner: string,
+  executions: Array<{ serverId: string; agentId: string }>,
+) {
   const panelActive = useRetainedPanelActive();
-  // Keyed by content: `agentIds` is a new array whenever the ledger changes, the demand is not.
-  const demandKey = panelActive ? [...new Set(agentIds)].sort().join("\n") : "";
-  const demanded = useMemo(() => (demandKey ? demandKey.split("\n") : []), [demandKey]);
+  // Keyed by content: the list is a new array whenever the ledger changes, the demand is not.
+  const demandKey = panelActive
+    ? [...new Set(executions.map((item) => `${item.serverId}\t${item.agentId}`))].sort().join("\n")
+    : "";
+  const demanded = useMemo(
+    () =>
+      demandKey
+        ? demandKey.split("\n").map((line) => {
+            const [serverId = "", agentId = ""] = line.split("\t");
+            return { serverId, agentId };
+          })
+        : [],
+    [demandKey],
+  );
+  const servers = useMemo(() => [...new Set(demanded.map((item) => item.serverId))], [demanded]);
+  const syncs = useSessionStore(
+    useShallow((state) => servers.map((serverId) => state.sessions[serverId]?.viewedTimelineSync)),
+  );
   useEffect(() => {
-    for (const agentId of demanded) {
+    for (const { serverId, agentId } of demanded) {
       void getHostRuntimeStore()
         .prepareAgentTimeline(serverId, agentId)
         .catch(() => undefined);
     }
-  }, [demanded, serverId]);
+  }, [demanded]);
+  // Each pass clears what the previous one set, so a machine that drops out loses its demand too.
   useLayoutEffect(() => {
-    viewedTimelineSync?.replaceVisibleAgentIds(owner, demanded);
-  }, [demanded, owner, viewedTimelineSync]);
-  useEffect(() => {
-    return () => viewedTimelineSync?.replaceVisibleAgentIds(owner, []);
-  }, [owner, viewedTimelineSync]);
+    servers.forEach((serverId, index) =>
+      syncs[index]?.replaceVisibleAgentIds(
+        owner,
+        demanded.filter((item) => item.serverId === serverId).map((item) => item.agentId),
+      ),
+    );
+    return () => {
+      for (const sync of syncs) sync?.replaceVisibleAgentIds(owner, []);
+    };
+  }, [demanded, owner, servers, syncs]);
 }

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { RpcInput, RpcOutput } from "@getpaseo/plugin";
@@ -18,7 +17,14 @@ import {
   writeAssistantMemory,
 } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS, type TaskLimits } from "../shared/settings";
-import type { MemberEvent } from "../shared/member";
+import {
+  memberHomePrepare,
+  memberMemoryRead,
+  memberMemoryWrite,
+  type MemberEvent,
+} from "../shared/member";
+import { assistantRoot, prepareHome, readMemory, writeMemory } from "./assistant-files";
+import type { Machine, MachinePort } from "./machines";
 import { ChatStore } from "./store";
 import { queueTurn, restoreChatSessions } from "./chat-sessions";
 import { Fanout } from "./fanout";
@@ -85,6 +91,8 @@ export interface CoordinatorOptions {
   now?: () => number;
   /** Task limits; the plugin settings replace them with `setLimits`. */
   limits?: TaskLimits;
+  /** Member machines; without it, every assistant runs on this daemon. */
+  machines?: MachinePort;
 }
 interface Finish {
   outcome?: TurnEndedEvent["outcome"];
@@ -139,6 +147,8 @@ export class Coordinator {
   private recovered = false;
   private limits: TaskLimits;
   private readonly sweepMs: number;
+  private readonly machines: MachinePort | undefined;
+  private selfServerId: string | undefined;
   constructor(
     readonly store: ChatStore,
     private readonly home: string,
@@ -149,6 +159,7 @@ export class Coordinator {
     this.sweepMs = options.sweepMs ?? DEFAULT_SWEEP_MS;
     this.now = options.now ?? Date.now;
     this.limits = options.limits ?? DEFAULT_TASK_LIMITS;
+    this.machines = options.machines;
     this.fanout = new Fanout(store, this.now);
     this.roundtable = new Roundtable(store, this.now);
     this.dispatcher = new Dispatcher({
@@ -165,11 +176,17 @@ export class Coordinator {
   attach(api?: PaseoApi): void {
     if (this.closed) return;
     if (api && !this.injected && !this.port) {
-      this.port = new PaseoExecution(api, this.home, {
+      this.port = new PaseoExecution(api, {
         get: (id) => this.store.getAssistantHome(id),
         put: (home) => this.store.putAssistantHome(home),
+        prepare: (assistantId, subdirectory) =>
+          this.prepareAssistantHome(assistantId, subdirectory),
       });
     }
+    void this.machines?.self().then(
+      (serverId) => (this.selfServerId = serverId),
+      (error: unknown) => console.error("Bigbang could not read its own serverId", error),
+    );
     if (this.recovered || !this.port) return;
     this.recovered = true;
     restoreChatSessions(this.store);
@@ -193,28 +210,99 @@ export class Coordinator {
     if (this.closed) throw new Error("The Chat coordinator is shutting down.");
     return this.store.snapshot(after, generation);
   }
+  // The machine an assistant's executions run on; undefined is this daemon.
+  private machineOf(assistant: Pick<Assistant, "serverId">): string | undefined {
+    const serverId = assistant.serverId;
+    return serverId && serverId !== this.selfServerId ? serverId : undefined;
+  }
   private assistantDirectory(assistantId: string): string {
     return (
-      this.store.getAssistantHome(assistantId)?.directory ??
-      path.join(this.home, "assistants", assistantId)
+      this.store.getAssistantHome(assistantId)?.directory ?? assistantRoot(this.home, assistantId)
     );
   }
-  saveAssistant(input: Assistant): Assistant {
+  saveAssistant(request: Assistant): Assistant {
+    // This daemon is spelled as "no machine", so a session and a local tool caller always agree.
+    const { serverId: requested, ...rest } = request;
+    const input: Assistant =
+      requested && requested !== this.selfServerId ? { ...rest, serverId: requested } : rest;
     const existing = this.store.get("assistants", input.id);
-    const directory = this.assistantDirectory(input.id);
-    mkdirSync(path.join(directory, "notes"), { recursive: true, mode: 0o700 });
-    // The agent owns its memory file afterwards; a later save never overwrites it.
-    try {
-      writeFileSync(path.join(directory, "MEMORY.md"), input.memory ?? "", {
-        mode: 0o600,
-        flag: "wx",
-      });
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    if (existing && (existing.serverId ?? null) !== (input.serverId ?? null))
+      throw new Error(
+        "An assistant stays on the machine it was created on. Create a new assistant for another machine.",
+      );
+    if (!existing && input.serverId) {
+      if (!this.machines?.isMember(input.serverId))
+        throw new Error(
+          "That machine is not a Chat member of this coordinator right now. Install the Bigbang plugin there as a member, or choose another machine.",
+        );
     }
+    if (!this.machineOf(input)) prepareHome(this.assistantDirectory(input.id), input.memory ?? "");
+    // The agent owns its memory file afterwards; a later save never overwrites it. A remote
+    // assistant's MEMORY.md is seeded from this ledger copy when its home is first prepared.
     const assistant: Assistant = existing ? { ...input, memory: existing.memory } : input;
     this.store.transaction(() => this.store.put("assistants", assistant));
     return assistant;
+  }
+  // Creates (once) the home of an assistant on its machine and returns that machine's path.
+  private async prepareAssistantHome(assistantId: string, subdirectory: boolean): Promise<string> {
+    const assistant = this.store.get("assistants", assistantId);
+    if (!assistant) throw new Error("Assistant no longer exists.");
+    const serverId = this.machineOf(assistant);
+    const seed = assistant.memory ?? "";
+    if (!serverId) {
+      const directory = assistantRoot(this.home, assistantId, subdirectory);
+      prepareHome(directory, seed);
+      return directory;
+    }
+    const { directory } = await this.member().call(serverId, memberHomePrepare, {
+      assistantId,
+      subdirectory,
+      seed,
+    });
+    return directory;
+  }
+  private member(): MachinePort {
+    if (!this.machines) throw new Error("This coordinator cannot reach member machines.");
+    return this.machines;
+  }
+  private async memoryTarget(assistantId: string) {
+    const assistant = this.store.get("assistants", assistantId);
+    if (!assistant) throw new Error("Assistant no longer exists.");
+    const home = this.store.getAssistantHome(assistantId);
+    const serverId = this.machineOf(assistant);
+    const subdirectory = Boolean(home && path.basename(home.directory) === "home");
+    if (serverId) await this.prepareAssistantHome(assistantId, subdirectory);
+    return { serverId, subdirectory };
+  }
+  async readAssistantMemory(input: RpcInput<typeof readAssistantMemory>) {
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return readMemory(this.assistantDirectory(input.assistantId));
+    return this.member().call(serverId, memberMemoryRead, {
+      assistantId: input.assistantId,
+      subdirectory,
+    });
+  }
+  async writeAssistantMemory(
+    input: RpcInput<typeof writeAssistantMemory>,
+  ): Promise<RpcOutput<typeof writeAssistantMemory>> {
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId)
+      return writeMemory(
+        this.assistantDirectory(input.assistantId),
+        input.content,
+        input.expectedMtimeMs,
+      );
+    return this.member().call(serverId, memberMemoryWrite, {
+      assistantId: input.assistantId,
+      subdirectory,
+      content: input.content,
+      expectedMtimeMs: input.expectedMtimeMs,
+    });
+  }
+  /** Machines an assistant can be created on: this daemon and its member machines. */
+  async machinesList(): Promise<Machine[]> {
+    if (!this.machines) return [];
+    return this.machines.list();
   }
   get taskLimits(): TaskLimits {
     return this.limits;
@@ -223,34 +311,6 @@ export class Coordinator {
   setLimits(limits: TaskLimits): void {
     this.limits = limits;
     this.kick();
-  }
-  private memoryFile(assistantId: string): string {
-    if (!this.store.get("assistants", assistantId)) throw new Error("Assistant no longer exists.");
-    return path.join(this.assistantDirectory(assistantId), "MEMORY.md");
-  }
-  private readMemory(file: string): RpcOutput<typeof readAssistantMemory> {
-    try {
-      return { content: readFileSync(file, "utf8"), mtimeMs: statSync(file).mtimeMs };
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT")
-        return { content: "", mtimeMs: 0 };
-      throw error;
-    }
-  }
-  readAssistantMemory(input: RpcInput<typeof readAssistantMemory>) {
-    return this.readMemory(this.memoryFile(input.assistantId));
-  }
-  writeAssistantMemory(
-    input: RpcInput<typeof writeAssistantMemory>,
-  ): RpcOutput<typeof writeAssistantMemory> {
-    const file = this.memoryFile(input.assistantId);
-    if (this.readMemory(file).mtimeMs !== input.expectedMtimeMs)
-      throw new Error("The memory changed since it was loaded. Reload it and try again.");
-    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const temporary = `${file}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, input.content, { mode: 0o600 });
-    renameSync(temporary, file);
-    return this.readMemory(file);
   }
   createConversation(conversation: Conversation): Conversation {
     if (conversation.members.some((id) => !this.store.get("assistants", id)))
@@ -731,7 +791,7 @@ export class Coordinator {
       );
   }
   private serverFor(turn: Turn): string | undefined {
-    return turn.taskId ? this.store.get("tasks", turn.taskId)?.serverId : undefined;
+    return turn.taskId ? this.store.get("tasks", turn.taskId)?.serverId : turn.serverId;
   }
   // Reads the execution's timeline and brings the ledger in line with it. An execution or turn
   // that is not ours (a message typed in Studio, a finished turn) has no live ledger entry or no

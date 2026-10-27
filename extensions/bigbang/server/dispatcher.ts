@@ -128,7 +128,7 @@ export class Dispatcher {
     }
   }
   private serverOf(turn: Turn): string | undefined {
-    return turn.taskId ? this.deps.store.get("tasks", turn.taskId)?.serverId : undefined;
+    return turn.taskId ? this.deps.store.get("tasks", turn.taskId)?.serverId : turn.serverId;
   }
   private accept(turn: Turn): void {
     const accepted: Turn = { ...turn, accepted: true, status: "running", error: null };
@@ -150,6 +150,7 @@ export class Dispatcher {
         assistantName: assistant.name,
         provider: session.provider,
         systemPrompt: session.systemPrompt,
+        ...(session.serverId ? { serverId: session.serverId } : {}),
         created: session.created,
       });
       if (!session.created)

@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Conversation, Message, Turn } from "../shared/contracts";
 import { ChatStore } from "./store";
+import type { MachinePort } from "./machines";
 import { Coordinator } from "./coordinator";
 import { FakeExecution } from "./execution.fake";
 import type { TaskLimits } from "../shared/settings";
@@ -21,6 +22,7 @@ export function fixture(
     sweepMs?: number;
     directory?: string;
     limits?: TaskLimits;
+    machines?: MachinePort;
   } = {},
 ) {
   const directory = options.directory ?? mkdtempSync(path.join(tmpdir(), "bigbang-fanout-"));
@@ -41,6 +43,7 @@ export function fixture(
       now: () => clock.t,
       sweepMs: options.sweepMs ?? 1e9,
       ...(options.limits ? { limits: options.limits } : {}),
+      ...(options.machines ? { machines: options.machines } : {}),
     });
     cleanup.push(() => coordinator.close());
     coordinator.attach();

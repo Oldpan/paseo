@@ -5,7 +5,12 @@ import type { RpcInput, PluginRpcContract } from "@getpaseo/plugin";
 import type { ZodType } from "zod";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import { readState, type ChatState } from "../../../../extensions/bigbang/shared/contracts";
+import {
+  listMachines,
+  readState,
+  type ChatState,
+  type MachineInfo,
+} from "../../../../extensions/bigbang/shared/contracts";
 import { EMPTY_CHAT_STATE, mergeChatState } from "./model";
 import { runChatSyncLoop } from "./sync";
 
@@ -91,6 +96,34 @@ export function useBigbangData(serverId: string) {
   };
 }
 export type BigbangData = ReturnType<typeof useBigbangData>;
+
+/** Machines a new assistant can live on, as the coordinator sees them; read while creating one. */
+export function useAssistantMachines(
+  invoke: BigbangData["invoke"],
+  form: string | null,
+  editing: string | null,
+) {
+  const enabled = form === "assistant" && !editing;
+  const [machines, setMachines] = useState<MachineInfo[]>([]);
+  useEffect(() => {
+    if (!enabled) return;
+    let current = true;
+    void (async () => {
+      let next: MachineInfo[] = [];
+      try {
+        next = (await invoke(listMachines, {})).machines;
+      } catch {
+        // COMPAT(bigbangMachines): added 2026-10-28, remove after 2027-04-28. Coordinators
+        // without chat.machines run every assistant themselves.
+      }
+      if (current) setMachines(next);
+    })();
+    return () => {
+      current = false;
+    };
+  }, [enabled, invoke]);
+  return machines;
+}
 
 function startChatSync(input: {
   client: DaemonClient;

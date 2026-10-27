@@ -1,5 +1,3 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
 import type { PaseoAgentPermissionResponse, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import { finalTextAfter, type ProjectionEntry, type TurnProjection } from "./projection";
 import { taskBrief } from "./prompts";
@@ -33,6 +31,8 @@ export interface ChatAgentSpec {
   assistantName: string;
   provider: string;
   systemPrompt: string;
+  /** The machine the assistant is bound to; omitted means this daemon. */
+  serverId?: string;
   /** The execution was created before; it must exist, and is never replaced. */
   created: boolean;
 }
@@ -56,6 +56,8 @@ export interface ChildAgent {
 export interface AssistantHomes {
   get(assistantId: string): { workspaceId: string; directory: string } | null;
   put(home: { assistantId: string; workspaceId: string; directory: string }): void;
+  /** Creates the home directory on the assistant's machine and returns its path there. */
+  prepare(assistantId: string, subdirectory: boolean): Promise<string>;
 }
 
 /** Everything the coordinator needs from Paseo. `serverId` omitted means this daemon. */
@@ -130,7 +132,6 @@ export class PaseoExecution implements ExecutionPort {
   private self: Promise<string> | null = null;
   constructor(
     private readonly api: PaseoApi,
-    private readonly home: string,
     private readonly homes: AssistantHomes,
   ) {}
   private serverId(): Promise<string> {
@@ -150,34 +151,43 @@ export class PaseoExecution implements ExecutionPort {
     }
     return client;
   }
-  // Each assistant owns one background workspace for its home directory so its chat executions
-  // stay out of the Studio sidebar. The daemon creates a new record per directory create, so it
-  // cannot collide with a visible workspace; a reused visible one would ignore `background`,
-  // which is detected and moved to a private subdirectory.
-  private async assistantHome(spec: ChatAgentSpec): Promise<string> {
+  // Each assistant owns one background workspace for its home directory, on the machine the
+  // assistant is bound to, so its chat executions stay out of the Studio sidebar. The daemon creates
+  // a new record per directory create, so it cannot collide with a visible workspace; a reused
+  // visible one would ignore `background`, which is detected and moved to a private subdirectory.
+  private async assistantHome(spec: ChatAgentSpec, api: PaseoApi): Promise<string> {
     const known = this.homes.get(spec.assistantId);
     if (known) return known.workspaceId;
-    const root = path.join(this.home, "assistants", spec.assistantId);
-    let directory = root;
-    let workspace = await this.createHome(spec, directory, `assistant-home:${spec.assistantId}`);
+    let directory = await this.homes.prepare(spec.assistantId, false);
+    let workspace = await this.createHome(
+      api,
+      spec,
+      directory,
+      `assistant-home:${spec.assistantId}`,
+    );
     if (workspace.current()?.background === false) {
-      directory = path.join(root, "home");
-      workspace = await this.createHome(spec, directory, `assistant-home:${spec.assistantId}:home`);
+      directory = await this.homes.prepare(spec.assistantId, true);
+      workspace = await this.createHome(
+        api,
+        spec,
+        directory,
+        `assistant-home:${spec.assistantId}:home`,
+      );
     }
     this.homes.put({ assistantId: spec.assistantId, workspaceId: workspace.id, directory });
     return workspace.id;
   }
-  private createHome(spec: ChatAgentSpec, directory: string, idempotencyKey: string) {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    return this.api.workspaces.create({
+  private createHome(api: PaseoApi, spec: ChatAgentSpec, directory: string, key: string) {
+    return api.workspaces.create({
       source: { kind: "directory", path: directory },
       background: true,
-      idempotencyKey,
+      idempotencyKey: key,
       title: `${spec.assistantName} · Home`,
     });
   }
   async ensureChatAgent(spec: ChatAgentSpec): Promise<void> {
-    const agent = this.api.agents.ref(spec.agentId);
+    const api = await this.on(spec.serverId);
+    const agent = api.agents.ref(spec.agentId);
     await agent.refresh();
     if (agent.archivedAt)
       throw new Error("This chat execution is archived. Restore it in Studio before continuing.");
@@ -187,8 +197,8 @@ export class PaseoExecution implements ExecutionPort {
       throw new Error(
         "The existing chat execution is unavailable. It will not be replaced automatically.",
       );
-    const workspaceId = await this.assistantHome(spec);
-    await this.api.workspaces.ref(workspaceId).agents.create({
+    const workspaceId = await this.assistantHome(spec, api);
+    await api.workspaces.ref(workspaceId).agents.create({
       agentId: spec.agentId,
       idempotencyKey: `chat-session:${spec.agentId}`,
       title: `${spec.assistantName} · Chat`,

@@ -21,7 +21,8 @@ interface FakeAgent {
 /** In-memory ExecutionPort for tests: a timeline per agent, no daemon. */
 export class FakeExecution implements ExecutionPort {
   readonly agents = new Map<string, FakeAgent>();
-  readonly sent: Array<{ agentId: string; text: string; messageId: string }> = [];
+  readonly sent: Array<{ agentId: string; text: string; messageId: string; serverId?: string }> =
+    [];
   readonly cancelled: string[] = [];
   readonly permissionResponses: Array<{
     agentId: string;
@@ -39,6 +40,9 @@ export class FakeExecution implements ExecutionPort {
   rejectNextDispatch: Error | null = null;
   private agent(agentId: string, serverId?: string): FakeAgent {
     let agent = this.agents.get(agentId);
+    // An agent id only exists on its own machine; reaching it elsewhere is a routing bug.
+    if (agent && serverId !== undefined && agent.serverId !== serverId)
+      throw new Error(`Agent ${agentId} is not on ${serverId}`);
     if (!agent) {
       agent = {
         serverId,
@@ -60,7 +64,7 @@ export class FakeExecution implements ExecutionPort {
       throw new Error("The existing chat execution is unavailable.");
     if (this.agents.get(spec.agentId)?.archived)
       throw new Error("This chat execution is archived. Restore it in Studio before continuing.");
-    this.agent(spec.agentId);
+    this.agent(spec.agentId, spec.serverId);
   }
   async dispatch(
     agentId: string,
@@ -74,7 +78,7 @@ export class FakeExecution implements ExecutionPort {
       throw error;
     }
     const agent = this.agent(agentId, serverId);
-    this.sent.push({ agentId, text, messageId });
+    this.sent.push({ agentId, text, messageId, ...(serverId ? { serverId } : {}) });
     if (
       !agent.entries.some(
         ({ item }) => item.type === "user_message" && item.messageId === messageId,
@@ -90,9 +94,9 @@ export class FakeExecution implements ExecutionPort {
       throw error;
     }
   }
-  async readTurn(agentId: string, messageId: string): Promise<TurnRead> {
+  async readTurn(agentId: string, messageId: string, serverId?: string): Promise<TurnRead> {
     const agent = this.agents.get(agentId);
-    if (!agent) throw new Error("Agent not found");
+    if (!agent || agent.serverId !== serverId) throw new Error("Agent not found");
     const projection = finalTextAfter(agent.entries, messageId);
     if (!projection) return { kind: "unknown", running: agent.running && !agent.closed };
     return {

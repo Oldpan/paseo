@@ -513,32 +513,32 @@ describe("file memory", () => {
     expect(saved).toMatchObject({ name: "Ada L.", memory: "Likes TypeScript" });
   });
 
-  it("reads and writes memory with an mtime precondition", () => {
+  it("reads and writes memory with an mtime precondition", async () => {
     const { coordinator, assistant } = fixture();
-    const loaded = coordinator.readAssistantMemory({ assistantId: assistant.id });
+    const loaded = await coordinator.readAssistantMemory({ assistantId: assistant.id });
     expect(loaded.content).toBe("Likes TypeScript");
     expect(loaded.mtimeMs).toBeGreaterThan(0);
-    const written = coordinator.writeAssistantMemory({
+    const written = await coordinator.writeAssistantMemory({
       assistantId: assistant.id,
       content: "New notes",
       expectedMtimeMs: loaded.mtimeMs,
     });
     expect(written.content).toBe("New notes");
-    expect(() =>
+    await expect(
       coordinator.writeAssistantMemory({
         assistantId: assistant.id,
         content: "Stale write",
         expectedMtimeMs: loaded.mtimeMs - 1,
       }),
-    ).toThrow("changed since");
-    expect(coordinator.readAssistantMemory({ assistantId: assistant.id }).content).toBe(
+    ).rejects.toThrow("changed since");
+    expect((await coordinator.readAssistantMemory({ assistantId: assistant.id })).content).toBe(
       "New notes",
     );
   });
 
-  it("rejects memory access for an unknown assistant", () => {
+  it("rejects memory access for an unknown assistant", async () => {
     const { coordinator } = fixture();
-    expect(() => coordinator.readAssistantMemory({ assistantId: randomUUID() })).toThrow(
+    await expect(coordinator.readAssistantMemory({ assistantId: randomUUID() })).rejects.toThrow(
       "no longer exists",
     );
   });

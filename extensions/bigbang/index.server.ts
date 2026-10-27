@@ -10,8 +10,20 @@ import {
   startTask,
   cancelTask,
   respondTaskPermission,
+  listMachines,
 } from "./shared/contracts";
-import { MEMBER_PROTOCOL, memberHello, memberPoll, memberRespond } from "./shared/member";
+import {
+  MEMBER_PROTOCOL,
+  memberHello,
+  memberHomePrepare,
+  memberMemoryRead,
+  memberMemoryWrite,
+  memberPoll,
+  memberRespond,
+} from "./shared/member";
+import { assistantRoot, prepareHome, readMemory, writeMemory } from "./server/assistant-files";
+import type { MachinePort } from "./server/machines";
+import { callPluginRpc } from "./server/member/rpc";
 import { roleSettings, taskSettings, type RoleSettings, type TaskLimits } from "./shared/settings";
 import { agentTools, callAgentTool } from "./server/agent-tools";
 import { ChatStore } from "./server/store";
@@ -42,7 +54,7 @@ export default function contribute(server: PluginServerContext) {
   let coordinator: Coordinator | null = null;
   let store: ChatStore | null = null;
   let links: MemberLinks | null = null;
-  let directory: ReturnType<typeof hostDirectory> | null = null;
+  let hostLinks: ReturnType<typeof hostDirectory> | null = null;
   let limits: TaskLimits | null = null;
   let closed = false;
   const relay = new MemberRelay({
@@ -76,7 +88,22 @@ export default function contribute(server: PluginServerContext) {
       processId: relay.processId,
     };
   });
+  server.handle(listMachines, async () => ({ machines: await chat().machinesList() }));
   server.handle(memberPoll, (input) => relay.poll(input));
+  // An assistant bound to this machine keeps its home here; only its coordinator calls these.
+  const memberHome = (input: { assistantId: string; subdirectory?: boolean }) => {
+    if (role?.mode !== "member") throw new Error("This machine is not a Chat member.");
+    return assistantRoot(home, input.assistantId, input.subdirectory);
+  };
+  server.handle(memberHomePrepare, (input) => {
+    const directory = memberHome(input);
+    prepareHome(directory, input.seed);
+    return { directory };
+  });
+  server.handle(memberMemoryRead, (input) => readMemory(memberHome(input)));
+  server.handle(memberMemoryWrite, (input) =>
+    writeMemory(memberHome(input), input.content, input.expectedMtimeMs),
+  );
   server.handle(memberRespond, (input) => relay.respond(input.callId, input.result));
 
   // Every agent on a Bigbang daemon lists the tools: providers list MCP tools once per session, so
@@ -160,13 +187,43 @@ export default function contribute(server: PluginServerContext) {
         console.error("Bigbang is a member without coordinatorServerId; set it and reload.");
       return;
     }
+    const hosts = hostDirectory(server.paseo);
+    hostLinks = hosts;
+    const machines: MachinePort = {
+      self: () => hosts.self(),
+      isMember: (serverId) => links?.state(serverId)?.kind === "member",
+      call: (serverId, contract, input) =>
+        callPluginRpc(contract, (method, value) => hosts.invoke(serverId, method, value), input),
+      list: async () => {
+        const [self, saved, own] = await Promise.all([
+          hosts.self(),
+          hosts.list(),
+          server.paseo.hosts.list(),
+        ]);
+        return [
+          { serverId: self, label: own.self.label, role: "coordinator" as const },
+          ...saved.map(({ serverId, label }) => {
+            const link = links?.state(serverId);
+            if (link?.kind === "member") return { serverId, label, role: "member" as const };
+            return {
+              serverId,
+              label,
+              role: "unavailable" as const,
+              reason:
+                link?.kind === "other"
+                  ? link.reason
+                  : "Its Bigbang plugin is not reachable as a member of this coordinator.",
+            };
+          }),
+        ];
+      },
+    };
     store = new ChatStore(path.join(home, "chat.sqlite"));
-    const active = new Coordinator(store, home, limits ? { limits } : {});
+    const active = new Coordinator(store, home, { ...(limits ? { limits } : {}), machines });
     coordinator = active;
     // Recovery starts now, in the background, without waiting for a client RPC or a hook.
     active.attach(server.paseo);
-    directory = hostDirectory(server.paseo);
-    links = new MemberLinks(directory, {
+    links = new MemberLinks(hosts, {
       call: (serverId, call) =>
         callAgentTool(active, { agentId: call.agentId, serverId }, call.tool, call.input),
       event: (_serverId, event) => active.onMemberEvent(event),
@@ -195,7 +252,7 @@ export default function contribute(server: PluginServerContext) {
     relay.close();
     links?.close();
     await coordinator?.close();
-    await directory?.dispose();
+    await hostLinks?.dispose();
     store?.close();
   };
 }

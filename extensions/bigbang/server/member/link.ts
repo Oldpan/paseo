@@ -1,6 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { PluginRpcContract, RpcOutput } from "@getpaseo/plugin";
-import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
+import type { RpcOutput } from "@getpaseo/plugin";
 import {
   MEMBER_PROTOCOL,
   memberHello,
@@ -10,6 +9,7 @@ import {
   type MemberCall,
   type MemberEvent,
 } from "../../shared/member";
+import { callPluginRpc } from "./rpc";
 
 const POLL_WAIT_MS = 20_000;
 const DEFAULT_DISCOVER_MS = 30_000;
@@ -26,7 +26,7 @@ export type MemberState =
 export interface HostDirectoryPort {
   self(): Promise<string>;
   /** Saved hosts this daemon can reach, with their link status. */
-  list(): Promise<Array<{ serverId: string; online: boolean }>>;
+  list(): Promise<Array<{ serverId: string; label: string; online: boolean }>>;
   invoke(serverId: string, method: string, input: unknown): Promise<unknown>;
 }
 export interface MemberLinkHandlers {
@@ -44,15 +44,6 @@ export interface MemberLinksOptions {
 // Resolves after `ms`, or as soon as `signal` aborts.
 function wait(ms: number, signal: AbortSignal): Promise<void> {
   return delay(ms, undefined, { signal }).catch(() => undefined);
-}
-async function callPluginRpc<Input extends ZodType, Output extends ZodType>(
-  contract: PluginRpcContract<Input, Output>,
-  invoke: (method: string, input: unknown) => Promise<unknown>,
-  input: ZodInput<Input>,
-): Promise<ZodOutput<Output>> {
-  return contract.output.parseAsync(
-    await invoke(contract.name, await contract.input.parseAsync(input)),
-  );
 }
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -101,7 +92,7 @@ export class MemberLinks {
 
   async discover(): Promise<void> {
     if (this.lifetime.signal.aborted) return;
-    let hosts: Array<{ serverId: string; online: boolean }>;
+    let hosts: Awaited<ReturnType<HostDirectoryPort["list"]>>;
     try {
       hosts = await this.hosts.list();
     } catch (error) {
