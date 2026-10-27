@@ -54,6 +54,9 @@ const ASSISTANT_FIELDS = [
   { name: "memory", label: "Initial memory", initial: "", multiline: true },
 ];
 
+// Option value for "no default responder": a plain message then goes to the first member.
+const NO_DEFAULT_RESPONDER = "first";
+
 export function BigbangScreen() {
   const router = useRouter();
   const hosts = useHosts();
@@ -173,12 +176,18 @@ export function BigbangScreen() {
           if (!member) throw new Error(`Unknown assistant: ${name}`);
           return member.id;
         });
+        const responder = values.defaultResponder;
+        if (responder && responder !== NO_DEFAULT_RESPONDER && !members.includes(responder))
+          throw new Error("The default responder must be one of the group's assistants.");
         const chat = await data.call(createConversation, {
           id: values.id,
           name: values.name,
           kind: "group",
           members,
           roundtable: values.roundtable === "yes",
+          ...(responder && responder !== NO_DEFAULT_RESPONDER
+            ? { defaultResponderId: responder }
+            : {}),
         });
         changeChat(chat.id);
       }
@@ -247,16 +256,29 @@ export function BigbangScreen() {
       { name: "name", label: "Group name", initial: "" },
       { name: "members", label: "Assistant names, separated by commas", initial: "" },
       {
+        name: "defaultResponder",
+        label: "Replies when nobody is mentioned or recently active",
+        initial: NO_DEFAULT_RESPONDER,
+        options: [
+          { id: NO_DEFAULT_RESPONDER, value: NO_DEFAULT_RESPONDER, label: "First member" },
+          ...data.state.assistants.map((item) => ({
+            id: item.id,
+            value: item.id,
+            label: item.name,
+          })),
+        ],
+      },
+      {
         name: "roundtable",
-        label: "Roundtable",
+        label: "Roundtable switch starts",
         initial: "no",
         options: [
-          { id: "yes", value: "yes", label: "Roundtable" },
-          { id: "no", value: "no", label: "Natural conversation" },
+          { id: "yes", value: "yes", label: "On, when 2-6 members are mentioned" },
+          { id: "no", value: "no", label: "Off" },
         ],
       },
     ],
-    [],
+    [data.state.assistants],
   );
   const taskFields = useMemo(
     () => [

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StreamItem, ToolCallItem } from "@/types/stream";
-import { selectLiveTurn } from "./live-turn";
+import { isPassPrefix, isSilentAwareness, selectLiveTurn } from "./live-turn";
 
 const at = new Date("2026-10-27T00:00:00Z");
 const user = (messageId: string | undefined, id = `u:${messageId}`): StreamItem => ({
@@ -116,5 +116,27 @@ describe("selectLiveTurn", () => {
   it("shows an open thought as activity", () => {
     expect(selectLiveTurn([user("t"), thought("loading")], "t").activity).toBe("Thinking");
     expect(selectLiveTurn([user("t"), thought("ready")], "t").activity).toBeNull();
+  });
+});
+
+describe("awareness turns that pass", () => {
+  it("recognises the start of a pass", () => {
+    for (const text of ["(", "(pa", "(pass)", " pass ", "Pass"])
+      expect(isPassPrefix(text)).toBe(true);
+    for (const text of ["", "Passing thought", "(passing)", "Sure"])
+      expect(isPassPrefix(text)).toBe(false);
+  });
+
+  it("keeps a silent awareness turn out of the transcript until it has something to say", () => {
+    const silent = (kind: string | undefined, text: string, hasPermissions = false) =>
+      isSilentAwareness({ kind, text, hasPermissions });
+    expect(silent("awareness", "")).toBe(true);
+    expect(silent("awareness", "(pass")).toBe(true);
+    expect(silent("awareness", "I would add that")).toBe(false);
+    expect(silent("awareness", "", true)).toBe(false);
+    // Only awareness turns are silent; a reply or roundtable turn always shows its status.
+    expect(silent("reply", "")).toBe(false);
+    expect(silent("roundtable", "")).toBe(false);
+    expect(silent(undefined, "")).toBe(false);
   });
 });

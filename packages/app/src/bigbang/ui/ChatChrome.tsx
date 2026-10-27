@@ -1,10 +1,19 @@
 import { isWeb } from "@/constants/platform";
+import { useIsCompactFormFactor } from "@/constants/layout";
 // Presentation extracted/adapted from Bigbang Chat.tsx MessageRow and header.
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
 import { useRef, useEffect, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { AgentAvatar, StatusDot, UserAvatar } from "./avatars";
-import { CheckIcon, ChatIcon, CopyIcon, MenuIcon, CloseIcon, ArrowLeftIcon } from "./icons";
+import {
+  CheckIcon,
+  ChatIcon,
+  CopyIcon,
+  MenuIcon,
+  CloseIcon,
+  ArrowLeftIcon,
+  QuoteIcon,
+} from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { copyText } from "./clipboard";
 import { bubbleShadow, ctrlShadow, text as type, selectedFillProps } from "./theme";
@@ -184,6 +193,8 @@ export function ChatMessage({
   createdAt,
   replyCount,
   onReply,
+  onQuote,
+  quote,
   children,
 }: {
   id: string;
@@ -194,9 +205,14 @@ export function ChatMessage({
   createdAt: number;
   replyCount: number;
   onReply?: () => void;
+  /** Quotes this message in the composer. Group chats offer it on assistant replies. */
+  onQuote?: () => void;
+  /** The message this one answers, shown as a compact block above its text. */
+  quote?: { sender: string; text: string };
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
+  const compact = useIsCompactFormFactor();
   const [hovered, setHovered] = useState(false);
   const [copied, setCopied] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -215,6 +231,8 @@ export function ChatMessage({
     [],
   );
 
+  // Hover only exists on web with a pointer; touch layouts keep the actions in reach.
+  const actionsShown = hovered || !isWeb || compact;
   const avatar = user ? (
     <UserAvatar label="You" size={32} theme={t} name={name} />
   ) : (
@@ -271,7 +289,7 @@ export function ChatMessage({
           style={{ position: "relative", maxWidth: "100%" }}
         >
           <View
-            pointerEvents={hovered || !isWeb ? "auto" : "none"}
+            pointerEvents={actionsShown ? "auto" : "none"}
             style={[
               {
                 position: "absolute",
@@ -286,7 +304,7 @@ export function ChatMessage({
                 borderColor: t.retroBorder,
                 backgroundColor: t.surfaceSecondary,
                 padding: 2,
-                opacity: hovered || !isWeb ? 1 : 0,
+                opacity: actionsShown ? 1 : 0,
               },
               ctrlShadow(t, name),
             ]}
@@ -303,6 +321,16 @@ export function ChatMessage({
             >
               {copied ? <CheckIcon color={t.success} /> : <CopyIcon color={t.textSecondary} />}
             </Pressable>
+            {onQuote ? (
+              <Pressable
+                role="button"
+                accessibilityLabel="Quote message"
+                onPress={onQuote}
+                style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+              >
+                <QuoteIcon color={t.textSecondary} size={14} />
+              </Pressable>
+            ) : null}
             {onReply ? (
               <Pressable
                 role="button"
@@ -328,13 +356,7 @@ export function ChatMessage({
               bubbleShadow(t, name),
             ]}
           >
-            {user ? (
-              <Text selectable style={type(t.userBubbleInk, 14, { lineHeight: 20 })}>
-                {content}
-              </Text>
-            ) : (
-              <MessageMarkdown content={content} color={t.textPrimary} narrow={false} />
-            )}
+            <MessageBody id={id} content={content} user={user} quote={quote} />
           </View>
         </Pressable>
         {children}
@@ -347,6 +369,65 @@ export function ChatMessage({
         ) : null}
       </View>
       {user ? avatar : null}
+    </View>
+  );
+}
+/** The message a reply answers: sender and a short excerpt, set off by a rule on the left. */
+function MessageBody({
+  id,
+  content,
+  user,
+  quote,
+}: {
+  id: string;
+  content: string;
+  user: boolean;
+  quote?: { sender: string; text: string };
+}) {
+  const { palette: t } = useTheme();
+  return (
+    <>
+      {quote ? <QuoteBlock id={id} quote={quote} user={user} /> : null}
+      {user ? (
+        <Text selectable style={type(t.userBubbleInk, 14, { lineHeight: 20 })}>
+          {content}
+        </Text>
+      ) : (
+        <MessageMarkdown content={content} color={t.textPrimary} narrow={false} />
+      )}
+    </>
+  );
+}
+function QuoteBlock({
+  id,
+  quote,
+  user,
+}: {
+  id: string;
+  quote: { sender: string; text: string };
+  user: boolean;
+}) {
+  const { palette: t } = useTheme();
+  return (
+    <View
+      testID={`quote-${id}`}
+      style={{
+        borderLeftWidth: 3,
+        borderLeftColor: t.retroBorder,
+        paddingLeft: 8,
+        marginBottom: 6,
+        gap: 1,
+      }}
+    >
+      <Text style={type(user ? t.userBubbleInk : t.textMuted, 11, { fontWeight: "600" })}>
+        {quote.sender}
+      </Text>
+      <Text
+        numberOfLines={2}
+        style={type(user ? t.userBubbleInk : t.textSecondary, 11, { opacity: 0.8 })}
+      >
+        {quote.text}
+      </Text>
     </View>
   );
 }
@@ -439,7 +520,15 @@ export function LiveTurnBubble({
     </View>
   );
 }
-export function ThreadHeader({ onClose, compact }: { onClose(): void; compact: boolean }) {
+export function ThreadHeader({
+  onClose,
+  compact,
+  title = "Thread",
+}: {
+  onClose(): void;
+  compact: boolean;
+  title?: string;
+}) {
   const { palette: t } = useTheme();
   return (
     <View
@@ -454,7 +543,7 @@ export function ThreadHeader({ onClose, compact }: { onClose(): void; compact: b
       }}
     >
       {compact ? <ArrowLeftIcon color={t.textMuted} /> : null}
-      <Text style={type(t.textPrimary, 13, { fontWeight: "700", flex: 1 })}>Thread</Text>
+      <Text style={type(t.textPrimary, 13, { fontWeight: "700", flex: 1 })}>{title}</Text>
       <Pressable role="button" accessibilityLabel="Close thread" onPress={onClose}>
         <CloseIcon color={t.textSecondary} size={16} />
       </Pressable>

@@ -10,7 +10,7 @@ import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
 import type { Turn } from "../../../../extensions/bigbang/shared/contracts";
 import { Chip, LiveTurnBubble } from "./ui/ChatChrome";
-import { selectLiveTurn } from "./live-turn";
+import { isPassPrefix, isSilentAwareness, selectLiveTurn } from "./live-turn";
 
 const EMPTY_ITEMS: StreamItem[] = [];
 const EMPTY_PERMISSIONS: PendingPermission[] = [];
@@ -23,13 +23,6 @@ const STATUS_LABEL: Record<string, string> = {
   attention: "Waiting for you",
   unknown: "Reconnecting…",
 };
-// An awareness turn may answer "(pass)"; the coordinator commits nothing for it, so do not flash
-// its first characters either.
-const PASS = "(pass)";
-function isPassPrefix(text: string): boolean {
-  const value = text.trim().toLowerCase();
-  return value.length > 0 && (PASS.startsWith(value) || value === "pass");
-}
 
 /**
  * One in-flight Chat turn: the assistant's streaming reply and its pending approvals, read from
@@ -76,6 +69,10 @@ export const LiveTurnItem = memo(function LiveTurnItem({
   const text = useRevealedText(isPassPrefix(view.text) ? "" : view.text, "streaming");
   const startedAt = useRef(Date.now());
   const onOpen = useCallback(() => onOpenTurn(turn), [onOpenTurn, turn]);
+  if (
+    isSilentAwareness({ kind: turn.kind, text: view.text, hasPermissions: permissions.length > 0 })
+  )
+    return null;
   return (
     <LiveTurnBubble
       id={`live:${turn.id}`}

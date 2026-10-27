@@ -87,3 +87,26 @@ export function selectLiveTurn(items: readonly StreamItem[], turnId: string): Li
     activity,
   };
 }
+
+// An awareness turn may answer "(pass)"; the coordinator commits nothing for it, so its first
+// characters must not flash either.
+const PASS = "(pass)";
+export function isPassPrefix(text: string): boolean {
+  const value = text.trim().toLowerCase();
+  return value.length > 0 && (PASS.startsWith(value) || value === "pass");
+}
+/**
+ * An awareness turn is a peer deciding whether to speak up. It earns a bubble only once it has
+ * real text or needs an approval, so a pass leaves nothing behind.
+ */
+export function isSilentAwareness(input: {
+  kind: string | undefined;
+  text: string;
+  hasPermissions: boolean;
+}): boolean {
+  return (
+    input.kind === "awareness" &&
+    !input.hasPermissions &&
+    (input.text.trim() === "" || isPassPrefix(input.text))
+  );
+}

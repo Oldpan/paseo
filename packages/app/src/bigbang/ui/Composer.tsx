@@ -7,6 +7,13 @@ import { PaperclipIcon, SendIcon, StopIcon } from "./icons";
 import { bubbleShadow, ctrlShadow, text as type, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 import {
+  MentionList,
+  QuoteChip,
+  ResponderHint,
+  RoundtableToggle,
+  type GroupComposerState,
+} from "./GroupComposer";
+import {
   resolveSlashCommands,
   findMatchingSlashCommands,
   parseSlashInvocation,
@@ -36,6 +43,7 @@ export function Composer({
   draftKey,
   agentType,
   footerAction,
+  group,
   onAttach,
   onRemovePending,
   onSend,
@@ -56,6 +64,8 @@ export function Composer({
   draftKey: string;
   agentType?: string;
   footerAction?: ReactNode;
+  /** Group chat chrome: quote chip, @-mention suggestions, roundtable toggle and responder hint. */
+  group?: GroupComposerState;
   onAttach?: () => void;
   onRemovePending: (localId: string) => void;
   onPasteFiles: (files: File[]) => void;
@@ -267,6 +277,16 @@ export function Composer({
           style={type(t.destructive, 12, { marginBottom: 6 })}
         >{`Upload failed: ${uploadError}`}</Text>
       ) : null}
+      {group?.quote ? (
+        <QuoteChip
+          sender={group.quote.sender}
+          text={group.quote.text}
+          onRemove={group.quote.onRemove}
+        />
+      ) : null}
+      {group?.mentions.length ? (
+        <MentionList members={group.mentions} onMention={group.onMention} />
+      ) : null}
       <View
         testID="composer-input-shell"
         style={[
@@ -473,6 +493,13 @@ export function Composer({
             justifyContent: "flex-end",
           }}
         >
+          {group?.roundtable ? (
+            <RoundtableToggle
+              on={group.roundtable.on}
+              phone={phone}
+              onToggle={group.roundtable.onToggle}
+            />
+          ) : null}
           {allowPlanMode ? (
             <Pressable
               testID="composer-plan"
@@ -633,6 +660,7 @@ export function Composer({
           </Pressable>
         </View>
       </View>
+      {group?.hint ? <ResponderHint hint={group.hint} /> : null}
     </View>
   );
 }

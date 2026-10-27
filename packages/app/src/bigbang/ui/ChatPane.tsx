@@ -9,6 +9,7 @@ import type {
   Assistant,
 } from "../../../../../extensions/bigbang/shared/contracts";
 import { Composer } from "./Composer";
+import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
 import { text as type } from "./theme";
 import { useTheme } from "./ThemeProvider";
@@ -19,6 +20,12 @@ export interface MessageRow {
   seed: string;
   replyCount: number;
   reply?: () => void;
+  /** Quotes this message in the composer; set on assistant replies in a group chat. */
+  onQuote?: () => void;
+  /** The message this one quotes, resolved to a sender name and a short text. */
+  quote?: { sender: string; text: string };
+  /** Display text of a system or task_event row. */
+  note?: string;
   task?: Task;
   open(): void;
   cancel(): void;
@@ -42,6 +49,7 @@ export function ChatPane({
   connected,
   onSend,
   onTask,
+  group,
 }: {
   rows: MessageRow[];
   turns: LiveTurn[];
@@ -54,6 +62,8 @@ export function ChatPane({
   connected: boolean;
   onSend(): void;
   onTask(): void;
+  /** Group chat composer chrome; absent in a direct chat. */
+  group?: GroupComposerState;
 }) {
   const { palette: t } = useTheme();
   const list = useRef<ScrollView>(null);
@@ -82,7 +92,11 @@ export function ChatPane({
       >
         {rows.map((row) =>
           isNoteMessage(row.message) ? (
-            <NoteRow key={row.message.id} id={row.message.id} content={row.message.content} />
+            <NoteRow
+              key={row.message.id}
+              id={row.message.id}
+              content={row.note ?? row.message.content}
+            />
           ) : (
             <ChatMessage
               key={row.message.id}
@@ -94,6 +108,8 @@ export function ChatPane({
               createdAt={row.message.createdAt}
               replyCount={row.replyCount}
               onReply={row.reply}
+              onQuote={row.onQuote}
+              quote={row.quote}
             >
               {row.task ? (
                 <TaskCard task={row.task} onOpen={row.open} onCancel={row.cancel} />
@@ -148,6 +164,7 @@ export function ChatPane({
         onSend={onSend}
         onStop={ignoreFile}
         footerAction={<Chip onPress={onTask}>Create task</Chip>}
+        group={group}
       />
     </View>
   );
