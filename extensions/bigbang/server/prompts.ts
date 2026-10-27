@@ -5,6 +5,9 @@ import { ROUNDTABLE_MAX_ROUNDS } from "./roundtable";
 export const PASS_REPLY = "(pass)";
 const at = (assistant: Assistant) => `@${assistant.name}`;
 
+/** Opens the prompt of a turn that reports a finished task; the outcome follows as a bracketed line. */
+export const TASK_RECEIPT_LEAD = `A task you started has ended; its outcome is in brackets below. Tell the user what happened in your own words, with what matters to them and what you suggest next. Reply exactly ${PASS_REPLY} only if the user has already seen everything.`;
+
 function reasonLine(turn: Turn, wokenBy: Assistant | undefined): string {
   switch (turn.kind) {
     case "awareness":
@@ -15,6 +18,8 @@ function reasonLine(turn: Turn, wokenBy: Assistant | undefined): string {
       const count = turn.inboxMessageIds?.length ?? 0;
       return `You were not addressed in ${count === 1 ? "a message" : `${count} messages`} from other members, listed below. Reply only if you have something useful to add; otherwise reply exactly ${PASS_REPLY}.`;
     }
+    case "task_receipt":
+      return TASK_RECEIPT_LEAD;
     default:
       return "The user addressed you. Reply to their latest message.";
   }

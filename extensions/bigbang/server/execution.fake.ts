@@ -1,5 +1,12 @@
 import type { PaseoAgentPermissionResponse } from "@getpaseo/client";
-import type { ChatAgentSpec, ExecutionPort, PermissionInfo, TaskSpec, TurnRead } from "./execution";
+import type {
+  ChatAgentSpec,
+  ChildAgent,
+  ExecutionPort,
+  PermissionInfo,
+  TaskSpec,
+  TurnRead,
+} from "./execution";
 import { finalTextAfter, type ProjectionEntry } from "./projection";
 
 interface FakeAgent {
@@ -16,7 +23,14 @@ export class FakeExecution implements ExecutionPort {
   readonly agents = new Map<string, FakeAgent>();
   readonly sent: Array<{ agentId: string; text: string; messageId: string }> = [];
   readonly cancelled: string[] = [];
-  readonly permissionResponses: Array<{ agentId: string; requestId: string }> = [];
+  readonly permissionResponses: Array<{
+    agentId: string;
+    requestId: string;
+    serverId?: string;
+    response: PaseoAgentPermissionResponse;
+  }> = [];
+  /** Agents each execution started, by parent id. */
+  readonly children = new Map<string, ChildAgent[]>();
   readonly watchers = new Map<string, Set<() => void>>();
   localServerId = "local";
   /** Fails the next dispatch after recording it (the daemon may have accepted the message). */
@@ -92,16 +106,23 @@ export class FakeExecution implements ExecutionPort {
     };
   }
   async cancel(agentId: string): Promise<boolean> {
-    if (!this.agents.has(agentId)) return false;
+    const isChild = [...this.children.values()].some((list) =>
+      list.some((child) => child.id === agentId),
+    );
+    if (!this.agents.has(agentId) && !isChild) return false;
     this.cancelled.push(agentId);
     return true;
   }
   async respondToPermission(
     agentId: string,
     requestId: string,
-    _response: PaseoAgentPermissionResponse,
+    response: PaseoAgentPermissionResponse,
+    serverId?: string,
   ): Promise<void> {
-    this.permissionResponses.push({ agentId, requestId });
+    this.permissionResponses.push({ agentId, requestId, response, serverId });
+  }
+  async listChildren(agentId: string): Promise<ChildAgent[]> {
+    return [...(this.children.get(agentId) ?? [])];
   }
   async createTaskWorkspace(task: TaskSpec): Promise<{ workspaceId: string }> {
     return { workspaceId: `wks_${task.id.slice(0, 16)}` };

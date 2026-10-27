@@ -177,6 +177,11 @@ export class ChatStore {
       .get(agentId) as { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
   }
+  listChatSessions(): ChatSession[] {
+    return (
+      this.db.prepare("SELECT value FROM chat_sessions").all() as Array<{ value: string }>
+    ).map((row) => JSON.parse(row.value));
+  }
   putChatSession(session: ChatSession): void {
     this.db
       .prepare(

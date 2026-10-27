@@ -6,6 +6,7 @@ import type { Conversation, Message, Turn } from "../shared/contracts";
 import { ChatStore } from "./store";
 import { Coordinator } from "./coordinator";
 import { FakeExecution } from "./execution.fake";
+import type { TaskLimits } from "../shared/settings";
 
 // A group chat of assistants on a real SQLite file, the in-memory execution and a manual clock.
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -14,7 +15,15 @@ export async function closeFixtures(): Promise<void> {
 }
 export const HOUR = 60 * 60 * 1000;
 
-export function fixture(options: { names?: string[]; sweepMs?: number; directory?: string } = {}) {
+export function fixture(
+  options: {
+    names?: string[];
+    sweepMs?: number;
+    directory?: string;
+    limits?: TaskLimits;
+    onAudience?: (agentIds: string[]) => void;
+  } = {},
+) {
   const directory = options.directory ?? mkdtempSync(path.join(tmpdir(), "bigbang-fanout-"));
   if (!options.directory) cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
   const clock = { t: 1_800_000_000_000 };
@@ -32,6 +41,8 @@ export function fixture(options: { names?: string[]; sweepMs?: number; directory
       execution,
       now: () => clock.t,
       sweepMs: options.sweepMs ?? 1e9,
+      ...(options.limits ? { limits: options.limits } : {}),
+      ...(options.onAudience ? { onAudience: options.onAudience } : {}),
     });
     cleanup.push(() => coordinator.close());
     coordinator.attach();

@@ -47,10 +47,30 @@ export const messageSchema = z.object({
   quoteOf: z.string().optional(),
   epochId: z.string().optional(),
   round: z.number().optional(),
+  // Lifecycle receipt payload of a `task_event` row. `type` stays a string so a newer daemon can add
+  // event types an older client does not know; see `taskEventTypes` for the current set.
   event: z
-    .object({ type: z.string(), taskId: z.string().optional(), detail: z.string().optional() })
+    .object({
+      type: z.string(),
+      taskId: z.string().optional(),
+      detail: z.string().optional(),
+      // task_attention: the approval the row is about, so a client can answer it inline.
+      requestId: z.string().optional(),
+      // The assistant that started the task and is told about its outcome on its next turn.
+      notifyAssistantId: z.string().optional(),
+    })
     .optional(),
 });
+export const taskEventTypes = [
+  "task_started",
+  "task_attention",
+  "task_completed",
+  "task_failed",
+  "task_cancelled",
+  "task_queued",
+  "task_budget",
+  "task_workers_capped",
+] as const;
 export const executionSchema = z.object({
   serverId: z.string(),
   workspaceId: z.string(),
@@ -83,6 +103,14 @@ export const taskSchema = z.object({
   deadline: z.number(),
   origin: z.enum(["user", "assistant"]).optional(),
   requestedByTurnId: z.string().optional(),
+  // Short name of the task; clients fall back to the first line of `prompt`.
+  title: z.string().optional(),
+  // The thread of the conversation the task was requested from; lifecycle rows land there. The
+  // task's own thread is the one rooted at the `task:<id>` message.
+  sourceThreadId: z.string().nullable().optional(),
+  // Why the task is stopped: `budget` means its time budget ran out and a reply in the task thread
+  // continues it.
+  stopReason: z.enum(["budget"]).optional(),
   pendingPermission: z.object({ requestId: z.string(), title: z.string() }).nullable().optional(),
 });
 export const turnSchema = z.object({
@@ -222,5 +250,15 @@ export const startTask = defineRpc({
 export const cancelTask = defineRpc({
   name: "chat.task.cancel",
   input: z.object({ id: z.string() }),
+  output: taskSchema,
+});
+export const respondTaskPermission = defineRpc({
+  name: "chat.task.permission.respond",
+  input: z.object({
+    taskId: z.string(),
+    requestId: z.string(),
+    behavior: z.enum(["allow", "deny"]),
+    message: z.string().optional(),
+  }),
   output: taskSchema,
 });

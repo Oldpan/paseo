@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Assistant, Message, Turn } from "../shared/contracts";
 import type { ChatStore } from "./store";
+import { receiptText } from "./task-events";
 
 export interface ChatSession {
   id: string;
@@ -34,7 +35,12 @@ export function restoreChatSessions(store: ChatStore): void {
 export function assistantInstructions(assistant: Assistant): string {
   return `${assistant.persona}
 You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
-In a group chat, reply with exactly (pass) when you have nothing useful to add.`;
+In a group chat, reply with exactly (pass) when you have nothing useful to add.${autonomyInstructions(assistant)}`;
+}
+function autonomyInstructions(assistant: Assistant): string {
+  if (!assistant.autonomy?.enabled) return "";
+  return `
+You may start project work yourself with the bigbang__start_task tool, on the projects bigbang__task_status lists for you. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
 }
 function legacySessionTurn(turns: Turn[]): Turn | undefined {
   const reverse = turns.toReversed();
@@ -88,6 +94,10 @@ export function bindChatSession(
   store.putChatSession(session);
   return session;
 }
+const OUTCOME_EVENTS = new Set(["task_completed", "task_failed", "task_cancelled"]);
+function isOutcome(message: Message): boolean {
+  return OUTCOME_EVENTS.has(message.event?.type ?? "");
+}
 /** The messages of one lane, plus the thread's root message when `rootId` names it (roundtable). */
 export function laneMessages(
   messages: Message[],
@@ -109,6 +119,16 @@ export function unseenMessages(
   rootId?: string | null,
 ): Message[] {
   const history = laneMessages(messages, session.conversationId, session.threadId, rootId);
+  // Lifecycle rows are interface chrome, except an outcome the assistant has yet to report. A task
+  // the assistant started is already in its own history, so it is not told about it again.
+  const visible = (message: Message) =>
+    message.kind === "task_event"
+      ? message.event?.notifyAssistantId === session.assistantId && isOutcome(message)
+      : !(
+          message.taskId &&
+          message.id.startsWith("task:") &&
+          message.senderId === session.assistantId
+        );
   // The execution already holds its own replies in its native history.
   const nativeReplies = new Set(
     turns
@@ -120,13 +140,18 @@ export function unseenMessages(
       ]),
   );
   if (!session.lastMessageId)
-    return history.slice(-24).filter((message) => !nativeReplies.has(message.id));
+    return history
+      .filter(visible)
+      .slice(-24)
+      .filter((message) => !nativeReplies.has(message.id));
   const index = history.findIndex((message) => message.id === session.lastMessageId);
   if (index < 0)
     throw new Error(
       "The chat execution cursor is missing. Open the existing execution in Studio to inspect it.",
     );
-  return history.slice(index + 1).filter((message) => !nativeReplies.has(message.id));
+  return history
+    .slice(index + 1)
+    .filter((message) => visible(message) && !nativeReplies.has(message.id));
 }
 // Updating a turn moves its SQLite snapshot row behind newer queued turns. Keep
 // the current execution owner ahead of those turns until its result is settled.
@@ -191,6 +216,7 @@ export function chatPrompt(
 ): string {
   return messages
     .map((message) => {
+      if (message.kind === "task_event") return `[${receiptText(message)}]`;
       if (message.senderId === "user") return `You: ${message.content}`;
       const sender = assistants.find((item) => item.id === message.senderId);
       return `${sender?.name ?? (message.senderId === assistant.id ? assistant.name : "Assistant")}: ${message.content}`;

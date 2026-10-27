@@ -33,11 +33,20 @@ export interface ChatAgentSpec {
 }
 export interface TaskSpec {
   id: string;
+  /** Short name for the workspace and agent; the prompt's first line when absent. */
+  title?: string;
   prompt: string;
   provider: string;
   isolation: "worktree" | "directory";
   directory: string;
   serverId: string;
+}
+/** An agent a task's executor started (labelled with the executor as its parent). */
+export interface ChildAgent {
+  id: string;
+  /** Still doing work: running or starting up. */
+  active: boolean;
+  createdAt: string;
 }
 export interface AssistantHomes {
   get(assistantId: string): { workspaceId: string; directory: string } | null;
@@ -62,6 +71,8 @@ export interface ExecutionPort {
   createTaskWorkspace(task: TaskSpec): Promise<{ workspaceId: string }>;
   /** Creates the worker with its first prompt; the prompt's anchor is the task id. */
   createTaskAgent(task: TaskSpec, workspaceId: string): Promise<void>;
+  /** Agents the execution started through Paseo, oldest first. */
+  listChildren(agentId: string, serverId?: string): Promise<ChildAgent[]>;
   /** Calls `onChange` when the execution's state moves, for hosts whose hooks never fire here. */
   watch(serverId: string, agentId: string, onChange: () => void): Promise<() => void>;
   dispose(): Promise<void>;
@@ -72,6 +83,8 @@ type TimelineCursor = NonNullable<
 >;
 type AgentSnapshot = Awaited<ReturnType<PaseoAgentHandle["timeline"]["refetch"]>>["agent"];
 const PAGE_LIMIT = 100;
+// Label the daemon puts on agents created through an agent's MCP tools (packages/protocol).
+const PARENT_AGENT_ID_LABEL = "paseo.parent-agent-id";
 const MAX_PAGES = 8;
 
 function isRunning(snapshot: AgentSnapshot): boolean {
@@ -100,6 +113,9 @@ function describeTurn(projection: TurnProjection, snapshot: AgentSnapshot): Turn
   };
 }
 
+function taskLabel(task: TaskSpec): string {
+  return (task.title ?? task.prompt).slice(0, 60);
+}
 export function outcomeUnknown(message: string): Error {
   return Object.assign(new Error(message), { code: "agent_request_outcome_unknown" });
 }
@@ -243,7 +259,7 @@ export class PaseoExecution implements ExecutionPort {
     const workspace = await api.workspaces.create({
       idempotencyKey: `task-workspace:${task.id}`,
       source,
-      title: task.prompt.slice(0, 60),
+      title: taskLabel(task),
     });
     return { workspaceId: workspace.id };
   }
@@ -253,12 +269,28 @@ export class PaseoExecution implements ExecutionPort {
       agentId: task.id,
       idempotencyKey: `task-agent:${task.id}`,
       config: { provider: task.provider },
-      title: task.prompt.slice(0, 60),
+      title: taskLabel(task),
       prompt: task.prompt,
       clientMessageId: task.id,
       // Observation only: authorization never reads labels.
       labels: { "bigbang.task": task.id },
     });
+  }
+  async listChildren(agentId: string, serverId?: string): Promise<ChildAgent[]> {
+    const api = await this.on(serverId);
+    const result = await api.agents.list({
+      filter: { labels: { [PARENT_AGENT_ID_LABEL]: agentId } },
+      includeBackground: true,
+      page: { limit: 200 },
+    });
+    return result.entries
+      .filter(({ agent }) => !agent.archivedAt && agent.labels[PARENT_AGENT_ID_LABEL] === agentId)
+      .map(({ agent }) => ({
+        id: agent.id,
+        active: agent.status === "running" || agent.status === "initializing",
+        createdAt: agent.createdAt,
+      }))
+      .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
   async watch(serverId: string, agentId: string, onChange: () => void): Promise<() => void> {
     const api = await this.on(serverId);

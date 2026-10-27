@@ -12,12 +12,14 @@ import {
   type Turn,
   readAssistantMemory,
   readState,
+  respondTaskPermission,
   sendMessage,
   startTask,
   writeAssistantMemory,
 } from "../shared/contracts";
+import { DEFAULT_TASK_LIMITS, type TaskLimits } from "../shared/settings";
 import { ChatStore } from "./store";
-import { restoreChatSessions } from "./chat-sessions";
+import { queueTurn, restoreChatSessions } from "./chat-sessions";
 import { Fanout } from "./fanout";
 import { Roundtable, roundtableStartMembers } from "./roundtable";
 import { Dispatcher, KeyedQueue, agentKey, errorMessage, failureStatus } from "./dispatcher";
@@ -28,11 +30,19 @@ import {
   type TaskSpec,
 } from "./execution";
 import { isPass } from "./projection";
+import {
+  excerpt,
+  eventMessageId,
+  receiptText,
+  receiptTurnId,
+  resultMessageId,
+  taskEventMessage,
+  taskThreadId,
+  type TaskEventType,
+} from "./task-events";
 
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const TURN_LIVE = new Set(["running", "attention", "unknown"]);
-const TASK_BUDGET_MS = 30 * 60 * 1000;
-const TASK_QUOTA = 2;
 const DEFAULT_SWEEP_MS = 60_000;
 const INTERRUPTED_MESSAGE =
   "Interrupted: the execution closed before this reply finished. Send again to continue.";
@@ -52,12 +62,30 @@ export interface TurnEndedEvent extends AgentEvent {
 export interface PermissionRequestedEvent extends AgentEvent {
   request: { id: string; name: string; title?: string };
 }
+export interface AssistantTaskInput {
+  id: string;
+  conversationId: string;
+  /** The lane the assistant was asked in; lifecycle rows and the receipt turn land there. */
+  threadId: string | null;
+  assistant: Assistant;
+  title: string;
+  prompt: string;
+  serverId: string;
+  directory: string;
+  provider: string;
+  isolation: Task["isolation"];
+  requestedByTurnId: string;
+}
 export interface CoordinatorOptions {
   execution?: ExecutionPort;
   /** Safety sweep interval; hooks are best-effort, so the sweep settles what they missed. */
   sweepMs?: number;
   /** Clock for message times, recent participants and the peer inbox; tests drive it. */
   now?: () => number;
+  /** Task limits; the plugin settings replace them with `setLimits`. */
+  limits?: TaskLimits;
+  /** Receives the chat executions whose agent tools are admitted, whenever that set changes. */
+  onAudience?: (agentIds: string[]) => void;
 }
 interface Finish {
   outcome?: TurnEndedEvent["outcome"];
@@ -68,6 +96,7 @@ interface Finish {
 function taskSpec(task: Task): TaskSpec {
   return {
     id: task.id,
+    title: task.title,
     prompt: task.prompt,
     provider: task.provider,
     isolation: task.isolation,
@@ -103,6 +132,9 @@ export class Coordinator {
   private timer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private recovered = false;
+  private limits: TaskLimits;
+  private audienceKey: string | null = null;
+  private readonly onAudience: ((agentIds: string[]) => void) | undefined;
   private readonly sweepMs: number;
   constructor(
     readonly store: ChatStore,
@@ -113,6 +145,8 @@ export class Coordinator {
     this.injected = Boolean(options.execution);
     this.sweepMs = options.sweepMs ?? DEFAULT_SWEEP_MS;
     this.now = options.now ?? Date.now;
+    this.limits = options.limits ?? DEFAULT_TASK_LIMITS;
+    this.onAudience = options.onAudience;
     this.fanout = new Fanout(store, this.now);
     this.roundtable = new Roundtable(store, this.now);
     this.dispatcher = new Dispatcher({
@@ -120,9 +154,10 @@ export class Coordinator {
       queue: this.queue,
       execution: () => this.port,
       closed: () => this.closed,
-      cancelTask: (id) => this.cancel(id),
+      cancelTask: (id) => this.cancel(id, "budget"),
       settle: (agentId) => this.settle(agentId),
       turnEnded: (turn) => this.afterTurn(turn),
+      beforeChatAgent: () => this.syncAudience(),
     });
   }
   /** Binds the plugin's Paseo API once; later calls are ignored. The first call runs recovery. */
@@ -137,6 +172,7 @@ export class Coordinator {
     if (this.recovered || !this.port) return;
     this.recovered = true;
     restoreChatSessions(this.store);
+    this.syncAudience();
     // Resume what the last process left: roundtable epochs between turns, and peer batches that
     // came due while it was down.
     this.roundtable.advanceAll();
@@ -178,7 +214,31 @@ export class Coordinator {
     }
     const assistant: Assistant = existing ? { ...input, memory: existing.memory } : input;
     this.store.transaction(() => this.store.put("assistants", assistant));
+    this.syncAudience();
     return assistant;
+  }
+  get taskLimits(): TaskLimits {
+    return this.limits;
+  }
+  /** Replaces the task limits (plugin settings) and starts queued tasks a raised limit now admits. */
+  setLimits(limits: TaskLimits): void {
+    this.limits = limits;
+    this.kick();
+  }
+  // The agent tools are offered to the chat executions of assistants allowed to act on their own.
+  // The daemon checks the audience on every call, so it only needs to be right before an execution
+  // that must see the tools is created or resumed.
+  private syncAudience(): void {
+    if (!this.onAudience) return;
+    const ids = this.store
+      .listChatSessions()
+      .filter((session) => this.store.get("assistants", session.assistantId)?.autonomy?.enabled)
+      .map((session) => session.agentId)
+      .toSorted();
+    const key = ids.join("\n");
+    if (key === this.audienceKey) return;
+    this.audienceKey = key;
+    this.onAudience(ids);
   }
   private memoryFile(assistantId: string): string {
     if (!this.store.get("assistants", assistantId)) throw new Error("Assistant no longer exists.");
@@ -257,7 +317,9 @@ export class Coordinator {
         (turn) =>
           turn.conversationId === conversation.id &&
           turn.threadId === input.threadId &&
-          turn.status === "queued",
+          turn.status === "queued" &&
+          // A task outcome is not answered by a newer message; the assistant still reports it.
+          turn.kind !== "task_receipt",
       ))
         this.store.put("turns", {
           ...previous,
@@ -285,7 +347,12 @@ export class Coordinator {
   ) {
     const taskRoot = input.threadId ? this.store.get("messages", input.threadId) : null;
     const followupTask = taskRoot?.taskId ? this.store.get("tasks", taskRoot.taskId) : null;
-    if (followupTask && (!followupTask.execution || followupTask.status === "cancelled"))
+    // A task that ran out of budget continues on a reply; one the user cancelled is final.
+    if (
+      followupTask &&
+      (!followupTask.execution ||
+        (followupTask.status === "cancelled" && followupTask.stopReason !== "budget"))
+    )
       throw new Error("This task cannot accept a follow-up yet.");
     if (
       input.quoteOf &&
@@ -308,8 +375,15 @@ export class Coordinator {
         : null;
     return { followupTask, epoch, starters };
   }
+  // A reply in the task thread continues the same executor and reopens the task with a fresh budget.
   private queueFollowup(task: Task, message: Message): void {
-    this.store.put("tasks", { ...task, status: "running", deadline: Date.now() + TASK_BUDGET_MS });
+    const { stopReason: _stopReason, ...open } = task;
+    this.store.put("tasks", {
+      ...open,
+      status: "running",
+      error: null,
+      deadline: this.deadlineFromNow(),
+    });
     this.store.put("turns", {
       id: randomUUID(),
       kind: "task_followup",
@@ -328,6 +402,9 @@ export class Coordinator {
     });
   }
 
+  private deadlineFromNow(): number {
+    return Date.now() + this.limits.autonomousBudgetMinutes * 60_000;
+  }
   task(input: RpcInput<typeof startTask>): Task {
     const existing = this.store.get("tasks", input.id);
     if (existing) {
@@ -350,8 +427,9 @@ export class Coordinator {
       accepted: false,
       error: null,
       createdAt: Date.now(),
-      deadline: Date.now() + TASK_BUDGET_MS,
+      deadline: this.deadlineFromNow(),
       origin: "user",
+      sourceThreadId: null,
     };
     this.store.transaction(() => {
       this.store.put("tasks", task);
@@ -369,22 +447,108 @@ export class Coordinator {
     this.kick();
     return task;
   }
-  async cancel(id: string): Promise<Task> {
+  /**
+   * Starts a task on behalf of an assistant. The caller has already authorized it; the task id is
+   * derived from the request, so asking twice returns the task the first call created.
+   */
+  startAssistantTask(input: AssistantTaskInput): Task {
+    const existing = this.store.get("tasks", input.id);
+    if (existing) return existing;
+    const task: Task = {
+      id: input.id,
+      conversationId: input.conversationId,
+      assistantId: input.assistant.id,
+      prompt: input.prompt,
+      title: input.title,
+      serverId: input.serverId,
+      directory: input.directory,
+      provider: input.provider,
+      isolation: input.isolation,
+      status: "queued",
+      execution: null,
+      accepted: false,
+      error: null,
+      createdAt: Date.now(),
+      deadline: this.deadlineFromNow(),
+      origin: "assistant",
+      requestedByTurnId: input.requestedByTurnId,
+      sourceThreadId: input.threadId,
+    };
+    this.store.transaction(() => {
+      this.store.put("tasks", task);
+      // The task's thread hangs off this message, in the lane the assistant was asked in.
+      this.store.putMessage({
+        id: `task:${task.id}`,
+        conversationId: task.conversationId,
+        senderId: task.assistantId,
+        threadId: input.threadId,
+        content: input.title ? `${input.title}\n\n${input.prompt}` : input.prompt,
+        createdAt: this.now(),
+        taskId: task.id,
+        kind: "final",
+      });
+    });
+    this.kick();
+    return task;
+  }
+  /** Whether the task is waiting for a free slot (a lifecycle row says so). */
+  isQueuedBehindLimit(taskId: string): boolean {
+    return Boolean(this.store.get("messages", eventMessageId(taskId, "task_queued")));
+  }
+  /** The chat turn an execution is working on now; an agent tool call happens inside it. */
+  liveChatTurn(agentId: string): Turn | undefined {
+    // A tool call can arrive before the dispatch is recorded as accepted.
+    return this.store
+      .snapshot()
+      .turns.findLast(
+        (turn) =>
+          turn.agentId === agentId &&
+          !turn.taskId &&
+          (turn.status === "creating" || TURN_LIVE.has(turn.status)),
+      );
+  }
+  /** Answers the approval a remote task is waiting on; only its current request is accepted. */
+  async respondPermission(input: RpcInput<typeof respondTaskPermission>): Promise<Task> {
+    const task = this.store.get("tasks", input.taskId);
+    if (!task) throw new Error("Task no longer exists.");
+    if (!task.execution || !task.accepted || !LIVE.has(task.status))
+      throw new Error("This task is not waiting for an approval.");
+    if (task.pendingPermission?.requestId !== input.requestId)
+      throw new Error("That approval is no longer pending. Refresh the task and try again.");
+    if (!this.port) throw new Error("The Chat coordinator is not connected to Paseo yet.");
+    await this.port.respondToPermission(
+      task.execution.agentId,
+      input.requestId,
+      input.behavior === "allow"
+        ? { behavior: "allow" }
+        : { behavior: "deny", ...(input.message ? { message: input.message } : {}) },
+      task.serverId,
+    );
+    // The answer reaches the ledger through the hook or the task observation; read it now too.
+    const agentId = task.execution.agentId;
+    await this.queue.run(agentKey(agentId), () => this.reconcile(agentId, {}));
+    return this.store.get("tasks", task.id) ?? task;
+  }
+  /** `budget`: the task's time ran out; a reply in its thread continues it. */
+  async cancel(id: string, reason?: "budget"): Promise<Task> {
     const task = this.store.get("tasks", id);
     if (!task) throw new Error("Task no longer exists.");
     if (!LIVE.has(task.status) && !task.cancelPending) return task;
+    const stopReason = reason ?? task.stopReason;
     const cancelled: Task = {
       ...task,
       status: "cancelled",
       cancelPending: Boolean(task.execution),
       pendingPermission: null,
       error: null,
+      ...(stopReason ? { stopReason } : {}),
     };
     this.store.transaction(() => {
       this.store.put("tasks", cancelled);
       for (const turn of this.store.snapshot().turns)
         if (turn.taskId === id && LIVE.has(turn.status))
           this.store.put("turns", { ...turn, status: "cancelled" });
+      this.recordOutcome(cancelled, task.id, "");
     });
     this.stopWatch(id);
     if (task.execution && this.port) {
@@ -471,8 +635,14 @@ export class Coordinator {
     for (const task of state.tasks) {
       if (!task.execution || !task.accepted || !LIVE.has(task.status)) continue;
       if (task.status !== "cancelled" && Date.now() >= task.deadline)
-        void this.queue.run(agentKey(task.id), async () => void (await this.cancel(task.id)));
-      else this.settle(task.execution.agentId);
+        void this.queue.run(
+          agentKey(task.id),
+          async () => void (await this.cancel(task.id, "budget")),
+        );
+      else {
+        this.settle(task.execution.agentId);
+        void this.queue.run(agentKey(task.id), () => this.enforceWorkerCap(task.id));
+      }
     }
     this.kick();
     await this.queue.idle();
@@ -485,11 +655,21 @@ export class Coordinator {
     if (this.closed || !this.port) return;
     const tasks = this.store.snapshot().tasks;
     const live = tasks.filter((task) => LIVE.has(task.status) && task.status !== "queued");
-    const queued = tasks
+    const waiting = tasks
       .filter((task) => task.status === "queued")
-      .slice(0, Math.max(0, TASK_QUOTA - live.length));
+      .toSorted((a, b) => a.createdAt - b.createdAt);
+    const slots = Math.max(0, this.limits.maxParallelTasks - live.length);
+    const queued = waiting.slice(0, slots);
     for (const task of [...live.filter((candidate) => !candidate.accepted), ...queued])
       void this.queue.run(agentKey(task.id), () => this.runTask(task.id));
+    // Past the limit a task waits; the row tells the user it has not been forgotten.
+    if (waiting.length > slots)
+      this.store.transaction(() => {
+        for (const task of waiting.slice(slots))
+          this.postTaskEvent(task, "task_queued", {
+            slots: { busy: live.length + queued.length, limit: this.limits.maxParallelTasks },
+          });
+      });
     for (const task of tasks)
       if (task.status === "cancelled" && task.cancelPending)
         void this.queue.run(agentKey(task.id), async () => void (await this.cancel(task.id)));
@@ -618,13 +798,17 @@ export class Coordinator {
       if (final) this.fanout.onFinal(settled, final);
       if (turn.epochId) this.roundtable.advance(turn.epochId);
       const latest = task ? this.store.get("tasks", task.id) : null;
-      if (latest && latest.status !== "cancelled")
-        this.store.put("tasks", {
+      if (latest && latest.status !== "cancelled") {
+        const next: Task = {
           ...latest,
           status: status === "completed" || status === "cancelled" ? status : "failed",
           error,
           pendingPermission: null,
-        });
+        };
+        this.store.put("tasks", next);
+        // A follow-up's own answer is already in the thread as this turn's final.
+        this.recordOutcome(next, turn.id, text);
+      }
     });
     if (turn.taskId) this.stopWatch(turn.taskId);
   }
@@ -652,11 +836,12 @@ export class Coordinator {
     this.store.transaction(() => {
       const latest = this.store.get("tasks", task.id)!;
       if (latest.status === "cancelled") return;
-      if (status === "completed" && text && !this.store.get("messages", `result:${task.id}`))
+      // The result belongs to the task's thread; the chat only gets the lifecycle row.
+      if (status === "completed" && text && !this.store.get("messages", resultMessageId(task.id)))
         this.store.putMessage({
-          id: `result:${task.id}`,
+          id: resultMessageId(task.id),
           conversationId: task.conversationId,
-          threadId: null,
+          threadId: taskThreadId(task.id),
           senderId: task.assistantId,
           content: text,
           createdAt: Date.now(),
@@ -664,13 +849,9 @@ export class Coordinator {
           kind: "final",
           turnId: task.id,
         });
-      this.store.put("tasks", {
-        ...latest,
-        status,
-        error,
-        accepted: true,
-        pendingPermission: null,
-      });
+      const next: Task = { ...latest, status, error, accepted: true, pendingPermission: null };
+      this.store.put("tasks", next);
+      this.recordOutcome(next, task.id, text);
     });
     this.stopWatch(task.id);
   }
@@ -696,8 +877,16 @@ export class Coordinator {
     if (!task || !LIVE.has(task.status) || task.status === "queued" || task.status === "creating")
       return;
     const pending = permissionOf(permission);
-    if (task.status !== status || task.pendingPermission?.requestId !== pending?.requestId)
-      this.store.put("tasks", { ...task, status, error: null, pendingPermission: pending });
+    if (task.status !== status || task.pendingPermission?.requestId !== pending?.requestId) {
+      const next: Task = { ...task, status, error: null, pendingPermission: pending };
+      this.store.put("tasks", next);
+      if (pending)
+        this.postTaskEvent(next, "task_attention", {
+          key: pending.requestId,
+          detail: pending.title,
+          requestId: pending.requestId,
+        });
+    }
   }
   private markAttention(agentId: string, permission: PermissionInfo | null): void {
     if (this.closed) return;
@@ -718,8 +907,11 @@ export class Coordinator {
         if (target.epochId) this.roundtable.advance(target.epochId);
       }
       const task = taskId ? this.store.get("tasks", taskId) : null;
-      if (task && LIVE.has(task.status))
-        this.store.put("tasks", { ...task, status: "failed", error, pendingPermission: null });
+      if (task && LIVE.has(task.status)) {
+        const failed: Task = { ...task, status: "failed", error, pendingPermission: null };
+        this.store.put("tasks", failed);
+        this.recordOutcome(failed, "agentId" in target ? target.id : task.id, "");
+      }
     });
     const taskId = "agentId" in target ? target.taskId : target.id;
     if (taskId) this.stopWatch(taskId);
@@ -730,13 +922,101 @@ export class Coordinator {
     if (turn) this.interrupt(turn, reason);
     else if (task && LIVE.has(task.status) && task.accepted) this.interrupt(task, reason);
   }
+  // Lifecycle rows are posted into the lane the task was requested from. Each has a stable id, so
+  // a repeated settle, sweep or hook leaves exactly one.
+  private postTaskEvent(
+    task: Task,
+    type: TaskEventType,
+    options: {
+      key?: string;
+      detail?: string;
+      requestId?: string;
+      slots?: { busy: number; limit: number };
+    },
+  ): Message {
+    const id = eventMessageId(task.id, type, options.key);
+    const existing = this.store.get("messages", id);
+    if (existing) return existing;
+    return this.store.putMessage(
+      taskEventMessage(task, type, {
+        ...options,
+        createdAt: this.now(),
+        budgetMinutes: this.limits.autonomousBudgetMinutes,
+      }),
+    );
+  }
+  // A task run reached an end state (`anchor` names the run: the task id or a follow-up turn id).
+  // Posts its row and, for a task an assistant started, queues that assistant's receipt turn.
+  private recordOutcome(task: Task, anchor: string, text: string): void {
+    const budget = task.status === "cancelled" && task.stopReason === "budget";
+    let type: TaskEventType;
+    let detail: string | undefined;
+    if (budget) type = "task_budget";
+    else if (task.status === "completed") {
+      type = "task_completed";
+      detail = excerpt(text) || "The task finished without a written result.";
+    } else if (task.status === "failed") {
+      type = "task_failed";
+      detail = task.error ?? undefined;
+    } else if (task.status === "cancelled") type = "task_cancelled";
+    else return;
+    // A budget stop is repeatable (each reopened run has its own deadline); the others are per run.
+    let key: string | undefined = anchor === task.id ? undefined : anchor;
+    if (budget) key = String(task.deadline);
+    const row = this.postTaskEvent(task, type, { ...(key ? { key } : {}), detail });
+    if (budget || task.origin !== "assistant") return;
+    this.queueReceipt(task, row);
+  }
+  // One receipt per task: the first outcome the requesting assistant has not been told about.
+  private queueReceipt(task: Task, row: Message): void {
+    const id = receiptTurnId(task.id);
+    const assistant = this.store.get("assistants", task.assistantId);
+    const conversation = this.store.get("conversations", task.conversationId);
+    if (this.store.get("turns", id) || !assistant || !conversation?.members.includes(assistant.id))
+      return;
+    queueTurn(this.store, {
+      id,
+      conversationId: task.conversationId,
+      threadId: task.sourceThreadId ?? null,
+      assistant,
+      kind: "task_receipt",
+      triggerId: row.id,
+      rootTriggerId: row.id,
+      prompt: receiptText(row),
+    });
+  }
+  // Cancels the work agents a task's executor runs beyond the limit, newest first. The daemon cannot
+  // refuse the creation, so the cap is enforced after the fact.
+  private async enforceWorkerCap(taskId: string): Promise<void> {
+    const port = this.port;
+    const task = this.store.get("tasks", taskId);
+    if (!port || this.closed || !task?.execution || !task.accepted || !LIVE.has(task.status))
+      return;
+    try {
+      const children = (await port.listChildren(task.execution.agentId, task.serverId)).filter(
+        (child) => child.active,
+      );
+      const extra = children.slice(this.limits.maxWorkAgentsPerTask);
+      for (const child of extra) {
+        await port.cancel(child.id, task.serverId);
+        this.store.transaction(() =>
+          this.postTaskEvent(task, "task_workers_capped", {
+            key: child.id,
+            detail: `Stopped ${child.id}. The limit is ${this.limits.maxWorkAgentsPerTask} work agents per task.`,
+          }),
+        );
+      }
+    } catch (error) {
+      console.error("Bigbang work-agent limit check failed; the sweep will retry", error);
+    }
+  }
   private async runTask(taskId: string): Promise<void> {
     const port = this.port;
     let task = this.store.get("tasks", taskId);
     if (!port || this.closed || !task || !LIVE.has(task.status) || task.accepted) return;
     try {
       if (Date.now() >= task.deadline) {
-        await this.cancel(task.id);
+        await this.cancel(task.id, "budget");
         return;
       }
       if (!task.execution) {
@@ -762,19 +1042,24 @@ export class Coordinator {
         return;
       }
       task = { ...latest, status: "running", accepted: true };
-      this.store.transaction(() => this.store.put("tasks", task!));
+      this.store.transaction(() => {
+        this.store.put("tasks", task!);
+        this.postTaskEvent(task!, "task_started", {});
+      });
       this.watch(task);
       // The hook for a quick turn may have fired before the task was recorded as accepted.
       this.settle(task.id);
     } catch (error) {
       if (!this.closed && this.store.get("tasks", taskId)?.status !== "cancelled")
-        this.store.transaction(() =>
-          this.store.put("tasks", {
+        this.store.transaction(() => {
+          const failed: Task = {
             ...task!,
             status: failureStatus(error),
             error: errorMessage(error),
-          }),
-        );
+          };
+          this.store.put("tasks", failed);
+          this.recordOutcome(failed, task!.id, "");
+        });
     }
   }
   async close(): Promise<void> {

@@ -372,7 +372,8 @@ describe("tasks", () => {
     expect(f.store.get("tasks", task.id)?.status).toBe("completed");
     expect(f.finals().map((message) => [message.id, message.content])).toEqual([
       [`result:${task.id}`, "All checks passed"],
-    ]);
+    ]); // The result lands in the task's thread (M7), not at the chat root.
+    expect(f.store.get("messages", `result:${task.id}`)?.threadId).toBe(`task:${task.id}`);
   });
 
   it("observes a task on another host through its agent and settles on the update", async () => {

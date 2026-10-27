@@ -9,7 +9,7 @@ import {
   runnableChatTurns,
   unseenMessages,
 } from "./chat-sessions";
-import { groupPreamble } from "./prompts";
+import { TASK_RECEIPT_LEAD, groupPreamble } from "./prompts";
 import { ROUNDTABLE_HISTORY_LIMIT } from "./roundtable";
 
 export function errorMessage(error: unknown): string {
@@ -63,6 +63,8 @@ export interface DispatcherDeps {
   settle(agentId: string): void;
   /** A turn ended without its execution ever reporting back (dispatch failed). */
   turnEnded(turn: Turn): void;
+  /** A chat execution is about to be created or resumed; its tools must already be admitted. */
+  beforeChatAgent(): void;
 }
 
 // A turn is persisted `prepared` before anything is sent. If the process dies in between, the
@@ -144,6 +146,7 @@ export class Dispatcher {
     if (turn.chatSessionId) {
       const session = this.deps.store.getChatSession(turn.chatSessionId);
       if (!session) throw new Error("Chat execution binding is missing.");
+      this.deps.beforeChatAgent();
       await port.ensureChatAgent({
         agentId: session.agentId,
         assistantId: assistant.id,
@@ -239,6 +242,8 @@ export class Dispatcher {
             epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
           })}\n\n${messages || "(no new messages)"}`
         : messages || "Continue this roundtable discussion with another useful contribution.";
+    if (turn.kind === "task_receipt" && conversation?.kind !== "group")
+      prompt = `${TASK_RECEIPT_LEAD}\n\n${prompt}`;
     if (instructions !== session.lastInstructions)
       prompt = `Updated assistant instructions:\n${instructions}\n\n${prompt}`;
     const history = laneMessages(state.messages, turn.conversationId, turn.threadId, rootId);
