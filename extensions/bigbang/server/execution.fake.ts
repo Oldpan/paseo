@@ -94,7 +94,7 @@ export class FakeExecution implements ExecutionPort {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error("Agent not found");
     const projection = finalTextAfter(agent.entries, messageId);
-    if (!projection) return { kind: "unknown" };
+    if (!projection) return { kind: "unknown", running: agent.running && !agent.closed };
     return {
       kind: "found",
       ended: !agent.closed && !agent.archived && (projection.closed || !agent.running),

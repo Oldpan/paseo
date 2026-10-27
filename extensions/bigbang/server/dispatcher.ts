@@ -122,7 +122,7 @@ export class Dispatcher {
     try {
       const read = await port
         .readTurn(turn.agentId, turn.id, this.serverOf(turn))
-        .catch(() => ({ kind: "unknown" as const }));
+        .catch(() => ({ kind: "unknown" as const, running: true }));
       if (read.kind === "found") this.accept(turn);
       else await this.send(turn, assistant);
     } catch (error) {

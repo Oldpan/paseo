@@ -27,7 +27,9 @@ The final answer is the chat message. There is no send tool and no repair turn: 
 
 Plugin lifecycle hooks (`agent.turn_ended`, `agent.permission_*`, `agent.closed`, `agent.archived`) drive local executions. They are best-effort, unreplayed and fire only on the plugin's own daemon. Each hook only enqueues work; every settle re-reads the timeline, so a duplicated or missed hook converges. Tasks on other hosts are observed through agent subscriptions on `hosts.client(serverId)`. A 60-second sweep and startup recovery through `server.paseo` cover what hooks miss.
 
-An execution that closes mid-turn fails that turn with an "Interrupted" error and keeps the same agent; the next message resumes it. Never guess a reply from partial output. The one gap: a turn that finished, whose hook was missed just before a daemon restart, also settles as interrupted, because the timeline keeps no turn-end record.
+An execution that closes mid-turn fails that turn with an "Interrupted" error and keeps the same agent; the next message resumes it. Never guess a reply from partial output.
+
+A daemon restart loses the anchors: Paseo keeps timelines in memory and rebuilds them from provider history, which has no `messageId`. An accepted turn or task whose anchor is gone therefore fails as interrupted once its execution is idle. The cost is that a turn that finished just before the restart, with its hook missed, also fails as interrupted, and a turn prepared but not yet confirmed is sent again.
 
 ## Clients
 

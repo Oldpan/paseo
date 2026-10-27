@@ -202,9 +202,7 @@ describe("PaseoExecution", () => {
     const api = { agents: { ref: () => ({ timeline: { refetch } }) } } as unknown as PaseoApi;
     expect(
       await new PaseoExecution(api, directory(), memoryHomes()).readTurn("a", "turn-1"),
-    ).toEqual({
-      kind: "unknown",
-    });
+    ).toEqual({ kind: "unknown", running: false });
     expect(refetch).toHaveBeenCalledTimes(8);
   });
 

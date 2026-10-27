@@ -10,7 +10,11 @@ export interface PermissionInfo {
 }
 /** `unknown`: the turn's anchor is not in the execution's timeline. */
 export type TurnRead =
-  | { kind: "unknown" }
+  | {
+      kind: "unknown";
+      /** The execution is still producing output, so the anchor may yet be the latest turn. */
+      running: boolean;
+    }
   | {
       kind: "found";
       /** The turn can no longer produce output. */
@@ -227,7 +231,8 @@ export class PaseoExecution implements ExecutionPort {
       if (!result.hasOlder || !result.startCursor) break;
       cursor = result.startCursor;
     }
-    return { kind: "unknown" };
+    snapshot ??= (await agent.refresh())?.agent ?? null;
+    return { kind: "unknown", running: isRunning(snapshot) };
   }
   async cancel(agentId: string, serverId?: string): Promise<boolean> {
     const agent = (await this.on(serverId)).agents.ref(agentId);

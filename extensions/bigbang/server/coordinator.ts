@@ -111,6 +111,12 @@ function goneReason(
   if (read.agentArchived) return "archived";
   return read.agentClosed ? "closed" : finish.gone;
 }
+// Paseo keeps timelines in memory and rebuilds them from provider history after a daemon restart,
+// without the message ids that anchor turns. An accepted run whose anchor is gone and whose
+// execution is idle was cut off by that restart; it fails as interrupted, never with a guessed reply.
+function anchorLost(target: { accepted?: boolean }, read: { running: boolean }): boolean {
+  return Boolean(target.accepted) && !read.running;
+}
 function permissionOf(permission: PermissionInfo | null): Task["pendingPermission"] {
   return permission ? { requestId: permission.requestId, title: permission.title } : null;
 }
@@ -746,7 +752,10 @@ export class Coordinator {
   }
   private async settleTurn(turn: Turn, finish: Finish): Promise<void> {
     const read = await this.port!.readTurn(turn.agentId, turn.id, this.serverFor(turn));
-    if (read.kind === "unknown") return;
+    if (read.kind === "unknown") {
+      if (anchorLost(turn, read)) this.interrupt(turn, "closed");
+      return;
+    }
     if (!read.ended) {
       const gone = goneReason(read, finish);
       if (gone) this.interrupt(turn, gone);
@@ -829,7 +838,10 @@ export class Coordinator {
     const execution = task.execution;
     if (!execution || !LIVE.has(task.status) || task.status === "queued") return;
     const read = await this.port!.readTurn(execution.agentId, task.id, task.serverId);
-    if (read.kind === "unknown") return;
+    if (read.kind === "unknown") {
+      if (anchorLost(task, read)) this.interrupt(task, "closed");
+      return;
+    }
     if (!read.ended) {
       const gone = goneReason(read, finish);
       if (gone) this.interrupt(task, gone);

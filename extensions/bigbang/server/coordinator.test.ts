@@ -166,7 +166,8 @@ describe("event-driven Chat coordination", () => {
     await coordinator.idle();
     expect(store.snapshot()).toEqual(before);
 
-    // A live turn whose anchor is not in the timeline is left alone rather than guessed.
+    // A turn whose anchor left the timeline is never guessed from other output; once the
+    // execution is idle it fails as interrupted.
     const next = await say("Again");
     execution.agents.get(turn.agentId)!.entries.length = 0;
     execution.studioTyped(turn.agentId, "Other", "other");
@@ -174,7 +175,10 @@ describe("event-driven Chat coordination", () => {
     execution.finish(turn.agentId);
     ended(turn.agentId);
     await coordinator.idle();
-    expect(store.get("turns", next.id)?.status).toBe("running");
+    expect(store.get("turns", next.id)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Interrupted"),
+    });
     expect(finals()).toHaveLength(1);
   });
 
@@ -239,6 +243,25 @@ describe("event-driven Chat coordination", () => {
     coordinator.onPermissionResolved({ agent: { id: turn.agentId } });
     await coordinator.idle();
     expect(store.get("turns", turn.id)?.status).toBe("running");
+  });
+
+  it("fails a turn whose anchor a daemon restart lost once its execution is idle", async () => {
+    const { store, execution, coordinator, say, finals } = fixture();
+    const turn = await say("Hello");
+    // The daemon rebuilds a timeline from provider history after a restart, without message ids.
+    const agent = execution.agents.get(turn.agentId)!;
+    agent.entries = [{ item: { type: "user_message", text: "Hello" } }];
+    await coordinator.sweep();
+    expect(store.get("turns", turn.id)?.status).toBe("running");
+
+    execution.finish(turn.agentId);
+    await coordinator.sweep();
+    expect(store.get("turns", turn.id)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Interrupted"),
+    });
+    expect(finals()).toHaveLength(0);
+    expect((await say("Try again")).agentId).toBe(turn.agentId);
   });
 
   it("fails a turn whose execution closed mid-turn and resumes the same agent on the next message", async () => {
@@ -413,6 +436,20 @@ describe("tasks", () => {
     f.ended(tasks[0].id);
     await f.coordinator.idle();
     expect(f.store.get("tasks", tasks[2].id)?.status).toBe("running");
+  });
+
+  it("fails a task whose anchor a daemon restart lost once its executor is idle", async () => {
+    const f = fixture();
+    const task = f.coordinator.task(taskInput(f, "local"));
+    await f.coordinator.idle();
+    const agent = f.execution.agents.get(task.id)!;
+    agent.entries = [{ item: { type: "user_message", text: "Brief" } }];
+    f.execution.finish(task.id);
+    await f.coordinator.sweep();
+    expect(f.store.get("tasks", task.id)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Interrupted"),
+    });
   });
 
   it("fails a task whose execution closed so a follow-up can continue the same executor", async () => {
