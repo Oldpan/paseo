@@ -26,7 +26,7 @@ export const AGENT_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,40}$/;
 
 /**
  * Declares a tool that agents can call through the daemon's Agent MCP endpoint. The daemon
- * exposes it as `<pluginId>__<name>` to verified agents the plugin has admitted.
+ * exposes it as `<pluginId>-<name>` to verified agents the plugin has admitted.
  */
 export function defineAgentTool<InputSchema extends ZodType, OutputSchema extends ZodType>(
   definition: AgentToolDefinition<InputSchema, OutputSchema>,

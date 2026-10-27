@@ -828,7 +828,7 @@ Creation request
 ## Agent 工具 {#agent-tools}
 
 用 `@getpaseo/plugin` 的 `defineAgentTool()` 和 `server.registerAgentTool()` 向 Agent 暴露工具。
-守护进程在 `/mcp/agents` 上，只对你放行的 Agent 列出该工具，名称为 `<pluginId>__<name>`。工具名需匹配
+守护进程在 `/mcp/agents` 上，只对你放行的 Agent 列出该工具，名称为 `<pluginId>-<name>`。工具名需匹配
 `^[a-z][a-z0-9_]{0,40}$`。
 
 ```ts
@@ -866,13 +866,13 @@ export default function contribute(server: PluginServerContext) {
 密码的守护进程上不带凭据的请求，永远看不到插件工具。授权要依据你自己存储中以 `caller.agentId` 为键的记录，
 不要依据标签或模型输入。
 
-| 情况                         | 结果                                                       |
-| ---------------------------- | ---------------------------------------------------------- |
-| 输入不符合 schema            | 调用返回 MCP 错误结果，处理函数不会运行                    |
-| 处理函数抛错或输出未通过校验 | 调用返回带错误信息的 MCP 错误结果                          |
-| 处理函数运行超过 30 秒       | 调用失败，`signal` 中止                                    |
-| 插件重新加载、停止或被移除   | 其工具从下一次请求起消失                                   |
-| Provider 禁用该工具          | `paseoTools.disabledTools` 接受完整的 `<pluginId>__<name>` |
+| 情况                         | 结果                                                      |
+| ---------------------------- | --------------------------------------------------------- |
+| 输入不符合 schema            | 调用返回 MCP 错误结果，处理函数不会运行                   |
+| 处理函数抛错或输出未通过校验 | 调用返回带错误信息的 MCP 错误结果                         |
+| 处理函数运行超过 30 秒       | 调用失败，`signal` 中止                                   |
+| 插件重新加载、停止或被移除   | 其工具从下一次请求起消失                                  |
+| Provider 禁用该工具          | `paseoTools.disabledTools` 接受完整的 `<pluginId>-<name>` |
 
 在进程内接收主机工具（原生 Paseo 工具）的 Agent 在启动时只读取一次工具列表，所以放行名单的变化要到它们下次启动
 才会生效。插件 Provider 的工具清单不包含插件工具。

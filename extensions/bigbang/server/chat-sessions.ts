@@ -51,7 +51,7 @@ export function describeTargets(assistant: Assistant): string {
 function autonomyInstructions(assistant: Assistant): string {
   if (!assistant.autonomy?.enabled) return "";
   return `
-You may start project work yourself with the bigbang__start_task tool. Your authorized projects: ${describeTargets(assistant)}. Pass the chosen one as target {serverId, directory}. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
+You may start project work yourself with the bigbang-start_task tool. Your authorized projects: ${describeTargets(assistant)}. Pass the chosen one as target {serverId, directory}. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
 }
 function legacySessionTurn(turns: Turn[]): Turn | undefined {
   const reverse = turns.toReversed();

@@ -462,7 +462,9 @@ owns the author API; this section owns the host contract.
   aborts.
 - **Policy still applies.** Plugin tools reach `createToolCatalog` as `additionalTools` and go through
   the same `registerTool` as built-ins, so `paseoTools.disabledTools` filters them. They are named
-  `<pluginId>__<name>`; plugin IDs cannot contain `_`, so names cannot collide.
+  `<pluginId>-<name>`; tool names cannot contain `-`, so they collide neither with each other nor
+  with built-ins. Never qualify with `__`: Grok names MCP tools `<server>__<tool>` and drops any
+  tool whose own name contains `__`.
 - **Native catalogs are fixed at launch.** Providers that read host tools in-process (opencode, omp)
   build the catalog when the agent starts. Audience changes reach them on the next start. Provider
   manifests omit plugin tools.

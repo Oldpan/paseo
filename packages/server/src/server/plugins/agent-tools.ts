@@ -26,7 +26,10 @@ export function createPluginAgentTools(input: PluginAgentToolsInput): PaseoToolD
       continue;
     }
     definitions.push({
-      name: `${pluginId}__${tool.name}`,
+      // Tool names cannot contain "-", so this never collides with another plugin's tool or a
+      // built-in. Never "__": Grok qualifies MCP tools as `<server>__<tool>` and drops any tool
+      // whose own name contains it.
+      name: `${pluginId}-${tool.name}`,
       title: tool.name,
       description: tool.description,
       inputSchema,

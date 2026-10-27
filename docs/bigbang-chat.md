@@ -54,9 +54,9 @@ A roundtable starts only from an explicit request on a root message that names 2
 
 ## Tasks
 
-Assistants start tasks through plugin agent tools (`bigbang__start_task`, `bigbang__task_status`). The daemon binds the caller with a per-agent token ([plugin agent tools](plugins.md#agent-tools), [SECURITY.md](../SECURITY.md)). The plugin authorizes every call from its own ledger: the caller's chat session, current membership, the assistant's autonomy setting and authorized targets, and a live reply turn. Labels and tool input never authorize.
+Assistants start tasks through plugin agent tools (`bigbang-start_task`, `bigbang-task_status`). The daemon binds the caller with a per-agent token ([plugin agent tools](plugins.md#agent-tools), [SECURITY.md](../SECURITY.md)). The plugin authorizes every call from its own ledger: the caller's chat session, current membership, the assistant's autonomy setting and authorized targets, and a live reply turn. Labels and tool input never authorize.
 
-- Every chat execution sees the task tools from creation. Codex lists MCP tools once per session, so admitting only assistants that have autonomy would hide the tools from a session that started before autonomy was enabled.
+- Every chat execution sees the task tools from creation. Codex lists MCP tools once per session, and Grok connects MCP only when a session is created, never when Paseo loads it again, so admitting only assistants that have autonomy would hide the tools from a session that started before autonomy was enabled.
 - Targets record the machine's name when saved, so "start it on Spark" resolves to a `serverId`.
 - A worktree task's first prompt says to work only inside its worktree. Briefs written in chat name the source checkout by absolute path, and a worker otherwise edits that checkout.
 - Limits are plugin settings: parallel tasks (2), work agents per task (3, enforced by cancelling extras after the fact) and budget minutes (30). Over-limit tasks queue; an expired budget stops the run until the user replies in the task thread.

@@ -967,7 +967,7 @@ Read logger output with `paseo plugin logs lifecycle-logger` or the host's `daem
 
 Expose a tool to agents with `defineAgentTool()` from `@getpaseo/plugin` and
 `server.registerAgentTool()`. The daemon lists it on `/mcp/agents` for agents you admit, named
-`<pluginId>__<name>`. Tool names match `^[a-z][a-z0-9_]{0,40}$`.
+`<pluginId>-<name>`. Tool names match `^[a-z][a-z0-9_]{0,40}$`.
 
 ```ts
 import { defineAgentTool } from "@getpaseo/plugin";
@@ -1012,7 +1012,7 @@ not from labels or model input.
 | Handler throws or output fails validation | The call returns an MCP error result with the message             |
 | Handler runs longer than 30 seconds       | The call fails and `signal` aborts                                |
 | Plugin reloads, stops, or is removed      | Its tools disappear from the next request                         |
-| Provider disables the tool                | `paseoTools.disabledTools` accepts the full `<pluginId>__<name>`  |
+| Provider disables the tool                | `paseoTools.disabledTools` accepts the full `<pluginId>-<name>`   |
 
 Agents that receive host tools in-process (native Paseo tools) read the tool list once when they
 start, so audience changes reach them only on their next start. Provider tool manifests for plugin

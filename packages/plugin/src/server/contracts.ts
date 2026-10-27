@@ -50,7 +50,7 @@ export interface PluginServerContext extends PluginLifecycleRegistration {
    */
   paseo: PaseoApi;
   /**
-   * Exposes a tool to agents over the daemon's Agent MCP endpoint as `<pluginId>__<name>`.
+   * Exposes a tool to agents over the daemon's Agent MCP endpoint as `<pluginId>-<name>`.
    * Only verified agents named by `setAgentToolAudience` can list or call it.
    */
   registerAgentTool<InputSchema extends ZodType, OutputSchema extends ZodType>(

@@ -15,8 +15,9 @@ const PLUGIN_ID = "agent-tool-fixture";
 const fixtureDirectory = fileURLToPath(
   new URL("./test-fixtures/agent-tool-directory/", import.meta.url),
 );
-const WHOAMI = `${PLUGIN_ID}__whoami`;
-const ECHO = `${PLUGIN_ID}__echo`;
+// No "__": Grok qualifies MCP tools as `<server>__<tool>` and drops tool names that contain it.
+const WHOAMI = `${PLUGIN_ID}-whoami`;
+const ECHO = `${PLUGIN_ID}-echo`;
 
 const roots: string[] = [];
 let daemon: TestPaseoDaemon;
@@ -248,7 +249,7 @@ test("tool calls run with the plugin's paseo API available at registration time"
   const result = await (
     await asAgent(agentA)
   ).callTool({
-    name: "probe-plugin__probe",
+    name: "probe-plugin-probe",
     arguments: {},
   });
   expect(result.structuredContent).toEqual({ ok: true });
