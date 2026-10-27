@@ -10,6 +10,7 @@ import {
 } from "./ui/FormChrome";
 import { OptionSelect } from "./ui/OptionSelect";
 import { Chip } from "./ui/ChatChrome";
+import { AutonomyEditor, type HostOption } from "./ui/AutonomyEditor";
 import { openBigbangForm } from "./form";
 import type { Palette } from "./palette";
 
@@ -23,6 +24,8 @@ interface FormProps {
     hidden?: boolean;
     options?: SelectFieldOption<string>[];
     modelHost?: string;
+    /** Renders the assistant autonomy editor; its value is the JSON of `Autonomy`. */
+    autonomy?: { hosts: HostOption[]; defaultHost: string };
   }>;
   palette: Palette;
   onSubmit(values: Record<string, string>): Promise<void>;
@@ -88,6 +91,18 @@ interface FormInputProps {
   disabled: boolean;
 }
 function FormInput(props: FormInputProps) {
+  if (props.field.autonomy)
+    return (
+      <Field label={props.field.label}>
+        <AutonomyEditor
+          value={props.value}
+          hosts={props.field.autonomy.hosts}
+          defaultHost={props.field.autonomy.defaultHost}
+          disabled={props.disabled}
+          onChange={props.onChange}
+        />
+      </Field>
+    );
   if (props.field.modelHost !== undefined) return <ModelInput {...props} />;
   if (props.field.options) return <ChoiceInput {...props} options={props.field.options} />;
   return (

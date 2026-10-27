@@ -11,6 +11,8 @@ import type {
 import { Composer } from "./Composer";
 import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
+import { TaskCard, TaskEventRow, type TaskCardActions } from "./TaskChrome";
+import type { TaskEventNote } from "../task-view";
 import { text as type } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
@@ -26,9 +28,21 @@ export interface MessageRow {
   quote?: { sender: string; text: string };
   /** Display text of a system or task_event row. */
   note?: string;
-  task?: Task;
-  open(): void;
-  cancel(): void;
+  /** A `task_event` receipt row; set instead of `note`. */
+  event?: {
+    note: TaskEventNote;
+    /** Opens the task thread; absent when the task is unknown. */
+    onOpen?(): void;
+    respond(requestId: string, behavior: "allow" | "deny"): Promise<void>;
+  };
+  /** The task card on a task's root message; `inThread` replaces the plain root bubble. */
+  taskCard?: {
+    task: Task;
+    assistantName?: string;
+    hostLabel?: string;
+    inThread: boolean;
+    actions: TaskCardActions;
+  };
 }
 export interface LiveTurn {
   turn: Turn;
@@ -50,6 +64,7 @@ export function ChatPane({
   onSend,
   onTask,
   group,
+  locked = false,
 }: {
   rows: MessageRow[];
   turns: LiveTurn[];
@@ -64,6 +79,8 @@ export function ChatPane({
   onTask(): void;
   /** Group chat composer chrome; absent in a direct chat. */
   group?: GroupComposerState;
+  /** The composer cannot send (a task thread whose task takes no follow-up). */
+  locked?: boolean;
 }) {
   const { palette: t } = useTheme();
   const list = useRef<ScrollView>(null);
@@ -91,12 +108,24 @@ export function ChatPane({
         }}
       >
         {rows.map((row) =>
-          isNoteMessage(row.message) ? (
+          row.event ? (
+            <TaskEventRow
+              key={row.message.id}
+              id={row.message.id}
+              note={row.event.note}
+              onOpen={row.event.onOpen}
+              respond={row.event.respond}
+            />
+          ) : isNoteMessage(row.message) ? (
             <NoteRow
               key={row.message.id}
               id={row.message.id}
               content={row.note ?? row.message.content}
             />
+          ) : row.taskCard?.inThread ? (
+            <View key={row.message.id} testID={`message-${row.message.id}`} style={{ padding: 4 }}>
+              <TaskCard {...row.taskCard} />
+            </View>
           ) : (
             <ChatMessage
               key={row.message.id}
@@ -111,9 +140,7 @@ export function ChatPane({
               onQuote={row.onQuote}
               quote={row.quote}
             >
-              {row.task ? (
-                <TaskCard task={row.task} onOpen={row.open} onCancel={row.cancel} />
-              ) : null}
+              {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
             </ChatMessage>
           ),
         )}
@@ -149,7 +176,7 @@ export function ChatPane({
         draft={draft}
         setDraft={setDraft}
         draftKey={draftKey}
-        failed={false}
+        failed={locked}
         showCancel={false}
         cancelling={false}
         phone={phone}
@@ -166,55 +193,6 @@ export function ChatPane({
         footerAction={<Chip onPress={onTask}>Create task</Chip>}
         group={group}
       />
-    </View>
-  );
-}
-export function TaskCard({
-  task,
-  onOpen,
-  onCancel,
-}: {
-  task: Task;
-  onOpen(): void;
-  onCancel(): void;
-}) {
-  const { palette: t } = useTheme();
-  const live = ["queued", "creating", "running", "attention", "unknown"].includes(task.status);
-  return (
-    <View
-      style={{
-        alignSelf: "stretch",
-        marginTop: 8,
-        padding: 12,
-        gap: 8,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: t.retroBorder,
-        backgroundColor: t.surfaceElevated,
-      }}
-    >
-      <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
-        <View
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: live ? t.warning : t.success,
-          }}
-        />
-        <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>{task.status}</Text>
-        <Text style={type(t.textMuted, 10, { flex: 1 })}>{task.provider}</Text>
-      </View>
-      <Text numberOfLines={3} style={type(t.textSecondary, 12)}>
-        {task.prompt}
-      </Text>
-      {task.error ? <Text style={type(t.destructive, 11)}>{task.error}</Text> : null}
-      <View style={{ flexDirection: "row", gap: 6 }}>
-        <Chip onPress={onOpen} disabled={!task.execution} accent>
-          Open Studio
-        </Chip>
-        {live ? <Chip onPress={onCancel}>Cancel task</Chip> : null}
-      </View>
     </View>
   );
 }

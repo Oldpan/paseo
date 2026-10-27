@@ -19,6 +19,8 @@ import {
   type Turn,
 } from "../../../../extensions/bigbang/shared/contracts";
 import { useBigbangData } from "./data";
+import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
+import { taskTitle } from "./task-view";
 import { useBigbangTitle, chatReadError } from "./title";
 import { useBigbangView } from "./store";
 import { palettes } from "./palette";
@@ -113,7 +115,7 @@ export function BigbangScreen() {
     );
     useBigbangView
       .getState()
-      .openColumn({ serverId, workspaceId, name: task.prompt.slice(0, 40), group: "Tasks" });
+      .openColumn({ serverId, workspaceId, name: taskTitle(task).slice(0, 40), group: "Tasks" });
   }, []);
   const openTurn = useCallback(
     (turn: Turn) => {
@@ -150,11 +152,20 @@ export function BigbangScreen() {
     async (values: Record<string, string>) => {
       if (form === "assistant") {
         const id = values.id;
+        const autonomy = parseAutonomy(values.autonomy);
+        const problem = validateAutonomy(
+          autonomy,
+          hosts.map((host) => host.serverId),
+          (serverId) => hosts.find((host) => host.serverId === serverId)?.label ?? serverId,
+        );
+        if (problem) throw new Error(problem);
+        const normalized = normalizeAutonomy(autonomy);
         await data.call(saveAssistant, {
           id,
           name: values.name,
           provider: values.provider,
           persona: values.persona,
+          ...(normalized ? { autonomy: normalized } : {}),
           // Only seeds MEMORY.md for a new assistant; an existing one edits it in the Memory tab.
           ...(editing ? {} : { memory: values.memory }),
         });
@@ -210,7 +221,7 @@ export function BigbangScreen() {
       }
       close();
     },
-    [changeChat, chatId, close, data, editing, form],
+    [changeChat, chatId, close, data, editing, form, hosts],
   );
   const selectChat = useCallback(
     (id: string) => {
@@ -247,8 +258,17 @@ export function BigbangScreen() {
         multiline: field.multiline,
         initial: assistant?.[field.name as "name" | "provider" | "persona"] ?? "",
       })),
+      {
+        name: "autonomy",
+        label: "Tasks",
+        initial: serializeAutonomy(assistant?.autonomy),
+        autonomy: {
+          hosts: hosts.map((host) => ({ value: host.serverId, label: host.label })),
+          defaultHost: coordinatorId,
+        },
+      },
     ],
-    [assistant, editing, coordinatorId],
+    [assistant, editing, coordinatorId, hosts],
   );
   const groupFields = useMemo(
     () => [
