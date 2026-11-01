@@ -1,5 +1,30 @@
+diff --git a/node_modules/react-native-unistyles/android/build.gradle b/node_modules/react-native-unistyles/android/build.gradle
+index 195954b..c4ac28c 100644
+--- a/node_modules/react-native-unistyles/android/build.gradle
++++ b/node_modules/react-native-unistyles/android/build.gradle
+@@ -38,6 +38,7 @@ if (isNewArchitectureEnabled()) {
+ 
+ android {
+     compileSdkVersion safeExtGet('compileSdkVersion', 35)
++    ndkVersion safeExtGet('ndkVersion', '27.1.12297006')
+     namespace "com.unistyles"
+ 
+     defaultConfig {
+diff --git a/node_modules/react-native-unistyles/lib/commonjs/core/withUnistyles/withUnistyles.js b/node_modules/react-native-unistyles/lib/commonjs/core/withUnistyles/withUnistyles.js
+index 5a0d049..15001c5 100644
+--- a/node_modules/react-native-unistyles/lib/commonjs/core/withUnistyles/withUnistyles.js
++++ b/node_modules/react-native-unistyles/lib/commonjs/core/withUnistyles/withUnistyles.js
+@@ -43,6 +43,8 @@ const withUnistyles = (Component, mappings) => {
+         contentContainerStyle: contentContainerStyleClassNames
+       } : {})
+     };
++    // uniProps is consumed above; the wrapped component may forward it to a DOM element.
++    delete combinedProps.uniProps;
+ 
+     // @ts-ignore
+     // prettier-ignore
 diff --git a/node_modules/react-native-unistyles/lib/commonjs/web/registry.js b/node_modules/react-native-unistyles/lib/commonjs/web/registry.js
-index 120ff60..d1ff102 100644
+index 120ff60..5e724b2 100644
 --- a/node_modules/react-native-unistyles/lib/commonjs/web/registry.js
 +++ b/node_modules/react-native-unistyles/lib/commonjs/web/registry.js
 @@ -10,6 +10,17 @@ class UnistylesRegistry {
@@ -97,8 +122,21 @@ index 120ff60..d1ff102 100644
      this.stylesCache.clear();
      this.dependenciesMap.clear();
      this.disposeListenersMap.clear();
+diff --git a/node_modules/react-native-unistyles/lib/module/core/withUnistyles/withUnistyles.js b/node_modules/react-native-unistyles/lib/module/core/withUnistyles/withUnistyles.js
+index 5904a73..b377650 100644
+--- a/node_modules/react-native-unistyles/lib/module/core/withUnistyles/withUnistyles.js
++++ b/node_modules/react-native-unistyles/lib/module/core/withUnistyles/withUnistyles.js
+@@ -38,6 +38,8 @@ export const withUnistyles = (Component, mappings) => {
+         contentContainerStyle: contentContainerStyleClassNames
+       } : {})
+     };
++    // uniProps is consumed above; the wrapped component may forward it to a DOM element.
++    delete combinedProps.uniProps;
+ 
+     // @ts-ignore
+     // prettier-ignore
 diff --git a/node_modules/react-native-unistyles/lib/module/web/registry.js b/node_modules/react-native-unistyles/lib/module/web/registry.js
-index 6362f43..8e769f8 100644
+index 6362f43..31e3190 100644
 --- a/node_modules/react-native-unistyles/lib/module/web/registry.js
 +++ b/node_modules/react-native-unistyles/lib/module/web/registry.js
 @@ -6,6 +6,17 @@ export class UnistylesRegistry {
@@ -196,6 +234,19 @@ index 6362f43..8e769f8 100644
      this.stylesCache.clear();
      this.dependenciesMap.clear();
      this.disposeListenersMap.clear();
+diff --git a/node_modules/react-native-unistyles/src/core/withUnistyles/withUnistyles.tsx b/node_modules/react-native-unistyles/src/core/withUnistyles/withUnistyles.tsx
+index e347b7a..6c9e47c 100644
+--- a/node_modules/react-native-unistyles/src/core/withUnistyles/withUnistyles.tsx
++++ b/node_modules/react-native-unistyles/src/core/withUnistyles/withUnistyles.tsx
+@@ -59,6 +59,8 @@ export const withUnistyles = <TComponent, TMappings extends GenericComponentProp
+                   }
+                 : {}),
+         } as any
++        // uniProps is consumed above; the wrapped component may forward it to a DOM element.
++        delete combinedProps.uniProps
+ 
+         // @ts-ignore
+         // prettier-ignore
 diff --git a/node_modules/react-native-unistyles/src/web/registry.ts b/node_modules/react-native-unistyles/src/web/registry.ts
 index 39e0d9d..a21ba95 100644
 --- a/node_modules/react-native-unistyles/src/web/registry.ts
@@ -317,15 +368,3 @@ index 39e0d9d..a21ba95 100644
          this.stylesCache.clear()
          this.dependenciesMap.clear()
          this.disposeListenersMap.clear()
-diff --git a/node_modules/react-native-unistyles/android/build.gradle b/node_modules/react-native-unistyles/android/build.gradle
-index 195954b..c4ac28c 100644
---- a/node_modules/react-native-unistyles/android/build.gradle
-+++ b/node_modules/react-native-unistyles/android/build.gradle
-@@ -38,6 +38,7 @@ if (isNewArchitectureEnabled()) {
- 
- android {
-     compileSdkVersion safeExtGet('compileSdkVersion', 35)
-+    ndkVersion safeExtGet('ndkVersion', '27.1.12297006')
-     namespace "com.unistyles"
- 
-     defaultConfig {
