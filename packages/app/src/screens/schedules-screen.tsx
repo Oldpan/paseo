@@ -27,7 +27,8 @@ import {
   type AggregatedSchedule,
   type ScheduleHostError,
 } from "@/hooks/use-schedules";
-import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
+import { getHostRuntimeStore, type HostRuntimeStore, useHosts } from "@/runtime/host-runtime";
+import type { HostProfile } from "@/types/host-connection";
 import {
   resolveSchedule,
   type ScheduleBucket,
@@ -62,6 +63,25 @@ export function SchedulesScreen(): ReactElement {
   return <SchedulesScreenContent />;
 }
 
+/**
+ * runtimeVersion is an argument, not a `void` read inside the memo: React Compiler drops the
+ * `void` statement and the memo dependency with it, so a host whose directory loads after mount
+ * would stay unready.
+ */
+function agentDirectoryReadyHosts(input: {
+  hosts: readonly HostProfile[];
+  runtime: HostRuntimeStore;
+  runtimeVersion: number;
+}): Set<string> {
+  const ready = new Set<string>();
+  for (const host of input.hosts) {
+    if (input.runtime.getSnapshot(host.serverId)?.hasEverLoadedAgentDirectory) {
+      ready.add(host.serverId);
+    }
+  }
+  return ready;
+}
+
 function SchedulesScreenContent(): ReactElement {
   const { loadState, hostErrors, isError, refetch } = useSchedules();
   const schedules = loadState.status === "loaded" ? loadState.data : EMPTY_SCHEDULES;
@@ -80,16 +100,10 @@ function SchedulesScreenContent(): ReactElement {
   // agents, so a still-loading host would falsely mark its agent-target
   // schedules "gone". `hasEverLoadedAgentDirectory` is true only once that
   // host's directory has loaded at least once.
-  const agentDirReadyHosts = useMemo(() => {
-    void runtimeVersion;
-    const ready = new Set<string>();
-    for (const host of hosts) {
-      if (runtime.getSnapshot(host.serverId)?.hasEverLoadedAgentDirectory) {
-        ready.add(host.serverId);
-      }
-    }
-    return ready;
-  }, [hosts, runtime, runtimeVersion]);
+  const agentDirReadyHosts = useMemo(
+    () => agentDirectoryReadyHosts({ hosts, runtime, runtimeVersion }),
+    [hosts, runtime, runtimeVersion],
+  );
 
   const [form, setForm] = useState<FormState>({ mode: "closed" });
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
