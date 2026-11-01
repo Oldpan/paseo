@@ -110,7 +110,19 @@ Chat 与 Paseo 的结合方式见 [Chat 协调](bigbang-chat.md)：账本拥有�
 - **Mailbox 准入等待**：Bo 的私聊回复执行 `sleep 120` 期间，Mo 用 `bigbang-send` 问 Bo。Bo 的 mailbox 回合记下首次等待时间后一直排队，等聊天回复结束才运行。回复在 8 秒内唤醒 Mo 并发到 Mo 的私聊，Bo 的聊天里没有出现 mailbox 内容。
 - **内联审批**：Codex 每次调用 `bigbang-send` 都会发起 MCP 确认。Studio 列和私聊都弹出了内联审批卡片，批准后工具照常执行；私聊回合在等待期间显示 `attention`。这类确认不会出现在 `paseo permit ls` 里。
 
-角色互换（Spark 为协调器）还没测：Mac 测试 daemon 加了密码之后，Spark 保存的 Mac 主机报 `authentication_failed`，要先替换它的凭据。并发与断线的实机行为、Grok 下的内联审批，以及原生端也尚未验证。
+同日实测角色互换（Spark 为协调器，Mac 为 member），测完已换回。Mac 测试 daemon 加了密码后，Spark 保存的 Mac 主机报 `authentication_failed`，测试期间临时去掉了密码，并让 daemon 只监听本机。
+
+- **机器列表**：两边改写 `role` 并重载插件后，Spark 的机器列表要过一个探测周期才把 Mac 认作 member，之前显示为“自己也是协调器”。
+- **聊天执行**：在 Spark 的 Chat 里新建绑定 Mac 的 Codex 助手 Rex。它的 home 和执行都在 Mac 上，写入的文件也落在 Mac 的 home 里。
+- **中继与 Mailbox**：Rex 用 `bigbang-send` 私下问 Spark 上的 Grok 助手 Gia。请求经 member 中继到达 Spark 账本，Gia 在 Spark 上运行 `hostname` 得到 `aitopatom-e2eb`，回复唤醒了 Rex。
+
+实测发现三个问题，尚未修复：
+
+- **新版 Codex 把 MCP 工具藏在工具搜索后面**：新建的 Codex 执行不先搜索就会说自己没有 bigbang 工具，或者把 `bigbang-send` 当成 shell 命令。明确让它“先搜索 bigbang”之后才会调用。
+- **选中 member 主机作为 Chat 协调器时没有说明**：Web 只显示空聊天和“重新连接中”，不会提示到协调器上打开 Chat。
+- **切换协调器后加载报错不消失**：在页面里切换协调器后，“Could not load Chat”要刷新页面才会消失。
+
+并发与断线的实机行为、Grok 下的内联审批，以及原生端尚未验证。
 
 附件上传、表情反应、提醒和旧 Core 专属斜杠命令尚未接通，界面不暴露无效控件。Android 真机、Mac 安装包、终端迁移前后延迟及完整视觉对照仍待验收。原始截图、测试输出和执行回执保存在忽略提交的 `.dev/bigbang/`；本路线图不把已有代码或单项测试通过视为整阶段完成。
 
