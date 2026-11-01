@@ -22,7 +22,8 @@ import {
 import { useAssistantMachines, useBigbangData, useMachines } from "./data";
 import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
 import { taskTitle } from "./task-view";
-import { useBigbangTitle, chatReadError } from "./title";
+import { useBigbangTitle } from "./title";
+import { CoordinatorNotice } from "./coordinator-notice";
 import { useBigbangView } from "./store";
 import { palettes } from "./palette";
 import { BigbangChat } from "./chat";
@@ -116,6 +117,7 @@ export function BigbangScreen() {
   const mode = useBigbangView((state) => state.mode);
   const section = useBigbangView((state) => state.section);
   const data = useBigbangData(coordinatorId);
+  const selectCoordinator = useBigbangView((state) => state.selectCoordinator);
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
   useBigbangTitle(mode, conversationTitle);
   const [form, setForm] = useState<"assistant" | "group" | "task" | "workspaces" | "hosts" | null>(
@@ -388,9 +390,14 @@ export function BigbangScreen() {
             {!compact ? <Sidebar {...sidebarProps} /> : null}
             <View style={FILL}>
               {data.error ? (
-                <Text style={text} accessibilityRole="alert">
-                  {chatReadError(data.error)}
-                </Text>
+                <CoordinatorNotice
+                  error={data.error}
+                  invoke={data.invoke}
+                  hosts={hosts}
+                  coordinatorId={coordinatorId}
+                  textColor={palette.textPrimary}
+                  onSelect={selectCoordinator}
+                />
               ) : null}
               {error ? (
                 <Text style={text} accessibilityRole="alert">

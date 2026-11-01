@@ -11,8 +11,11 @@ import {
   type ChatState,
   type MachineInfo,
 } from "../../../../extensions/bigbang/shared/contracts";
+import { memberHello } from "../../../../extensions/bigbang/shared/member";
 import { EMPTY_CHAT_STATE, mergeChatState } from "./model";
 import { runChatSyncLoop } from "./sync";
+
+type MemberHello = import("zod").output<typeof memberHello.output>;
 
 type ChatStateCache = Pick<QueryClient, "getQueryData" | "setQueryData">;
 
@@ -28,7 +31,8 @@ export function useBigbangData(serverId: string) {
   const connected = useHostRuntimeIsConnected(serverId);
   const cache = useQueryClient();
   const key = useMemo(() => ["bigbang", serverId] as const, [serverId]);
-  const [pollError, setPollError] = useState<Error | null>(null);
+  // Keyed by host: an error from the coordinator the user just left must not outlive the switch.
+  const [pollError, setPollError] = useState<{ serverId: string; error: Error } | null>(null);
   const query = useFetchQuery({
     dataShape: "value",
     staleTimeMs: 0,
@@ -56,9 +60,9 @@ export function useBigbangData(serverId: string) {
       cache,
       key,
       onSuccess: () => setPollError(null),
-      onError: setPollError,
+      onError: (error) => setPollError({ serverId, error }),
     });
-  }, [cache, client, connected, key, settled]);
+  }, [cache, client, connected, key, serverId, settled]);
   // `invoke` is for reads and for writes that never touch the ledger; `call` also refreshes it.
   const invoke = useCallback(
     async <I extends ZodType, O extends ZodType>(
@@ -88,7 +92,7 @@ export function useBigbangData(serverId: string) {
   );
   return {
     state: query.data ?? EMPTY_CHAT_STATE,
-    error: query.error ?? pollError,
+    error: query.error ?? (pollError?.serverId === serverId ? pollError.error : null),
     connected,
     loading: query.isPending,
     call,
@@ -128,6 +132,24 @@ export function useMachines(invoke: BigbangData["invoke"], enabled: boolean) {
     };
   }, [enabled, invoke]);
   return machines;
+}
+
+/** Whether the selected host is a Chat member, read once Chat failed to load there. */
+export function useChatRole(invoke: BigbangData["invoke"], enabled: boolean) {
+  const [role, setRole] = useState<MemberHello | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let current = true;
+    void invoke(memberHello, {}).then(
+      (hello) => current && setRole(hello),
+      () => current && setRole(null),
+    );
+    return () => {
+      current = false;
+      setRole(null);
+    };
+  }, [enabled, invoke]);
+  return role;
 }
 
 function startChatSync(input: {

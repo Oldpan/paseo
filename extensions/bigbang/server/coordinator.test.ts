@@ -7,6 +7,7 @@ import { ChatStore } from "./store";
 import { Coordinator, type TurnEndedEvent } from "./coordinator";
 import { FakeExecution } from "./execution.fake";
 import { assistantInstructions } from "./chat-sessions";
+import { BIGBANG_TOOLS_NOTE } from "./tools-note";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -501,6 +502,11 @@ describe("file memory", () => {
     expect(instructions).toContain("MEMORY.md");
     expect(instructions).toContain("notes/");
     expect(instructions).not.toContain("Likes TypeScript");
+  });
+
+  it("tells the agent the bigbang tools are MCP tools it may have to search for", () => {
+    const { assistant } = fixture();
+    expect(assistantInstructions(assistant)).toContain(BIGBANG_TOOLS_NOTE);
   });
 
   it("writes MEMORY.md only when the assistant is created", () => {

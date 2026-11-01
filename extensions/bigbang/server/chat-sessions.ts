@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Assistant, Message, Turn } from "../shared/contracts";
 import type { ChatStore } from "./store";
 import { receiptText } from "./task-events";
+import { BIGBANG_TOOLS_NOTE } from "./tools-note";
 
 export interface ChatSession {
   id: string;
@@ -45,7 +46,8 @@ export function assistantInstructions(assistant: Assistant): string {
   return `${assistant.persona}
 You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
 In a group chat, reply with exactly (pass) when you have nothing useful to add.
-To ask another assistant privately (it may run on another machine), use bigbang-send; bigbang-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.${autonomyInstructions(assistant)}`;
+To ask another assistant privately (it may run on another machine), use bigbang-send; bigbang-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.
+${BIGBANG_TOOLS_NOTE}${autonomyInstructions(assistant)}`;
 }
 /** Authorized task targets as the assistant sees them: machine name, serverId, directory. */
 export function describeTargets(assistant: Assistant): string {

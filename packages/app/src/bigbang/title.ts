@@ -8,6 +8,6 @@ export function useBigbangTitle(mode: string, label: string | undefined) {
 }
 export function chatReadError(error: Error) {
   if (error.message.includes("Plugin is not available"))
-    return "This host has not enabled Bigbang Chat. Choose the Spark coordinator.";
+    return "This host has not enabled Bigbang Chat. Choose the Chat coordinator.";
   return "Could not load Chat. Check the coordinator connection and try again.";
 }

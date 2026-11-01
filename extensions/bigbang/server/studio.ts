@@ -4,6 +4,7 @@ import { errorMessage, failureStatus } from "./dispatcher";
 import type { ExecutionPort } from "./execution";
 import { agentOfKey, agentPeerKey, assistantIdOfKey, assistantPeerKey } from "./peers";
 import type { ChatStore } from "./store";
+import { BIGBANG_TOOLS_NOTE } from "./tools-note";
 
 // Studio collaboration between agents in bound workspaces, ported from Bigbang Core's
 // studioHerdrService. A Studio binds workspaces on any machine; the agents in them are its
@@ -984,7 +985,7 @@ export class Studio {
         kind: "notice",
         replyTo: null,
         noticeKey,
-        text: `Your workspace now belongs to Studio ${JSON.stringify(studio?.name ?? "Studio")}. Agents in other bound workspaces, on this or other machines, can message you, and you them: bigbang-peers lists members, bigbang-send messages one or more, bigbang-reply answers a message, bigbang-records shows the history. A receipt of unknown means do not resend; check bigbang-records first.`,
+        text: `Your workspace now belongs to Studio ${JSON.stringify(studio?.name ?? "Studio")}. Agents in other bound workspaces, on this or other machines, can message you, and you them: bigbang-peers lists members, bigbang-send messages one or more, bigbang-reply answers a message, bigbang-records shows the history. A receipt of unknown means do not resend; check bigbang-records first. ${BIGBANG_TOOLS_NOTE}`,
       });
     } catch (error) {
       if (!(error instanceof StudioError)) throw error;
