@@ -4,9 +4,11 @@ import { View, type StyleProp, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { PanelLeft } from "lucide-react-native";
 import { HeaderToggleButton, headerIconSlotStyle } from "./header-toggle-button";
+import { type SidebarMenuHost, useSidebarMenuHost } from "./sidebar-menu-host";
 import { selectIsAgentListOpen, usePanelStore } from "@/stores/panel-store";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { getShortcutOs } from "@/utils/shortcut-platform";
+import type { ShortcutKey } from "@/utils/format-shortcut";
 import { useHasWindowChromeObstruction, useOwnsWindowChromeCorner } from "@/utils/desktop-window";
 import {
   extraMutedIconColorMapping,
@@ -96,8 +98,38 @@ function SidebarMenuToggleButton({
   );
 }
 
+const NO_SHORTCUT: ShortcutKey[] = [];
+
+function HostMenuButton({
+  host,
+  resolvedStyle,
+  testID = "menu-button",
+}: {
+  host: SidebarMenuHost;
+  resolvedStyle: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <HeaderToggleButton
+      onPress={host.onMenu}
+      tooltipLabel={t("shell.menu.open")}
+      tooltipKeys={NO_SHORTCUT}
+      tooltipSide="right"
+      testID={testID}
+      style={resolvedStyle}
+      accessible
+      accessibilityRole="button"
+      accessibilityLabel={t("shell.menu.open")}
+    >
+      <MobileMenuIcon extraMuted={false} />
+    </HeaderToggleButton>
+  );
+}
+
 export function SidebarMenuToggle({ style, ...props }: SidebarMenuToggleProps = {}) {
   const isMobile = useIsCompactFormFactor();
+  const host = useSidebarMenuHost();
   const ownsTopLeft = useOwnsWindowChromeCorner("top-left");
   const hasTopLeftWindowControls = useHasWindowChromeObstruction("top-left");
   const resolvedStyle = useMemo(() => [styles.leadingToggle, style], [style]);
@@ -105,6 +137,12 @@ export function SidebarMenuToggle({ style, ...props }: SidebarMenuToggleProps = 
     () => [headerIconSlotStyle.slot, resolvedStyle],
     [resolvedStyle],
   );
+
+  if (host) {
+    return isMobile ? (
+      <HostMenuButton host={host} resolvedStyle={resolvedStyle} testID={props.testID} />
+    ) : null;
+  }
 
   if (!isMobile && !ownsTopLeft) {
     return null;

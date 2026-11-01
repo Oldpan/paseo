@@ -1,5 +1,6 @@
 import { useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
+import { BigbangPage } from "@/bigbang/page-frame";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import {
   ComposerEditingScope,
@@ -39,21 +40,23 @@ export default function NewWorkspaceRoute() {
 
   return (
     <HostRouteBootstrapBoundary>
-      <WorkspaceComposerEditingSessionsProvider
-        workspaceKey={NEW_WORKSPACE_SESSIONS_KEY}
-        tabIds={sessionTabIds}
-      >
-        <ComposerEditingScope tabId={draftKey} targetKey={draftKey}>
-          <NewWorkspaceScreen
-            key={screenKey}
-            serverId={serverId}
-            sourceDirectory={sourceDirectory}
-            displayName={displayName}
-            projectId={projectId}
-            draftId={draftId}
-          />
-        </ComposerEditingScope>
-      </WorkspaceComposerEditingSessionsProvider>
+      <BigbangPage>
+        <WorkspaceComposerEditingSessionsProvider
+          workspaceKey={NEW_WORKSPACE_SESSIONS_KEY}
+          tabIds={sessionTabIds}
+        >
+          <ComposerEditingScope tabId={draftKey} targetKey={draftKey}>
+            <NewWorkspaceScreen
+              key={screenKey}
+              serverId={serverId}
+              sourceDirectory={sourceDirectory}
+              displayName={displayName}
+              projectId={projectId}
+              draftId={draftId}
+            />
+          </ComposerEditingScope>
+        </WorkspaceComposerEditingSessionsProvider>
+      </BigbangPage>
     </HostRouteBootstrapBoundary>
   );
 }

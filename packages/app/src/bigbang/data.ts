@@ -98,12 +98,17 @@ export function useBigbangData(serverId: string) {
 export type BigbangData = ReturnType<typeof useBigbangData>;
 
 /** Machines a new assistant can live on, as the coordinator sees them; read while creating one. */
+/** The machines a new assistant can pick from. */
 export function useAssistantMachines(
   invoke: BigbangData["invoke"],
   form: string | null,
   editing: string | null,
 ) {
-  const enabled = form === "assistant" && !editing;
+  return useMachines(invoke, form === "assistant" && !editing);
+}
+
+/** The coordinator's view of every saved host, read while `enabled`. */
+export function useMachines(invoke: BigbangData["invoke"], enabled: boolean) {
   const [machines, setMachines] = useState<MachineInfo[]>([]);
   useEffect(() => {
     if (!enabled) return;

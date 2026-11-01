@@ -1,4 +1,10 @@
-import type { ChatState, Message } from "../../../../extensions/bigbang/shared/contracts";
+import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
+import type {
+  ChatState,
+  MachineInfo,
+  Message,
+} from "../../../../extensions/bigbang/shared/contracts";
 
 export interface StudioColumn {
   serverId: string;
@@ -41,6 +47,22 @@ export function mergeChatState(previous: ChatState, incoming: ChatState): ChatSt
 export function studioKey(column: Pick<StudioColumn, "serverId" | "workspaceId">): string {
   return JSON.stringify([column.serverId, column.workspaceId]);
 }
+/** The Studio tab group for workspaces opened from Paseo surfaces; Chat tasks use "Tasks". */
+export const OPENED_GROUP = "Workspaces";
+
+/** The Studio column for a workspace Paseo navigation opens, keyed the way the session store is. */
+export function studioColumnFor(
+  selection: { serverId: string; workspaceId: string },
+  workspaces: Map<string, WorkspaceDescriptor> | null | undefined,
+): StudioColumn {
+  const workspaceId =
+    resolveWorkspaceMapKeyByIdentity({ workspaces, workspaceId: selection.workspaceId }) ??
+    selection.workspaceId;
+  const workspace = workspaces?.get(workspaceId);
+  const name = workspace?.title || workspace?.name || workspaceId;
+  return { serverId: selection.serverId, workspaceId, name, group: OPENED_GROUP };
+}
+
 export function addStudioColumn(columns: StudioColumn[], column: StudioColumn): StudioColumn[] {
   return columns.some((item) => studioKey(item) === studioKey(column))
     ? columns
@@ -64,4 +86,12 @@ export function sortMessages(messages: readonly Message[]): Message[] {
 /** System and task_event rows are ledger notes, not speech: they render as compact centred rows. */
 export function isNoteMessage(message: Pick<Message, "kind">): boolean {
   return message.kind === "system" || message.kind === "task_event";
+}
+
+/** A saved host's Bigbang role as the Chat coordinator reports it; absent hosts only serve Studio. */
+export function machineRoleLabel(machine: MachineInfo | undefined): string {
+  if (!machine) return "Studio only";
+  if (machine.role === "coordinator") return "Chat coordinator";
+  if (machine.role === "member") return "Member";
+  return machine.reason ? `Unavailable · ${machine.reason}` : "Unavailable";
 }

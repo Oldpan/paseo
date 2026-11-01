@@ -3,17 +3,22 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { addStudioColumn, studioKey, type StudioColumn } from "./model";
 
+export type SidebarSection = "chat" | "members" | "search";
+
 interface BigbangViewState {
   coordinatorId: string;
   chatId: string;
   threadId: string | null;
   mode: "chat" | "studio" | "assistants";
+  /** What the sidebar lists in Chat; a rail choice, so it is not persisted. */
+  section: SidebarSection;
   columns: StudioColumn[];
   activeColumn: string | null;
   drafts: Record<string, string>;
   selectCoordinator(id: string): void;
   selectChat(id: string): void;
   setMode(mode: BigbangViewState["mode"]): void;
+  setSection(section: SidebarSection): void;
   setThread(id: string | null): void;
   draft(key: string, value: string): void;
   openColumn(column: StudioColumn): void;
@@ -27,12 +32,14 @@ export const useBigbangView = create<BigbangViewState>()(
       chatId: "",
       threadId: null,
       mode: "chat",
+      section: "chat",
       columns: [],
       activeColumn: null,
       drafts: {},
       selectCoordinator: (coordinatorId) => set({ coordinatorId, chatId: "", threadId: null }),
       selectChat: (chatId) => set({ chatId, threadId: null, mode: "chat" }),
       setMode: (mode) => set({ mode }),
+      setSection: (section) => set({ section }),
       setThread: (threadId) => set({ threadId }),
       draft: (key, value) => set((state) => ({ drafts: { ...state.drafts, [key]: value } })),
       openColumn: (column) =>

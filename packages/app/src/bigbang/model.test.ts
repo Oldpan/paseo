@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { WorkspaceDescriptor } from "@/stores/session-store";
 import type { Message } from "../../../../extensions/bigbang/shared/contracts";
 import {
   addStudioColumn,
   EMPTY_CHAT_STATE,
   isNoteMessage,
+  machineRoleLabel,
   mergeChatState,
+  OPENED_GROUP,
   sortMessages,
+  studioColumnFor,
   studioKey,
 } from "./model";
 
@@ -83,5 +87,44 @@ describe("Bigbang data ownership", () => {
     expect(isNoteMessage({ kind: "task_event" })).toBe(true);
     expect(isNoteMessage({ kind: "final" })).toBe(false);
     expect(isNoteMessage({})).toBe(false);
+  });
+});
+
+describe("studioColumnFor", () => {
+  const workspace = (fields: Partial<WorkspaceDescriptor>) => fields as WorkspaceDescriptor;
+  it("names the column after the workspace and files it under the opened group", () => {
+    const workspaces = new Map([["w1", workspace({ title: "Fix login", name: "main" })]]);
+    expect(studioColumnFor({ serverId: "mac", workspaceId: "w1" }, workspaces)).toEqual({
+      serverId: "mac",
+      workspaceId: "w1",
+      name: "Fix login",
+      group: OPENED_GROUP,
+    });
+  });
+
+  it("falls back to the workspace name, then its id, before the session store knows it", () => {
+    const named = new Map([["w1", workspace({ title: null, name: "main" })]]);
+    expect(studioColumnFor({ serverId: "mac", workspaceId: "w1" }, named).name).toBe("main");
+    expect(studioColumnFor({ serverId: "mac", workspaceId: "w2" }, undefined)).toMatchObject({
+      workspaceId: "w2",
+      name: "w2",
+    });
+  });
+});
+
+describe("machineRoleLabel", () => {
+  it("names each Bigbang role the coordinator reports", () => {
+    const machine = (role: string, reason?: string) => ({
+      serverId: "s",
+      label: "Spark",
+      role,
+      reason,
+    });
+    expect(machineRoleLabel(machine("coordinator"))).toBe("Chat coordinator");
+    expect(machineRoleLabel(machine("member"))).toBe("Member");
+    expect(machineRoleLabel(machine("unavailable", "plugin missing"))).toBe(
+      "Unavailable · plugin missing",
+    );
+    expect(machineRoleLabel(undefined)).toBe("Studio only");
   });
 });

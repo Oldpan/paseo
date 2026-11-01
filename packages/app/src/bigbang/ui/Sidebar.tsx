@@ -1,55 +1,51 @@
 // Adapted from Bigbang Workspace.tsx Sidebar. Data and navigation are supplied by the Paseo host.
 import { useState } from "react";
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { EditingTextInput } from "@/components/ui/text-input";
+import { useOpenSidebarUsage } from "@/usage/sidebar-item";
+import type { RailItem } from "../rail";
+import { useBigbangView } from "../store";
+import { useRailNavigation } from "../use-rail";
 import type {
   Assistant,
   Conversation,
+  MachineInfo,
   Message,
 } from "../../../../../extensions/bigbang/shared/contracts";
+import { MachinesSection } from "../machines";
 import { AgentAvatar, UserAvatar } from "./avatars";
-import {
-  ChatIcon,
-  UsersIcon,
-  BoxesIcon,
-  SettingsIcon,
-  SearchIcon,
-  PlusIcon,
-  ChevronIcon,
-  PanelLeftOpenIcon,
-} from "./icons";
-import {
-  RailNavButton,
-  SidebarChannelRow,
-  SidebarPanelToggle,
-  SectionHeader,
-} from "./SidebarControls";
+import { SettingsIcon, PlusIcon, ChevronIcon, PanelLeftOpenIcon } from "./icons";
+import { Rail } from "./Rail";
+import { SidebarChannelRow, SidebarPanelToggle, SectionHeader } from "./SidebarControls";
 import { ctrlShadow, text as type } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
 interface SidebarProps {
   compact: boolean;
-  mode: string;
   chatId: string;
   coordinator: string;
   connected: boolean;
   conversations: Conversation[];
   assistants: Assistant[];
+  machines: MachineInfo[];
   messages: Message[];
-  onChat(): void;
-  onStudio(): void;
   onSelect(id: string): void;
   onAssistant(): void;
   onEdit(id: string): void;
   onGroup(): void;
   onWorkspaces(): void;
   onHosts(): void;
-  onSettings(): void;
 }
 export function Sidebar(props: SidebarProps) {
   const { palette: t, name } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
-  const [section, setSection] = useState<"chat" | "members" | "search">("chat");
+  const section = useBigbangView((state) => state.section);
+  const rail = useRailNavigation();
+  const openUsage = useOpenSidebarUsage();
+  const select = (item: RailItem) => {
+    rail.select(item);
+    if (item === "chat" || item === "members" || item === "search") setCollapsed(false);
+  };
   const [filter, setFilter] = useState("");
   const [groupsOpen, setGroupsOpen] = useState(true);
   const [dmsOpen, setDmsOpen] = useState(true);
@@ -59,8 +55,6 @@ export function Sidebar(props: SidebarProps) {
   );
   const groups = chats.filter((item) => item.kind === "group"),
     dms = chats.filter((item) => item.kind === "dm");
-  const ink = (active: boolean) => (active && name === "dark" ? t.onAccent : t.textSecondary);
-  const chatActive = section === "chat" && props.mode === "chat";
   return (
     <View
       style={{
@@ -74,93 +68,22 @@ export function Sidebar(props: SidebarProps) {
       }}
       testID="bigbang-sidebar"
     >
-      <View
-        testID="sidebar-rail"
-        style={{
-          width: 56,
-          height: "100%",
-          minHeight: 0,
-          backgroundColor: t.sidebarSurface,
-          alignItems: "center",
-          paddingVertical: 8,
-          borderRightWidth: 1,
-          borderColor: t.retroBorder,
-        }}
-      >
-        <Pressable
-          role="button"
-          accessibilityLabel="Bigbang Chat"
-          onPress={props.onChat}
-          style={{ height: 40, width: 40, alignItems: "center", justifyContent: "center" }}
-        >
-          <Image
-            source={require("../../../assets/images/bigbang-icon.png")}
-            style={{ width: 32, height: 32, borderRadius: 8 }}
-          />
-        </Pressable>
-        <View style={{ height: 2, width: "100%", backgroundColor: t.black, marginVertical: 4 }} />
-        <View style={{ gap: 6, alignItems: "center", paddingVertical: 4 }}>
-          {collapsed ? (
+      <Rail
+        active={rail.active}
+        onSelect={select}
+        onUsage={openUsage}
+        onSettings={rail.settings}
+        expand={
+          collapsed ? (
             <SidebarPanelToggle
               mode="expand"
               onPress={() => setCollapsed(false)}
               t={t}
               name={name}
             />
-          ) : null}
-          <RailNavButton
-            label="Chat"
-            active={chatActive}
-            onPress={() => {
-              setSection("chat");
-              props.onChat();
-              setCollapsed(false);
-            }}
-            t={t}
-            name={name}
-            icon={<ChatIcon color={ink(chatActive)} size={20} />}
-          />
-          <RailNavButton
-            label="Member"
-            active={section === "members"}
-            onPress={() => {
-              setSection("members");
-              setCollapsed(false);
-            }}
-            t={t}
-            name={name}
-            icon={<UsersIcon color={ink(section === "members")} size={20} />}
-          />
-          <RailNavButton
-            label="Search chats"
-            active={section === "search"}
-            onPress={() => {
-              setSection("search");
-              setCollapsed(false);
-            }}
-            t={t}
-            name={name}
-            icon={<SearchIcon color={ink(section === "search")} size={20} />}
-          />
-          <RailNavButton
-            label="Studios"
-            active={props.mode === "studio"}
-            onPress={props.onStudio}
-            t={t}
-            name={name}
-            icon={<BoxesIcon color={ink(props.mode === "studio")} size={20} />}
-          />
-        </View>
-        <View style={{ flex: 1 }} />
-        <RailNavButton
-          label="Settings"
-          active={false}
-          onPress={props.onSettings}
-          t={t}
-          name={name}
-          icon={<SettingsIcon color={t.textSecondary} size={20} />}
-        />
-      </View>
+          ) : null
+        }
+      />
       {!collapsed ? (
         <View style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
           <View
@@ -250,6 +173,7 @@ export function Sidebar(props: SidebarProps) {
                       />
                     ))
                   : null}
+                <MachinesSection machines={props.machines} />
               </>
             ) : (
               <>
@@ -350,7 +274,7 @@ export function Sidebar(props: SidebarProps) {
           </Pressable>
           <Pressable
             role="button"
-            onPress={props.onSettings}
+            onPress={rail.settings}
             accessibilityLabel="Your settings"
             style={{
               padding: 12,

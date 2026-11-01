@@ -20,6 +20,8 @@ import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit } from "@/utils/host-route-browser";
 import { navigateToHostWorkspaceRoute } from "@/navigation/workspace-route-navigation";
+import { IS_BIGBANG } from "@/bigbang/build";
+import { navigateToStudioWorkspaceRoute } from "@/bigbang/navigation";
 
 export type { ActiveWorkspaceSelection } from "@/stores/last-workspace-selection";
 export type { NavigateToWorkspaceInput } from "./navigation";
@@ -49,10 +51,12 @@ function navigateDeps(): NavigateToWorkspaceDeps {
     deferOpenTab: (input) => useWorkspaceLayoutStore.getState().deferOpenTab(input),
     openTab: (input) => useWorkspaceLayoutStore.getState().openTab(input),
     rememberLastWorkspace: (selection) => lastWorkspaceSelectionStore.remember(selection),
-    navigateToRoute: (route) => {
-      navigateToHostWorkspaceRoute(route);
-      stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit();
-    },
+    navigateToRoute: IS_BIGBANG
+      ? navigateToStudioWorkspaceRoute
+      : (route) => {
+          navigateToHostWorkspaceRoute(route);
+          stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit();
+        },
   };
 }
 

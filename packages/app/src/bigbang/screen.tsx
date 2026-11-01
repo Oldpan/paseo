@@ -1,14 +1,13 @@
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Text, View, useColorScheme } from "react-native";
+import { Text, View } from "react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { randomUUID } from "expo-crypto";
-import { useRouter } from "expo-router";
-import { BigbangInput as FormTextInput, FormFrame } from "./ui/FormChrome";
+import { FormFrame } from "./ui/FormChrome";
 import { ResourceChoice } from "./ui/ResourceChoice";
 import { RetainedPanel } from "@/components/retained-panel";
+import { UsageSidebarRoot } from "@/usage/sidebar-item";
 import { useHosts, getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { useAppSettings } from "@/hooks/use-settings";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
 import {
@@ -20,7 +19,7 @@ import {
   type Task,
   type Turn,
 } from "../../../../extensions/bigbang/shared/contracts";
-import { useAssistantMachines, useBigbangData } from "./data";
+import { useAssistantMachines, useBigbangData, useMachines } from "./data";
 import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
 import { taskTitle } from "./task-view";
 import { useBigbangTitle, chatReadError } from "./title";
@@ -28,8 +27,8 @@ import { useBigbangView } from "./store";
 import { palettes } from "./palette";
 import { BigbangChat } from "./chat";
 import { BigbangForm } from "./forms";
-import { Studio, WorkspacePicker } from "./studio";
-import { BigbangTheme } from "./ui/ThemeProvider";
+import { Studio, StudioHomePanel } from "./studio";
+import { BigbangTheme, useBigbangDark } from "./ui/ThemeProvider";
 import { Sidebar } from "./ui/Sidebar";
 
 const FILL = { flex: 1, minHeight: 0 };
@@ -108,17 +107,14 @@ function assistantFormFields(input: {
 const NO_DEFAULT_RESPONDER = "first";
 
 export function BigbangScreen() {
-  const router = useRouter();
   const hosts = useHosts();
   const compact = useIsCompactFormFactor();
-  const scheme = useColorScheme();
-  const { settings } = useAppSettings();
-  const dark = isDarkTheme(settings.theme, scheme);
+  const dark = useBigbangDark();
   const palette = dark ? palettes.dark : palettes.light;
   const coordinatorId = useBigbangView((state) => state.coordinatorId);
   const chatId = useBigbangView((state) => state.chatId);
   const mode = useBigbangView((state) => state.mode);
-  const setMode = useBigbangView((state) => state.setMode);
+  const section = useBigbangView((state) => state.section);
   const data = useBigbangData(coordinatorId);
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
   useBigbangTitle(mode, conversationTitle);
@@ -144,8 +140,6 @@ export function BigbangScreen() {
     setForm(null);
     setEditing(null);
   }, []);
-  const chatMode = useCallback(() => setMode("chat"), [setMode]);
-  const studioMode = useCallback(() => setMode("studio"), [setMode]);
   const openForm = useCallback((next: "assistant" | "group" | "task") => {
     setFormIds(freshFormIds());
     setForm(next);
@@ -158,7 +152,6 @@ export function BigbangScreen() {
   const showTask = useCallback(() => openForm("task"), [openForm]);
   const showWorkspaces = useCallback(() => setForm("workspaces"), []);
   const showHosts = useCallback(() => setForm("hosts"), []);
-  const settingsPress = useCallback(() => router.push("/settings"), [router]);
 
   const openTask = useCallback((task: Task) => {
     if (!task.execution) return;
@@ -369,106 +362,100 @@ export function BigbangScreen() {
     ],
   );
   const groupChange = useCallback((textValue: string) => setGroup(textValue), []);
+  const directoryMachines = useMachines(data.invoke, section === "members");
   const sidebarProps = {
     compact,
-    mode,
     chatId,
     coordinator:
       hosts.find((host) => host.serverId === coordinatorId)?.label ?? "Choose coordinator",
     connected: data.connected,
     conversations: data.state.conversations,
     assistants: data.state.assistants,
+    machines: directoryMachines,
     messages: data.state.messages,
-    onChat: chatMode,
-    onStudio: studioMode,
     onSelect: selectChat,
     onAssistant: showAssistant,
     onEdit: editAssistant,
     onGroup: showGroup,
     onWorkspaces: showWorkspaces,
     onHosts: showHosts,
-    onSettings: settingsPress,
   };
   return (
     <BigbangTheme name={dark ? "dark" : "light"}>
-      <View style={frame} testID="bigbang-app">
-        <View style={CONTENT}>
-          {!compact ? <Sidebar {...sidebarProps} /> : null}
-          <View style={FILL}>
-            {data.error ? (
-              <Text style={text} accessibilityRole="alert">
-                {chatReadError(data.error)}
-              </Text>
-            ) : null}
-            {error ? (
-              <Text style={text} accessibilityRole="alert">
-                {error}
-              </Text>
-            ) : null}
-            {form === "hosts" || !coordinatorId ? (
-              <FormFrame title="Chat coordinator" onClose={close}>
-                <Text style={text}>
-                  Choose the host that stores Chat. Switching Studio never changes this choice.
+      <UsageSidebarRoot>
+        <View style={frame} testID="bigbang-app">
+          <View style={CONTENT}>
+            {!compact ? <Sidebar {...sidebarProps} /> : null}
+            <View style={FILL}>
+              {data.error ? (
+                <Text style={text} accessibilityRole="alert">
+                  {chatReadError(data.error)}
                 </Text>
-                {hostRows.map(({ host, select }) => (
-                  <ResourceChoice key={host.serverId} onPress={select} label={host.label} />
-                ))}
-              </FormFrame>
-            ) : null}
-            <FormHost
-              form={form}
-              editing={editing}
-              chatId={chatId}
-              assistantFields={assistantFields}
-              groupFields={groupFields}
-              taskFields={taskFields}
-              palette={palette}
-              save={save}
-              close={close}
-              group={group}
-              groupChange={groupChange}
-            />
-            <RetainedPanel active={!form && mode === "chat" && Boolean(coordinatorId)}>
-              <BigbangChat
-                key={`${coordinatorId}:${chatId}`}
-                data={data}
+              ) : null}
+              {error ? (
+                <Text style={text} accessibilityRole="alert">
+                  {error}
+                </Text>
+              ) : null}
+              {form === "hosts" || !coordinatorId ? (
+                <FormFrame title="Chat coordinator" onClose={close}>
+                  <Text style={text}>
+                    Choose the host that stores Chat. Switching Studio never changes this choice.
+                  </Text>
+                  {hostRows.map(({ host, select }) => (
+                    <ResourceChoice key={host.serverId} onPress={select} label={host.label} />
+                  ))}
+                </FormFrame>
+              ) : null}
+              <FormHost
+                form={form}
+                editing={editing}
+                chatId={chatId}
+                assistantFields={assistantFields}
+                groupFields={groupFields}
+                taskFields={taskFields}
                 palette={palette}
-                onTask={showTask}
-                onOpenTask={openTask}
-                onOpenTurn={openTurn}
-                onEditAssistant={editAssistant}
-                onSidebar={compact ? showSidebar : undefined}
+                save={save}
+                close={close}
+                group={group}
+                groupChange={groupChange}
               />
-            </RetainedPanel>
-            <RetainedPanel active={!form && mode === "studio"}>
-              <Studio
-                palette={palette}
-                data={data}
-                active={!form && mode === "studio"}
-                onAdd={showWorkspaces}
-                onSidebar={compact ? showSidebar : undefined}
-              />
-            </RetainedPanel>
+              <RetainedPanel active={!form && mode === "chat" && Boolean(coordinatorId)}>
+                <BigbangChat
+                  key={`${coordinatorId}:${chatId}`}
+                  data={data}
+                  palette={palette}
+                  onTask={showTask}
+                  onOpenTask={openTask}
+                  onOpenTurn={openTurn}
+                  onEditAssistant={editAssistant}
+                  onSidebar={compact ? showSidebar : undefined}
+                />
+              </RetainedPanel>
+              <RetainedPanel active={!form && mode === "studio"}>
+                <Studio
+                  palette={palette}
+                  data={data}
+                  active={!form && mode === "studio"}
+                  onAdd={showWorkspaces}
+                  onSidebar={compact ? showSidebar : undefined}
+                />
+              </RetainedPanel>
+            </View>
           </View>
+          {compact && sidebarOpen ? (
+            <View style={OVERLAY}>
+              <PressHighlight
+                accessibilityLabel="Close sidebar"
+                onPress={hideSidebar}
+                style={BACKDROP}
+              />
+              <Sidebar {...sidebarProps} />
+            </View>
+          ) : null}
         </View>
-        {compact && sidebarOpen ? (
-          <View style={OVERLAY}>
-            <PressHighlight
-              accessibilityLabel="Close sidebar"
-              onPress={hideSidebar}
-              style={BACKDROP}
-            />
-            <Sidebar {...sidebarProps} />
-          </View>
-        ) : null}
-      </View>
+      </UsageSidebarRoot>
     </BigbangTheme>
-  );
-}
-
-function GroupInput({ value, onChange }: { value: string; onChange(value: string): void }) {
-  return (
-    <FormTextInput accessibilityLabel="Studio group" initialValue={value} onChangeText={onChange} />
   );
 }
 
@@ -498,7 +485,6 @@ function FormHost({
   group,
   groupChange,
 }: FormHostProps) {
-  const text = useMemo(() => ({ color: palette.textPrimary }), [palette.textPrimary]);
   return (
     <>
       {form === "assistant" ? (
@@ -532,11 +518,7 @@ function FormHost({
         />
       ) : null}
       {form === "workspaces" ? (
-        <FormFrame title="Add workspace" onClose={close}>
-          <Text style={text}>Studio group</Text>
-          <GroupInput value={group} onChange={groupChange} />
-          <WorkspacePicker palette={palette} group={group} />
-        </FormFrame>
+        <StudioHomePanel group={group} onGroupChange={groupChange} onClose={close} />
       ) : null}
     </>
   );
@@ -569,8 +551,4 @@ function openTurnProcess(turn: Turn, coordinatorId: string, setError: (error: st
 
 function freshFormIds() {
   return { assistant: randomUUID(), chat: randomUUID(), group: randomUUID(), task: randomUUID() };
-}
-
-function isDarkTheme(preference: string, scheme: string | null | undefined) {
-  return preference === "dark" || (preference === "auto" && scheme === "dark");
 }

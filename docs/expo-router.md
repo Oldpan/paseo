@@ -173,6 +173,16 @@ hydration at startup makes likely. A screen that mounts a nested navigator (the
 root stack's `h/[serverId]`) is passed in `nestedNavigatorScreens` so the nested
 stack owns its own screens. See [unistyles.md](unistyles.md).
 
+## Bigbang Build
+
+The Bigbang fork keeps these routes and changes where they land, gated on
+`IS_BIGBANG`. The host index redirects to `/bigbang`; `/open-project` redirects
+to Studio there; the workspace route and `navigateToWorkspace` open a Studio
+column and return to `/bigbang` instead of drawing the workspace deck. The
+workspace route still consumes its `open` intent first, so the column reveals the
+named tab. Side effects run in an effect before the route leaves; never open a
+column during render.
+
 ## Regression Shape
 
 Pure helper tests are useful but not enough. The failure mode here is native

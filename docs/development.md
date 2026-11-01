@@ -62,6 +62,18 @@ Fork builds use `npm run bigbang:apk:arm64`, `npm run bigbang:build:web`, and `n
 
 Migrate from Bigbang `apps/app/src`, captured at `f9e502a9a73024a8f2cbfc1aa67c52d70b7265ae`. The presentation source lives in `packages/app/src/bigbang/ui`; file headers name the original component. Keep its palette, typography, pixel avatars, shadows, Markdown, composer, sidebar and tab chrome together. Its scoped lint exceptions preserve the imported presentation; host and data adapters keep the ordinary app rules.
 
+The Bigbang build has one shell, Bigbang's rail and sidebar; `IS_BIGBANG` (`packages/app/src/bigbang/build.ts`) turns Paseo's left sidebar off. Paseo pages map into it:
+
+| Paseo surface                          | Bigbang build                                                      |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| `/open-project` home                   | Studio home (`/open-project` redirects there, so fallbacks do too) |
+| Workspace route, `navigateToWorkspace` | A Studio column in the "Workspaces" tab group                      |
+| History, Schedules, a new workspace    | The Paseo page inside `BigbangPage`, with the rail beside it       |
+| Usage, Settings                        | Rail buttons; leaving Settings returns to `/bigbang`               |
+| Hosts                                  | Member → Machines, with each host's Bigbang role                   |
+
+`/bigbang` stays at the bottom of the stack while hosted pages replace one another above it, so Chat and Studio keep their retained panels. A hosted page's header menu button opens the rail as a drawer on phones through `SidebarMenuHostContext`. Paseo's keyboard shortcuts and Command Center hotkey are off on these pages because they belong to Paseo's chrome.
+
 The host owns networking, theme preference, editing surfaces and execution. Migrated controls consume the presentation context without installing the old Core client or its global theme effects. `EditingTextInput` replaces the old controlled native input so composition stays with the editing surface. Core-only attachment upload, slash commands, reactions and reminders stay hidden until their host capabilities are connected. Never expose an inert control to match a screenshot.
 
 The Chat coordinator is explicitly selected and retained across Studio navigation. [Bigbang Chat coordination](bigbang-chat.md) owns how Chat runs on Paseo executions. Enable the Bigbang plugin on a test daemon only after the trusted-code permission disclosure: `npm run bigbang:cli -- plugin install <checkout>/extensions/bigbang`, set `pluginsEnabled: true` in that home's `config.json`, then `npm run bigbang:cli -- reload`. Reload the plugin after source changes with `npm run bigbang:cli -- plugin reload bigbang`. A host without that plugin can still provide a Studio workspace; it cannot store Chat. Workspace containers retain their `{serverId, workspaceId}` binding, and closing a view does not stop its agents or PTYs.

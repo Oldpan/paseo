@@ -220,29 +220,3 @@ export function WorkspaceChrome({
     </View>
   );
 }
-export function StudioEmpty({ onAdd }: { onAdd(): void }) {
-  const { palette: t } = useTheme();
-  return (
-    <View
-      style={{
-        flex: 1,
-        padding: 32,
-        gap: 12,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: t.chatSurface,
-      }}
-    >
-      <BoxesIcon color={t.brandAccent} size={36} />
-      <Text style={type(t.textPrimary, 20, { fontWeight: "700" })}>
-        Your workspace, across machines
-      </Text>
-      <Text style={type(t.textMuted, 13, { maxWidth: 360, textAlign: "center" })}>
-        Open a workspace to work with its agents, files, changes and terminals.
-      </Text>
-      <Chip onPress={onAdd} accent>
-        Add workspace
-      </Chip>
-    </View>
-  );
-}

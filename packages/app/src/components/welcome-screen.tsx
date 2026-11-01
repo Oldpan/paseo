@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, Text, View, ScrollView } from "react-native";
+import { Image, Pressable, Text, View, ScrollView } from "react-native";
 import { useRouter } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import {
@@ -22,6 +22,7 @@ import { resolveAppVersion } from "@/utils/app-version";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
 import { PaseoLogo } from "@/components/icons/paseo-logo";
+import { IS_BIGBANG } from "@/bigbang/build";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { isFdroidBuild } from "@/constants/build-profile";
 import { isWeb, isNative } from "@/constants/platform";
@@ -286,11 +287,13 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
         testID="welcome-screen"
       >
         <View style={styles.content}>
-          <PaseoLogo size={96} />
+          {IS_BIGBANG ? <BigbangLogo /> : <PaseoLogo size={96} />}
           <View style={styles.copyBlock}>
-            <Text style={styles.title}>{t("onboarding.title")}</Text>
+            <Text style={styles.title}>
+              {IS_BIGBANG ? "Welcome to Bigbang" : t("onboarding.title")}
+            </Text>
             <Text style={styles.subtitle}>{t("onboarding.subtitle")}</Text>
-            {isNative ? (
+            {isNative && !IS_BIGBANG ? (
               <Pressable style={styles.setupLink} onPress={handleOpenPaseoSite}>
                 <Text style={styles.setupLinkText}>paseo.sh</Text>
                 <ExternalLink size={14} color={theme.colors.accent} />
@@ -363,4 +366,9 @@ function WelcomeActionButton({ action }: WelcomeActionButtonProps) {
       <Text style={textStyle}>{action.label}</Text>
     </Pressable>
   );
+}
+
+const BIGBANG_LOGO = { width: 96, height: 96, borderRadius: 22 };
+function BigbangLogo() {
+  return <Image source={require("../../assets/images/bigbang-icon.png")} style={BIGBANG_LOGO} />;
 }

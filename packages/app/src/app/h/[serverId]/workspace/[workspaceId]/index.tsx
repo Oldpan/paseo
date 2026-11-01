@@ -36,6 +36,8 @@ import {
 import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
 import { isNative, isWeb } from "@/constants/platform";
 import { RenderProfile } from "@/utils/render-profiler";
+import { IS_BIGBANG } from "@/bigbang/build";
+import { openStudioWorkspace, returnToBigbang } from "@/bigbang/navigation";
 
 function getParamValue(value: string | string[] | undefined): string {
   if (typeof value === "string") {
@@ -138,7 +140,23 @@ function HostWorkspaceRouteContent() {
     });
   }, [navigation, openValue, serverId, workspaceId]);
 
+  if (IS_BIGBANG) return <StudioWorkspaceHandoff serverId={serverId} workspaceId={workspaceId} />;
   return <WorkspaceDeck />;
+}
+
+/** Bigbang's Studio owns workspaces: open this one as a column, then leave for /bigbang. */
+function StudioWorkspaceHandoff({
+  serverId,
+  workspaceId,
+}: {
+  serverId: string;
+  workspaceId: string;
+}) {
+  useEffect(() => {
+    if (serverId && workspaceId) openStudioWorkspace({ serverId, workspaceId });
+    returnToBigbang("studio");
+  }, [serverId, workspaceId]);
+  return null;
 }
 
 function WorkspaceDeck() {

@@ -116,5 +116,6 @@ Chat 与 Paseo 的结合方式见 [Chat 协调](bigbang-chat.md)：账本拥有�
 2. Studio 统一组织多台机器。Mac/Web 支持多列；Android 保持单个活动工作区，通过切换器访问其他工作区。
 3. 命名标签组与布局由 Bigbang 外框组织；Paseo 继续拥有工作区内部文件、Git、编辑、执行及审批状态。
 4. 终端使用 Bigbang 显示与输入技术，接入 Paseo 现有终端会话；Android 编辑器接入现有文件模型，不增加另一套保存后端。
+5. Bigbang 构建只有一个外框：Paseo 首页并入 Studio 首页，打开工作区进入 Studio 列，History、Schedules 与新建工作区在 Bigbang rail 旁显示，主机列在 Member → Machines。对应关系见 [development.md](development.md#bigbang-presentation-migration)。
 
 Chat 任务闭环与协作首轮已落地。后续顺序：终端和 Android 编辑 → 完整协作体验。遇到已确认约束之外、无法自行取舍的问题再沟通。

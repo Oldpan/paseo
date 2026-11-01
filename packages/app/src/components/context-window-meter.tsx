@@ -13,6 +13,12 @@ import { ContextWindowDetails } from "./context-window-details";
 import { ContextWindowSheet } from "./context-window-sheet";
 import { formatContextPercentage } from "./context-window-meter.utils";
 
+// The ring is decorative. react-native-svg hands its props to the web <svg> as-is, so web gets
+// `aria-hidden` and native gets the accessibility props React would reject on a DOM element.
+const RING_HIDDEN_FROM_ACCESSIBILITY = isNative
+  ? { accessibilityElementsHidden: true, importantForAccessibility: "no-hide-descendants" as const }
+  : { "aria-hidden": true };
+
 interface ContextWindowMeterProps {
   serverId: string;
   agentId: string;
@@ -112,8 +118,7 @@ const ContextWindowRing = withUnistyles(function ContextWindowRing({
       width={size}
       height={size}
       viewBox={`0 0 ${size} ${size}`}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
+      {...RING_HIDDEN_FROM_ACCESSIBILITY}
     >
       <Circle
         cx={center}

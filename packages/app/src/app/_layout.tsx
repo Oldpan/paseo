@@ -129,6 +129,7 @@ import {
 import { PluginCatalogSync } from "@/plugins";
 import { NotificationOpenRouter } from "@/notification-open/react";
 import { ensureOsNotificationPermission } from "@/utils/os-notifications";
+import { IS_BIGBANG } from "@/bigbang/build";
 
 polyfillCrypto();
 
@@ -765,7 +766,9 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
   const routeServerId = useMemo(() => parseServerIdFromPathname(pathname), [pathname]);
   const routeHasKnownHost =
     routeServerId !== null && hosts.some((host) => host.serverId === routeServerId);
+  // The Bigbang build draws its own shell around every page it hosts.
   const shouldShowAppChrome =
+    !IS_BIGBANG &&
     storeReady &&
     (pathname === "/open-project" ||
       pathname === "/new" ||
