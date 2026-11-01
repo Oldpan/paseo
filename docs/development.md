@@ -84,25 +84,22 @@ Web acceptance on 2026-10-25 covered a real Grok assistant created through the m
 
 ### Mac and Spark test pair
 
-The two-machine baseline uses this profile on both hosts. Keep the remote daemon on loopback and use a saved SSH destination from the Mac:
+The two-machine setup uses this profile on both hosts. Spark is the long-term Chat coordinator, because it stays on when the Mac sleeps or travels; the Mac is its member. Both test daemons listen on `6778` on their own machine and require a password, so each saves the other as a `tcp://` host with the password in the connection, over an SSH tunnel kept in the Mac's `paseo-bigbang-dev` tmux session:
 
 ```bash
-# Mac, in the fork checkout:
-npm run bigbang:cli -- host add 'ssh://<spark-ssh-alias>?daemonPort=6778' --label 'Spark · Bigbang Dev' --json
-```
-
-For Spark-to-Mac calls, maintain a separate SSH reverse tunnel from the Mac. This reaches the existing Mac test daemon without enabling an SSH server on the Mac:
-
-```bash
-# Mac, in a dedicated terminal or tmux window:
+# Mac → Spark: local forward, then save Spark through it.
+ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:6780:127.0.0.1:6778 <spark-ssh-alias>
+npm run bigbang:cli -- host add 'tcp://127.0.0.1:6780?password=<Spark password>' --label 'Spark · Bigbang Dev' --json
+# Spark → Mac: reverse tunnel from the Mac, then save the Mac on Spark through it.
 ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -R 127.0.0.1:6779:127.0.0.1:6778 <spark-ssh-alias>
-# Spark, in its fork checkout:
-npm run bigbang:cli -- host add 127.0.0.1:6779 --label 'Mac · Bigbang Dev' --json
+npm run bigbang:cli -- host add 'tcp://127.0.0.1:6779?password=<Mac password>' --label 'Mac · Bigbang Dev' --json
 ```
 
-To run assistants on Spark with the Mac as Chat coordinator, make Spark a member: write the plugin's `role` setting on Spark as `{ "mode": "member", "coordinatorServerId": "<Mac serverId>" }` (plugin RPC `settings.role.write`, or the plugin's settings) and reload the plugin there. The Mac needs only its saved Spark host; [Machines](bigbang-chat.md#machines) explains why. Swap the roles to make Spark the coordinator.
+`ssh://` hosts carry no password, so they stop working once the other daemon sets one; replace a saved host's credentials with `host update <registration-id> --connection 'tcp://…?password=…'`. Each daemon pins the learned server identity, and a dropped tunnel leaves the saved peer offline until it reconnects. Keep these tunnels separate from official Paseo connections.
 
-Both test daemons use `6778` on their own machines. Spark's `6779` is only the reverse tunnel. Each daemon stores its own peer registration and pins the learned server identity. The tunnel must remain running for the Spark-to-Mac connection; its loss leaves the saved peer offline and reconnection restores the same registration. Keep this tunnel separate from official Paseo connections.
+Roles are the plugin's `role` setting, written with plugin RPC `settings.role.write` and applied on plugin reload: Spark `{ "mode": "coordinator" }`, the Mac `{ "mode": "member", "coordinatorServerId": "<Spark serverId>" }`. The coordinator dials its members, so only Spark's saved Mac host matters to Chat; [Machines](bigbang-chat.md#machines) explains why. The coordinator's machine list picks up a role change after its next link probe, a minute or two. The ledger stays on the machine that wrote it: switching coordinators starts from that machine's ledger and moves no data.
+
+Spark's test daemon also serves the Bigbang web app, so Chat works with the Mac off. Its `config.json` sets `features.webUi` to `{ "enabled": true, "distDir": "<checkout>/packages/app/dist" }` and lists the Tailscale name in `daemon.hostnames`; Tailscale Funnel publishes it on port `8443` (`tailscale funnel --bg --https=8443 http://127.0.0.1:6778`), leaving the host's `443` routes alone. Rebuild with `npm run bigbang:build:web` on Spark after app changes; turn the exposure off with `tailscale funnel --https=8443 off`.
 
 Acceptance on 2026-10-25 used base `72e3316f4f5d` plus the local isolation changes, Paseo 0.13.0, macOS arm64 / Node 22.23.3 and Spark Linux aarch64 / Node 24.13.0. Each direction used `hosts.client()` to create a disposable workspace and real PTY, execute Python, write a random nonce to a file and read it back. Both passed; PTYs were closed, workspaces archived and temporary project registrations removed. Breaking and restoring the reverse tunnel produced offline → online on the same registration and server ID, followed by a successful routed read. Official daemon PIDs and configuration hashes remained unchanged. Machine-specific identities and proof payloads stay in the ignored `.dev/bigbang/mac-spark-evidence.json` on each test checkout.
 

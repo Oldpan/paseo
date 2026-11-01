@@ -7,7 +7,14 @@ import { useChatRole, type BigbangData } from "./data";
 import { chatReadError } from "./title";
 import { Chip } from "./ui/ChatChrome";
 
-const ROW = { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" } as const;
+const ROW = {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+} as const;
 
 export function CoordinatorNotice({
   error,
@@ -35,9 +42,9 @@ export function CoordinatorNotice({
   }, [onSelect, target]);
   if (role?.mode !== "member")
     return (
-      <Text style={style} accessibilityRole="alert">
-        {chatReadError(error)}
-      </Text>
+      <View style={ROW} accessibilityRole="alert">
+        <Text style={style}>{chatReadError(error)}</Text>
+      </View>
     );
   const known = target !== null && hosts.some((host) => host.serverId === target);
   return (
