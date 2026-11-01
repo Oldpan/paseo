@@ -104,7 +104,13 @@ Chat 与 Paseo 的结合方式见 [Chat 协调](bigbang-chat.md)：账本拥有�
 
 2026-10-28 按旧 Bigbang 的多机协作补齐（`1e74914b2` 至 `1420a476c`），Mac 为协调器、Spark 为 member，于 `1420a476c` 实测通过：Spark 上的 Grok 助手 Sa 的 home、记忆与私聊执行都在 Spark，回合与工具调用经 member 中继回到 Mac 账本并按机器授权；Mac 上的 Codex 助手 Mo 用 `bigbang-send` 私下问 Sa，Sa 的 mailbox 回合在 Spark 运行 `hostname`，回复 `aitopatom-e2eb` 唤醒 Mo 后告知用户；Studio 绑定 Mac 与 Spark 各一个工作区后，两端成员各收到一次通知，Mac 的 codex-mac 发消息给 Spark 的 grok-spark，后者经中继 `bigbang-reply` 回到 codex-mac；Studio 关联 Mo 后，Mo 问 grok-spark 得到 `/tmp/bb-studio-spark`，codex-mac 问 Mo 也收到经 Studio 送回的回复。Web 的 Studio 协作面板显示了成员、关联助手与 Records。
 
-内联审批的实际触发（Codex 与 Grok 调用任务工具时都没有弹出审批）、并发与断线的实机行为、角色互换（Spark 为协调器）、离线成员的 `not_attempted` 与 Mailbox 准入等待的实机行为，以及原生端尚未验证。
+2026-11-01 在同一拓扑下，于 `4f8f1199f` 用 Codex gpt-6-luna 实测通过三项。
+
+- **离线回执**：在 Mac 停用 Spark 的主机注册后，Studio 成员 codex-mac 按 key 给 grok-spark 发消息，收到 `not_attempted`（`host_offline`）。按名字发送时，离线机器上的成员不在成员列表里，返回 `studio_member_not_found`。重新启用 Spark 后，grok-spark 没有收到这条消息。
+- **Mailbox 准入等待**：Bo 的私聊回复执行 `sleep 120` 期间，Mo 用 `bigbang-send` 问 Bo。Bo 的 mailbox 回合记下首次等待时间后一直排队，等聊天回复结束才运行。回复在 8 秒内唤醒 Mo 并发到 Mo 的私聊，Bo 的聊天里没有出现 mailbox 内容。
+- **内联审批**：Codex 每次调用 `bigbang-send` 都会发起 MCP 确认。Studio 列和私聊都弹出了内联审批卡片，批准后工具照常执行；私聊回合在等待期间显示 `attention`。这类确认不会出现在 `paseo permit ls` 里。
+
+角色互换（Spark 为协调器）还没测：Mac 测试 daemon 加了密码之后，Spark 保存的 Mac 主机报 `authentication_failed`，要先替换它的凭据。并发与断线的实机行为、Grok 下的内联审批，以及原生端也尚未验证。
 
 附件上传、表情反应、提醒和旧 Core 专属斜杠命令尚未接通，界面不暴露无效控件。Android 真机、Mac 安装包、终端迁移前后延迟及完整视觉对照仍待验收。原始截图、测试输出和执行回执保存在忽略提交的 `.dev/bigbang/`；本路线图不把已有代码或单项测试通过视为整阶段完成。
 

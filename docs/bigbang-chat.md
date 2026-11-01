@@ -93,12 +93,12 @@ Assistants should not use Paseo's own `send_agent_prompt`: its finish notificati
 
 A Studio binds workspaces on any machine; a workspace belongs to one Studio at a time, and each binding has a token (ported from Bigbang Core's herdr Studio). The agents in bound workspaces are members, except Bigbang's own executions. Members use the same `bigbang-*` tools: `peers`, `send` (1-8 members by name, address `machine/workspace/agent` or key), `reply` and `records`. Each new member gets one notice per binding.
 
-| Receipt         | Meaning                                                                             |
-| --------------- | ----------------------------------------------------------------------------------- |
-| `accepted`      | The recipient's session took the message (Paseo `agents.send`, steered)             |
-| `not_attempted` | The recipient's machine was offline; never sent later                               |
-| `rejected`      | The send failed                                                                     |
-| `unknown`       | No answer within 10 seconds, or the coordinator restarted mid-attempt; never resent |
+| Receipt         | Meaning                                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accepted`      | The recipient's session took the message (Paseo `agents.send`, steered)                                                                                                 |
+| `not_attempted` | The recipient's machine was offline; never sent later. Name the recipient by key: members on an offline machine drop out of the member list, so a name does not resolve |
+| `rejected`      | The send failed                                                                                                                                                         |
+| `unknown`       | No answer within 10 seconds, or the coordinator restarted mid-attempt; never resent                                                                                     |
 
 A reply reaches the original sender only while both bindings are the ones they had; unbinding and binding again refuses replies to older messages.
 
