@@ -81,8 +81,8 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderBottomWidth: theme.borderWidth[1],
-    borderBottomColor: theme.colors.border,
+    borderBottomWidth: theme.chrome.headerRule.width,
+    borderBottomColor: theme.chrome.headerRule.color,
     userSelect: "none",
   },
   left: {

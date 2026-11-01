@@ -31,12 +31,13 @@ export const composerPillStyles = StyleSheet.create((theme) => ({
     minHeight: COMPOSER_PILL_MIN_HEIGHT,
     paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[1],
-    // Match the composer's 16px tangent point. The 32px floor prevents short labels from
-    // clamping the radius and pulling the point where the curve meets the straight edge inward.
-    borderRadius: theme.borderRadius["2xl"],
+    // Paseo's pill radius matches the composer's 16px tangent point; the 32px floor prevents short
+    // labels from clamping it. A theme's chrome may round pills fully instead.
+    borderRadius: theme.chrome.pillRadius,
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.borderAccent,
     backgroundColor: theme.colors.surface1,
+    ...theme.chrome.controlShadow,
   },
   bodyActive: {
     backgroundColor: theme.colors.surface2,

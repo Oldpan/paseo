@@ -309,7 +309,10 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     marginBottom: theme.spacing[4],
   },
   bubble: {
-    backgroundColor: theme.colors.surface3,
+    backgroundColor: theme.chrome.userBubble.background,
+    borderWidth: theme.chrome.userBubble.borderWidth,
+    borderColor: theme.chrome.userBubble.borderColor,
+    ...theme.chrome.bubbleShadow,
     borderRadius: theme.borderRadius["2xl"],
     borderTopRightRadius: theme.borderRadius.sm,
     paddingHorizontal: theme.spacing[4],
@@ -318,7 +321,7 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   text: {
-    color: theme.colors.foreground,
+    color: theme.chrome.userBubble.foreground,
     fontSize: theme.fontSize.content,
     ...(isWeb
       ? {
@@ -915,7 +918,7 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
   labelLoading: {
-    color: theme.colors.foreground,
+    color: theme.chrome.liveTool,
     opacity: 0.72,
   },
   secondaryLabel: {

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  bigbangDarkTheme,
+  bigbangLightTheme,
   darkPureBlackTheme,
   darkTheme,
   FONT_SIZE,
   getNextThemePreference,
   lightTheme,
+  paseoDarkTheme,
+  paseoLightTheme,
+  resolveBuildThemePreference,
   THEME_OPTIONS,
 } from "./theme";
 
@@ -92,5 +97,61 @@ describe("Built-in light theme", () => {
         brightBlack: "#3f3f46",
       },
     });
+  });
+});
+
+describe("Theme chrome", () => {
+  it("keeps Paseo's own look by default", () => {
+    for (const theme of [paseoDarkTheme, paseoLightTheme, darkPureBlackTheme]) {
+      expect(theme.chrome).toMatchObject({
+        controlBorderWidth: 0,
+        controlShadow: {},
+        bubbleShadow: {},
+        userBubble: {
+          background: theme.colors.surface3,
+          foreground: theme.colors.foreground,
+          borderWidth: 0,
+        },
+        headerRule: { width: 1, color: theme.colors.border },
+        pillRadius: 16,
+        activeTab: { background: theme.colors.surface2, foreground: theme.colors.foreground },
+        liveTool: theme.colors.foreground,
+      });
+    }
+  });
+
+  it("draws the Bigbang themes from the Bigbang palette with retro outlines", () => {
+    expect(bigbangDarkTheme.colors).toMatchObject({
+      surface0: "#0f0e0d",
+      foreground: "#f2ecdb",
+      accent: "#eec95f",
+      accentForeground: "#131007",
+    });
+    expect(bigbangDarkTheme.chrome).toMatchObject({
+      controlBorderWidth: 1,
+      userBubble: { background: "#eec95f", foreground: "#000000", borderWidth: 1 },
+      headerRule: { width: 2, color: "#000000" },
+      activeTab: { background: "#eec95f", foreground: "#131007" },
+    });
+    expect(bigbangLightTheme.colors).toMatchObject({
+      surface0: "#fffdf5",
+      accent: "#ffd400",
+      accentBright: "#1d4ed8",
+    });
+  });
+});
+
+describe("resolveBuildThemePreference", () => {
+  it("keeps every preference in the Paseo build", () => {
+    expect(resolveBuildThemePreference("zinc", false)).toBe("zinc");
+    expect(resolveBuildThemePreference("plugin", false)).toBe("plugin");
+  });
+
+  it("follows the system for a variant or plugin theme the Bigbang build does not offer", () => {
+    expect(resolveBuildThemePreference("light", true)).toBe("light");
+    expect(resolveBuildThemePreference("dark", true)).toBe("dark");
+    expect(resolveBuildThemePreference("auto", true)).toBe("auto");
+    expect(resolveBuildThemePreference("midnight", true)).toBe("auto");
+    expect(resolveBuildThemePreference("plugin", true)).toBe("auto");
   });
 });

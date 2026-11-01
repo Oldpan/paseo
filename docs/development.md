@@ -72,6 +72,8 @@ The Bigbang build has one shell, Bigbang's rail and sidebar; `IS_BIGBANG` (`pack
 | Usage, Settings                        | Rail buttons; leaving Settings returns to `/bigbang`               |
 | Hosts                                  | Member → Machines, with each host's Bigbang role                   |
 
+The hosted Paseo screens use Bigbang's colors: in this build Paseo's `light` and `dark` themes are built from the Bigbang palette, with Bigbang's outlines and offset shadows in `theme.chrome`, and Appearance offers only light, dark and system. A saved variant or plugin theme follows the system.
+
 `/bigbang` stays at the bottom of the stack while hosted pages replace one another above it, so Chat and Studio keep their retained panels. A hosted page's header menu button opens the rail as a drawer on phones through `SidebarMenuHostContext`. Paseo's keyboard shortcuts and Command Center hotkey are off on these pages because they belong to Paseo's chrome.
 
 The host owns networking, theme preference, editing surfaces and execution. Migrated controls consume the presentation context without installing the old Core client or its global theme effects. `EditingTextInput` replaces the old controlled native input so composition stays with the editing surface. Core-only attachment upload, slash commands, reactions and reminders stay hidden until their host capabilities are connected. Never expose an inert control to match a screenshot.

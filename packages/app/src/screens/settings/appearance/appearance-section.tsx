@@ -43,11 +43,13 @@ import {
   DEFAULT_UI_FONT_STACK,
   ICON_SIZE,
   PLUGIN_THEME_PREFERENCE,
-  THEME_OPTIONS,
+  BUILD_THEME_OPTIONS,
+  resolveBuildThemePreference,
   THEME_SWATCHES,
   type Theme,
 } from "@/styles/theme";
 import { isNative } from "@/constants/platform";
+import { IS_BIGBANG } from "@/bigbang/build";
 import type { PluginThemeOption } from "@/plugins/themes";
 import { settingsStyles } from "@/styles/settings";
 import { AppearancePreview } from "./appearance-preview";
@@ -164,13 +166,18 @@ interface ThemeRowProps {
 function ThemeRow({
   value,
   pluginThemes,
-  selectedPluginTheme,
+  selectedPluginTheme: selectedContribution,
   onChange,
   onSelectPluginTheme,
 }: ThemeRowProps) {
   const { t } = useTranslation();
+  // The Bigbang build offers no plugin themes; a saved one or a variant shows as auto, as rendered.
+  const offeredPluginThemes = IS_BIGBANG ? [] : pluginThemes;
+  const selectedPluginTheme = IS_BIGBANG ? null : selectedContribution;
+  const offeredValue = resolveBuildThemePreference(value);
   // A selected contribution that is no longer installed shows the fallback the app renders.
-  const builtInValue = value === PLUGIN_THEME_PREFERENCE ? DEFAULT_THEME_PREFERENCE : value;
+  const builtInValue =
+    offeredValue === PLUGIN_THEME_PREFERENCE ? DEFAULT_THEME_PREFERENCE : offeredValue;
   const selectedLabel = selectedPluginTheme
     ? selectedPluginTheme.name
     : getThemeLabel(t, builtInValue);
@@ -198,8 +205,8 @@ function ThemeRow({
           {selectedLabel}
         </DropdownTrigger>
         <DropdownMenuContent side="bottom" align="end" width={200} scrollable>
-          {THEME_OPTIONS.map((option, index) => {
-            const previousOption = THEME_OPTIONS[index - 1];
+          {BUILD_THEME_OPTIONS.map((option, index) => {
+            const previousOption = BUILD_THEME_OPTIONS[index - 1];
             return (
               <Fragment key={option.name}>
                 {previousOption && previousOption.group !== option.group ? (
@@ -213,8 +220,8 @@ function ThemeRow({
               </Fragment>
             );
           })}
-          {pluginThemes.length > 0 ? <DropdownMenuSeparator /> : null}
-          {pluginThemes.map((option) => (
+          {offeredPluginThemes.length > 0 ? <DropdownMenuSeparator /> : null}
+          {offeredPluginThemes.map((option) => (
             <PluginThemeMenuItem
               key={option.id}
               option={option}

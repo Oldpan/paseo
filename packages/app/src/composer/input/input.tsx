@@ -2208,6 +2208,7 @@ const styles = StyleSheet.create((theme: Theme) => ({
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.borderAccent,
     borderRadius: theme.borderRadius["2xl"],
+    ...theme.chrome.controlShadow,
     paddingTop: {
       xs: theme.spacing[2],
       md: theme.spacing[4],

@@ -19,7 +19,13 @@ import {
   usePluginThemeCatalog,
   type PluginThemeOption,
 } from "@/plugins/themes";
-import { PLUGIN_THEME_NAMES, PLUGIN_THEME_PREFERENCE, THEME_TO_UNISTYLES } from "@/styles/theme";
+import { IS_BIGBANG } from "@/bigbang/build";
+import {
+  PLUGIN_THEME_NAMES,
+  PLUGIN_THEME_PREFERENCE,
+  resolveBuildThemePreference,
+  THEME_TO_UNISTYLES,
+} from "@/styles/theme";
 import { applyAppearance } from "./apply";
 import { AppearanceSystemBars } from "./system-bars";
 
@@ -37,7 +43,7 @@ interface ApplyThemeInput {
 const ContributedThemesContext = createContext<ContributedThemes | null>(null);
 
 function applyTheme({ preference, contributedTheme }: ApplyThemeInput): void {
-  if (contributedTheme) {
+  if (contributedTheme && !IS_BIGBANG) {
     const themeName = PLUGIN_THEME_NAMES[contributedTheme.theme.colorScheme];
     UnistylesRuntime.updateTheme(themeName, () => contributedTheme.theme);
     UnistylesRuntime.setAdaptiveThemes(false);
@@ -45,8 +51,9 @@ function applyTheme({ preference, contributedTheme }: ApplyThemeInput): void {
     return;
   }
 
+  const offeredPreference = resolveBuildThemePreference(preference);
   const builtInPreference =
-    preference === PLUGIN_THEME_PREFERENCE ? DEFAULT_THEME_PREFERENCE : preference;
+    offeredPreference === PLUGIN_THEME_PREFERENCE ? DEFAULT_THEME_PREFERENCE : offeredPreference;
   if (builtInPreference === "auto") {
     UnistylesRuntime.setAdaptiveThemes(true);
     return;

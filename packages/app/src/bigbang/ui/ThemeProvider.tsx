@@ -1,6 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useColorScheme } from "react-native";
 import { useAppSettings } from "@/hooks/use-settings";
+import { resolveBuildThemePreference } from "@/styles/theme";
 import { palettes, type ThemeName } from "./theme";
 
 // Presentation context keeps Bigbang's original component API. Paseo owns the theme preference.
@@ -17,5 +18,6 @@ export function useTheme() {
 export function useBigbangDark(): boolean {
   const scheme = useColorScheme();
   const { settings } = useAppSettings();
-  return settings.theme === "dark" || (settings.theme === "auto" && scheme === "dark");
+  const preference = resolveBuildThemePreference(settings.theme);
+  return preference === "dark" || (preference === "auto" && scheme === "dark");
 }

@@ -1,5 +1,11 @@
 import { Platform } from "react-native";
 import { darkHighlightColors, lightHighlightColors } from "@getpaseo/highlight";
+import { IS_BIGBANG } from "@/bigbang/build";
+import {
+  offsetShadow,
+  palettes as bigbangPalettes,
+  type Palette as BigbangPalette,
+} from "@/bigbang/ui/theme";
 
 export const baseColors = {
   // Base colors
@@ -698,7 +704,89 @@ const darkShadow = {
   },
 } as const;
 
-export function buildDarkTheme(semanticColors: ReturnType<typeof buildDarkSemanticColors>) {
+/**
+ * Outline and emphasis a fork can restyle without forking components. Paseo's defaults reproduce
+ * its own look: no control outlines, no offset shadows, a surface-coloured user bubble. The Bigbang
+ * build swaps in Bigbang's retro outlines, offset shadows and yellow user bubble.
+ */
+/** An offset shadow: `boxShadow` on web, the shadow props on native. Empty means none. */
+export interface ChromeShadow {
+  boxShadow?: string;
+  shadowColor?: string;
+  shadowOffset?: { width: number; height: number };
+  shadowOpacity?: number;
+  shadowRadius?: number;
+  elevation?: number;
+}
+
+export interface ThemeChrome {
+  /** Outline on emphasised controls: the composer, pills and the focused tab. */
+  controlBorderWidth: number;
+  controlBorderColor: string;
+  controlShadow: ChromeShadow;
+  bubbleShadow: ChromeShadow;
+  userBubble: { background: string; foreground: string; borderWidth: number; borderColor: string };
+  /** The rule under screen headers. */
+  headerRule: { width: number; color: string };
+  pillRadius: number;
+  /** The focused tab's chip on a header rail. */
+  activeTab: { background: string; foreground: string };
+  /** A tool call label while it runs. */
+  liveTool: string;
+}
+
+function paseoChrome(colors: {
+  surface2: string;
+  surface3: string;
+  foreground: string;
+  border: string;
+}): ThemeChrome {
+  return {
+    controlBorderWidth: 0,
+    controlBorderColor: "transparent",
+    controlShadow: {},
+    bubbleShadow: {},
+    userBubble: {
+      background: colors.surface3,
+      foreground: colors.foreground,
+      borderWidth: 0,
+      borderColor: "transparent",
+    },
+    headerRule: { width: BORDER_WIDTH[1], color: colors.border },
+    pillRadius: BORDER_RADIUS["2xl"],
+    activeTab: { background: colors.surface2, foreground: colors.foreground },
+    liveTool: colors.foreground,
+  };
+}
+
+function bigbangChrome(palette: BigbangPalette, scheme: "light" | "dark"): ThemeChrome {
+  const dark = scheme === "dark";
+  return {
+    controlBorderWidth: BORDER_WIDTH[1],
+    controlBorderColor: palette.retroBorder,
+    controlShadow: offsetShadow(
+      palette.bubbleShadow,
+      dark ? 3 : 1.5,
+      dark ? 3 : 1.5,
+    ) as ChromeShadow,
+    bubbleShadow: offsetShadow(palette.bubbleShadow, dark ? 3 : 2, dark ? 3 : 2) as ChromeShadow,
+    userBubble: {
+      background: palette.msgBubbleHighlight,
+      foreground: palette.userBubbleInk,
+      borderWidth: BORDER_WIDTH[1],
+      borderColor: palette.retroBorder,
+    },
+    headerRule: { width: BORDER_WIDTH[2], color: palette.black },
+    pillRadius: BORDER_RADIUS.full,
+    activeTab: { background: palette.brandAccent, foreground: palette.onAccent },
+    liveTool: palette.liveTool,
+  };
+}
+
+export function buildDarkTheme(
+  semanticColors: ReturnType<typeof buildDarkSemanticColors>,
+  chrome: ThemeChrome = paseoChrome(semanticColors),
+) {
   return {
     colorScheme: "dark" as const,
     colors: {
@@ -707,11 +795,14 @@ export function buildDarkTheme(semanticColors: ReturnType<typeof buildDarkSemant
       syntax: darkHighlightColors,
     },
     shadow: darkShadow,
+    chrome,
     ...commonTheme,
   } as const;
 }
 
-export const darkTheme = buildDarkTheme(paseoDarkColors);
+// The Bigbang build draws its light and dark themes from Bigbang's palette; the theme names, the
+// auto preference and the Unistyles registry stay Paseo's.
+export const paseoDarkTheme = buildDarkTheme(paseoDarkColors);
 export const darkZincTheme = buildDarkTheme(zincDarkColors);
 export const darkMidnightTheme = buildDarkTheme(midnightDarkColors);
 export const darkClaudeTheme = buildDarkTheme(claudeDarkColors);
@@ -760,7 +851,10 @@ const lightShadow = {
   },
 } as const;
 
-export function buildLightTheme(semanticColors: ReturnType<typeof buildLightSemanticColors>) {
+export function buildLightTheme(
+  semanticColors: ReturnType<typeof buildLightSemanticColors>,
+  chrome: ThemeChrome = paseoChrome(semanticColors),
+) {
   return {
     colorScheme: "light" as const,
     colors: {
@@ -769,11 +863,74 @@ export function buildLightTheme(semanticColors: ReturnType<typeof buildLightSema
       syntax: lightHighlightColors,
     },
     shadow: lightShadow,
+    chrome,
     ...commonTheme,
   } as const;
 }
 
-export const lightTheme = buildLightTheme(lightSemanticColors);
+// Bigbang — the fork's warm surfaces, yellow accent and retro outlines, from the palette its Chat
+// draws with (bigbang/ui/theme.ts), so the Paseo screens it hosts match the Chat beside them.
+const bigbangLight = bigbangPalettes.light;
+const bigbangDark = bigbangPalettes.dark;
+
+export const bigbangLightColors = buildLightSemanticColors({
+  surface0: bigbangLight.surfacePrimary,
+  surface1: bigbangLight.surfaceActive,
+  surface2: bigbangLight.surfaceSecondary,
+  surface3: bigbangLight.surfaceTertiary,
+  surface4: bigbangLight.retroBorderLight,
+  surfaceDiffEmpty: bigbangLight.surfaceSecondary,
+  surfaceSidebar: bigbangLight.surfaceSecondary,
+  foreground: bigbangLight.textPrimary,
+  foregroundMuted: bigbangLight.textMuted,
+  foregroundExtraMuted: bigbangLight.textSubtle,
+  border: bigbangLight.retroBorderLight,
+  borderAccent: bigbangLight.retroBorder,
+  accent: bigbangLight.brandAccent,
+  accentBright: bigbangLight.link,
+  accentForeground: bigbangLight.onAccent,
+  primary: bigbangLight.textPrimary,
+  primaryForeground: bigbangLight.surfacePrimary,
+  destructive: bigbangLight.destructive,
+  terminalBlack: "#1a1a1e",
+  terminalBrightBlack: "#3f3f46",
+  ring: bigbangLight.textPrimary,
+});
+
+export const bigbangDarkColors = buildDarkSemanticColors({
+  surface0: bigbangDark.surfacePrimary,
+  surface1: bigbangDark.chatSurface,
+  surface2: bigbangDark.surfaceElevated,
+  surface3: bigbangDark.surfaceHover,
+  surface4: bigbangDark.retroBorderLight,
+  surfaceDiffEmpty: bigbangDark.surfaceSecondary,
+  surfaceSidebar: bigbangDark.sidebarSurface,
+  foreground: bigbangDark.textPrimary,
+  foregroundMuted: bigbangDark.textMuted,
+  foregroundExtraMuted: bigbangDark.textSubtle,
+  border: bigbangDark.retroBorderLight,
+  borderAccent: bigbangDark.retroBorder,
+  accent: bigbangDark.brandAccent,
+  accentBright: bigbangDark.link,
+  accentForeground: bigbangDark.onAccent,
+  destructive: bigbangDark.destructive,
+  terminalBlack: bigbangDark.retroBorder,
+  terminalBrightBlack: bigbangDark.textSubtle,
+  ring: bigbangDark.textSecondary,
+});
+
+export const bigbangLightTheme = buildLightTheme(
+  bigbangLightColors,
+  bigbangChrome(bigbangLight, "light"),
+);
+export const bigbangDarkTheme = buildDarkTheme(
+  bigbangDarkColors,
+  bigbangChrome(bigbangDark, "dark"),
+);
+
+export const paseoLightTheme = buildLightTheme(lightSemanticColors);
+export const lightTheme = IS_BIGBANG ? bigbangLightTheme : paseoLightTheme;
+export const darkTheme = IS_BIGBANG ? bigbangDarkTheme : paseoDarkTheme;
 
 // Keep compatibility with existing code
 export const theme = darkTheme;
@@ -879,8 +1036,23 @@ export const REGISTERED_THEMES = {
   [PLUGIN_THEME_NAMES.dark]: darkTheme,
 } as RegisteredThemes;
 
+/** The themes this build offers. The Bigbang build keeps light, dark and auto, all Bigbang's. */
+export const BUILD_THEME_OPTIONS: readonly (typeof THEME_OPTIONS)[number][] = IS_BIGBANG
+  ? THEME_OPTIONS.filter((option) => option.group === "primary")
+  : THEME_OPTIONS;
+
+/** A saved preference this build does not offer (a variant or a plugin theme) follows the system. */
+export function resolveBuildThemePreference(
+  preference: ThemePreference,
+  bigbang: boolean = IS_BIGBANG,
+): ThemePreference {
+  if (!bigbang) return preference;
+  const offered = preference === "light" || preference === "dark" || preference === "auto";
+  return offered ? preference : "auto";
+}
+
 export function getNextThemePreference(current: ThemePreference): ThemePreference {
-  const currentIndex = THEME_OPTIONS.findIndex((option) => option.name === current);
-  const nextIndex = (currentIndex + 1) % THEME_OPTIONS.length;
-  return THEME_OPTIONS[nextIndex]?.name ?? THEME_OPTIONS[0].name;
+  const currentIndex = BUILD_THEME_OPTIONS.findIndex((option) => option.name === current);
+  const nextIndex = (currentIndex + 1) % BUILD_THEME_OPTIONS.length;
+  return BUILD_THEME_OPTIONS[nextIndex]?.name ?? BUILD_THEME_OPTIONS[0].name;
 }

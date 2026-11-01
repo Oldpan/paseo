@@ -90,6 +90,8 @@ Pane chrome — the workspace pane header, the file-explorer header, the diff pa
 
 `borderAccent` is reserved for the outline button. Inputs use `border`. Single-thing borders are wrong; a single bordered element is either a card with one row (use the card) or it does not need a border.
 
+Outlines and offset shadows on the composer, its pills, the focused tab, the user bubble and the pane header rule come from `theme.chrome` (`packages/app/src/styles/theme.ts`). Paseo's themes set it to their existing look — no outlines, no offset shadows, a `surface3` user bubble — so these rules hold unchanged. It exists so a fork build (Bigbang) can restyle those surfaces from its theme without branching in components; read `theme.chrome` there instead of hard-coding a border or shadow.
+
 ---
 
 ## 6. Pickers

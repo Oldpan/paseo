@@ -773,6 +773,8 @@ function TabChip({
   const isHovered = hovered || isCloseHovered;
   const isHighlighted = isActiveFocused || isHovered;
   const isFilled = isActive || isHovered;
+  // A header rail's focused tab takes the theme chrome's active chip; Paseo's equals its surface2.
+  const isChromeActive = isActiveFocused && rail === "surface";
   const chipBackdrop: SurfaceBackdrop = resolveWorkspaceTabChipBackdrop({
     rail,
     isActiveFocused,
@@ -794,6 +796,7 @@ function TabChip({
     () => [
       styles.tab,
       isFilled && styles.tabFill(chipBackdrop),
+      isChromeActive && styles.tabChromeActive,
       isWeb && isDragging && ({ cursor: "grabbing" } as object),
       {
         minWidth: resolvedTabWidth,
@@ -801,7 +804,7 @@ function TabChip({
         maxWidth: resolvedTabWidth,
       },
     ],
-    [chipBackdrop, isDragging, isFilled, resolvedTabWidth],
+    [chipBackdrop, isChromeActive, isDragging, isFilled, resolvedTabWidth],
   );
 
   const handleTabPointerEnter = useCallback(() => {
@@ -841,8 +844,12 @@ function TabChip({
     tab.target.kind === "new_tab" ? tab.tabId : buildDeterministicWorkspaceTabId(tab.target);
   const tabLabelSkeletonStyle = styles.tabLabelSkeleton;
   const tabLabelStyle = useMemo(
-    () => [styles.tabLabel, isHighlighted && styles.tabLabelActive],
-    [isHighlighted],
+    () => [
+      styles.tabLabel,
+      isHighlighted && styles.tabLabelActive,
+      isChromeActive && styles.tabLabelChromeActive,
+    ],
+    [isChromeActive, isHighlighted],
   );
 
   return (
@@ -1658,6 +1665,12 @@ const styles = StyleSheet.create((theme) => ({
   tabFill: (backdrop: SurfaceBackdrop) => ({
     backgroundColor: theme.colors[backdrop],
   }),
+  tabChromeActive: {
+    backgroundColor: theme.chrome.activeTab.background,
+    borderWidth: theme.chrome.controlBorderWidth,
+    borderColor: theme.chrome.controlBorderColor,
+    ...theme.chrome.controlShadow,
+  },
   tabHoverFrame: {
     position: "relative",
   },
@@ -1730,6 +1743,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   tabLabelActive: {
     color: theme.colors.foreground,
+  },
+  tabLabelChromeActive: {
+    color: theme.chrome.activeTab.foreground,
   },
   tabTrailingOverlay: {
     position: "absolute",
