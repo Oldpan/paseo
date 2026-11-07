@@ -84,20 +84,16 @@ Web acceptance on 2026-10-25 covered a real Grok assistant created through the m
 
 ### Mac and Spark test pair
 
-The two-machine setup uses this profile on both hosts. Spark is the long-term Chat coordinator, because it stays on when the Mac sleeps or travels; the Mac is its member. Both test daemons listen on `6778` on their own machine and require a password, so each saves the other as a `tcp://` host with the password in the connection, over an SSH tunnel kept in the Mac's `paseo-bigbang-dev` tmux session:
+The two-machine setup uses this profile on both hosts. Spark is the long-term Chat coordinator, because it stays on when the Mac sleeps or travels; the Mac is its member. Chat needs one link per member, from the coordinator to that member ([Machines](bigbang-chat.md#machines)), so only Spark saves a host. Both test daemons listen on `6778` on all interfaces and require a password. Spark reaches the Mac over Tailscale, which works on and off the LAN:
 
 ```bash
-# Mac → Spark: local forward, then save Spark through it.
-ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:6780:127.0.0.1:6778 <spark-ssh-alias>
-npm run bigbang:cli -- host add 'tcp://127.0.0.1:6780?password=<Spark password>' --label 'Spark · Bigbang Dev' --json
-# Spark → Mac: reverse tunnel from the Mac, then save the Mac on Spark through it.
-ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -R 127.0.0.1:6779:127.0.0.1:6778 <spark-ssh-alias>
-npm run bigbang:cli -- host add 'tcp://127.0.0.1:6779?password=<Mac password>' --label 'Mac · Bigbang Dev' --json
+# On Spark: save the Mac by its Tailscale address.
+npm run bigbang:cli -- host add 'tcp://<Mac Tailscale IP>:6778?password=<Mac password>' --label 'Mac · Bigbang Dev' --json
 ```
 
-`ssh://` hosts carry no password, so they stop working once the other daemon sets one; replace a saved host's credentials with `host update <registration-id> --connection 'tcp://…?password=…'`. Each daemon pins the learned server identity, and a dropped tunnel leaves the saved peer offline until it reconnects. Keep these tunnels separate from official Paseo connections.
+Tailscale must be running on both machines; with it stopped the Mac shows offline on Spark until it comes back. `ssh://` hosts carry no password, so they stop working once the other daemon sets one; replace a saved host's credentials with `host update <registration-id> --connection 'tcp://…?password=…'`. Each daemon pins the learned server identity. Keep these hosts separate from official Paseo connections. Until 2026-11-07 the pair ran over two SSH tunnels from the Mac (`-R 6779` for Spark → Mac, `-L 6780` for Mac → Spark) with a saved host on each side; the Mac → Spark host was left over from the role swap and Chat never used it.
 
-Roles are the plugin's `role` setting, written with plugin RPC `settings.role.write` and applied on plugin reload: Spark `{ "mode": "coordinator" }`, the Mac `{ "mode": "member", "coordinatorServerId": "<Spark serverId>" }`. The coordinator dials its members, so only Spark's saved Mac host matters to Chat; [Machines](bigbang-chat.md#machines) explains why. The coordinator's machine list picks up a role change after its next link probe, a minute or two. The ledger stays on the machine that wrote it: switching coordinators starts from that machine's ledger and moves no data.
+Roles are the plugin's `role` setting, written with plugin RPC `settings.role.write` and applied on plugin reload: Spark `{ "mode": "coordinator" }`, the Mac `{ "mode": "member", "coordinatorServerId": "<Spark serverId>" }`. The coordinator's machine list picks up a role change after its next link probe, a minute or two. The ledger stays on the machine that wrote it: switching coordinators starts from that machine's ledger and moves no data.
 
 Spark's test daemon also serves the Bigbang web app, so Chat works with the Mac off. Its `config.json` sets `features.webUi` to `{ "enabled": true, "distDir": "<checkout>/packages/server/dist/server/web-ui" }`. The dev profile pins `127.0.0.1:6778`, so Spark runs the daemon through `.dev/bigbang/bigbang-lan.mjs`, which overrides `PASEO_LISTEN` to `0.0.0.0:6778`; open `http://<Spark LAN IP>:6778` on the LAN and sign in with the daemon password. Rebuild with `npm run bigbang:build:daemon-web-ui` on Spark after app changes. It precompresses the bundle to `.br` and `.gz` files, which the daemon serves as is; the main bundle is about 24 MB raw. Tailscale Funnel (`tailscale funnel --bg --https=8443 http://127.0.0.1:6778`, with the Tailscale name in `daemon.hostnames`) can publish it off the LAN, but its relays manage about 15 KB/s from here, so a first load takes minutes; it is off.
 
