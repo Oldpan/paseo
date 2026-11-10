@@ -107,7 +107,7 @@ export default {
     name: variant.name,
     slug: "voice-mobile",
     version: nativeReleaseVersion.appVersion,
-    orientation: "portrait",
+    orientation: "default",
     icon: isBigbang ? "./assets/images/bigbang-icon.png" : "./assets/images/icon.png",
     scheme: isBigbang ? "bigbang-studio" : "paseo",
     userInterfaceStyle: "automatic",
@@ -149,6 +149,7 @@ export default {
       searchPaths: ["../../node_modules", "./node_modules"],
     },
     plugins: [
+      "./modules/paseo-hardware-keyboard/app.plugin",
       "expo-router",
       withPasteInput,
       withAndroidScroll,

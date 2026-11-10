@@ -2,11 +2,10 @@
 // device's saved hosts; the Chat coordinator plays the Bigbang role.
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
-import { router } from "expo-router";
 import { PressHighlight } from "@/components/ui/press-highlight";
+import { useAddHost } from "@/hosts/add-host";
 import { openHostOverview } from "@/navigation/settings-navigation";
 import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
-import { buildSettingsAddHostRoute } from "@/utils/host-routes";
 import type { Assistant, MachineInfo } from "../../../../extensions/bigbang/shared/contracts";
 import { machineRoleLabel } from "./model";
 import { AgentAvatar } from "./ui/avatars";
@@ -53,10 +52,6 @@ const ASSISTANT_TOGGLE = {
 const EXPANDED_STATE = { expanded: true } as const;
 const COLLAPSED_STATE = { expanded: false } as const;
 
-function addHost() {
-  router.push(buildSettingsAddHostRoute(Date.now()));
-}
-
 export function MachinesSection({
   machines,
   assistants,
@@ -73,6 +68,7 @@ export function MachinesSection({
   onCreateAssistant(serverId: string): void;
 }) {
   const hosts = useHosts();
+  const addHost = useAddHost();
   const [open, setOpen] = useState(true);
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const entries = useMemo(() => {

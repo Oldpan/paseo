@@ -10,7 +10,7 @@ import { decodeTerminalBytes, type EncodedTerminalFile, encodeTerminalBytes } fr
 
 interface TerminalDomHandle extends TerminalEmulatorHandle {
   writeEncodedOutput(streamKey: string, data: string): void;
-  restoreEncodedOutput(streamKey: string, data: string): void;
+  replayEncodedOutput(streamKey: string, data: string): void;
   readSelection(): Promise<string>;
   findSearch(query: string, direction?: string): void;
   findClear(): void;
@@ -39,22 +39,26 @@ export function BigbangTerminalEmulator({
       dom.current?.writeEncodedOutput(props.streamKey, encodeTerminalBytes(data)),
     [props.streamKey],
   );
-  const restoreOutput = useCallback(
-    (data: Uint8Array) =>
-      dom.current?.restoreEncodedOutput(props.streamKey, encodeTerminalBytes(data)),
+  const replay = useCallback(
+    (event: import("@getpaseo/client").TerminalReplayEvent) => {
+      if (event.type === "data") {
+        dom.current?.replayEncodedOutput(props.streamKey, encodeTerminalBytes(event.data));
+        return;
+      }
+      dom.current?.replay(event);
+    },
     [props.streamKey],
   );
   useImperativeHandle(
     ref,
     () => ({
       writeOutput,
-      restoreOutput,
+      replay,
       find: {
         search: (query, direction) => dom.current?.findSearch(query, direction),
         clear: () => dom.current?.findClear(),
         setWidgetSize: ({ width, height }) => dom.current?.findSize(width, height),
       },
-      renderSnapshot: (state) => dom.current?.renderSnapshot(state),
       paste: (text) => dom.current?.paste(text),
       copySelection: async (clipboard) => {
         const text = (await dom.current?.readSelection()) ?? "";
@@ -66,7 +70,7 @@ export function BigbangTerminalEmulator({
       showKeyboard: () => dom.current?.showKeyboard(),
       blur: () => dom.current?.blur(),
     }),
-    [restoreOutput, writeOutput],
+    [replay, writeOutput],
   );
   const input = useCallback(async (streamKey: string, data: string) => {
     if (streamKey === latest.current.streamKey) await latest.current.onInput?.(data);
