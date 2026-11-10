@@ -1,6 +1,6 @@
 # Bigbang Chat coordination
 
-How the Bigbang Chat plugin (`extensions/bigbang`) runs chat on Paseo executions. Product decisions and acceptance status live in the [Bigbang roadmap](bigbang-roadmap.md); local setup lives in [development](development.md#bigbang-fork-isolation).
+How the Bigbang Chat plugin (`extensions/bigbang`) runs chat on Paseo executions. Product decisions and acceptance status live in the [Bigbang roadmap](bigbang-roadmap.md); local setup and the Mac + Spark workflow live in [Bigbang development](bigbang-development.md).
 
 ## Ownership
 

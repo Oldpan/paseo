@@ -130,6 +130,7 @@
     "bigbang:desktop": "node scripts/bigbang/dev.mjs desktop",
     "bigbang:cli": "node scripts/bigbang/dev.mjs cli",
     "bigbang:smoke": "node scripts/bigbang/smoke.mjs",
+    "bigbang:sync-spark": "node scripts/bigbang/sync-spark.mjs",
     "bigbang:apk:arm64": "cross-env PASEO_BIGBANG_BUILD=1 node scripts/build-apk.mjs arm64",
     "bigbang:build:web": "cross-env EXPO_PUBLIC_BIGBANG=true APP_VARIANT=bigbang npm run build:web --workspace=@getpaseo/app",
     "bigbang:build:daemon-web-ui": "cross-env EXPO_PUBLIC_BIGBANG=true APP_VARIANT=bigbang node scripts/build-daemon-web-ui.mjs",
