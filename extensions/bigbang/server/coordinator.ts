@@ -21,9 +21,21 @@ import {
   memberHomePrepare,
   memberMemoryRead,
   memberMemoryWrite,
+  memberMemorySnapshot,
+  memberTaskOutcomeSync,
   type MemberEvent,
 } from "../shared/member";
-import { assistantRoot, prepareHome, readMemory, writeMemory } from "./assistant-files";
+import {
+  assistantRoot,
+  channelSlug,
+  prepareHome,
+  readMemory,
+  readMemorySnapshot,
+  syncTaskOutcomeToNotes,
+  writeMemory,
+  type MemorySnapshot,
+  type TaskOutcomeNoteInput,
+} from "./assistant-files";
 import type { Machine, MachinePort } from "./machines";
 import { ChatStore } from "./store";
 import { queueTurn, restoreChatSessions } from "./chat-sessions";
@@ -49,6 +61,7 @@ import {
   taskThreadId,
   type TaskEventType,
 } from "./task-events";
+import { workspaceMemoryHint } from "./prompts";
 
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const TURN_LIVE = new Set(["running", "attention", "unknown"]);
@@ -104,7 +117,7 @@ interface Finish {
   gone?: "archived" | "closed";
 }
 
-function taskSpec(task: Task): TaskSpec {
+function taskSpec(task: Task, memoryContext?: string): TaskSpec {
   return {
     id: task.id,
     title: task.title,
@@ -113,6 +126,7 @@ function taskSpec(task: Task): TaskSpec {
     isolation: task.isolation,
     directory: task.directory,
     serverId: task.serverId,
+    ...(memoryContext ? { memoryContext } : {}),
   };
 }
 function goneReason(
@@ -176,8 +190,7 @@ export class Coordinator {
       machineLabel: (serverId) => this.machineLabel(serverId),
       online: async (serverId) =>
         serverId === this.selfId() || !this.machines ? true : this.machines.online(serverId),
-      isExecution: (agentId) =>
-        Boolean(this.store.getChatSessionByAgent(agentId) ?? this.store.get("tasks", agentId)),
+      isExecution: (agentId) => Boolean(this.store.getChatSessionByAgent(agentId)),
       toAssistant: (input) => {
         const mailboxId = this.mailbox.receiveFromMember(input);
         queueMicrotask(() => this.kick());
@@ -209,6 +222,23 @@ export class Coordinator {
       turnEnded: (turn) => this.afterTurn(turn),
       admit: (turn) => this.mailbox.admit(turn),
       accepted: (turn) => this.mailbox.accepted(turn),
+      memoryHint: (turn, assistant, isFreshSession) => {
+        if (!isFreshSession) return "";
+        const conversation = this.store.get("conversations", turn.conversationId);
+        const slug = channelSlug(turn.conversationId, conversation?.name);
+        let snapshot: MemorySnapshot | undefined;
+        if (!this.machineOf(assistant)) {
+          try {
+            snapshot = readMemorySnapshot(this.assistantDirectory(assistant.id), slug);
+          } catch {}
+        }
+        return workspaceMemoryHint({
+          conversationId: turn.conversationId,
+          conversationName: conversation?.name,
+          now: this.now(),
+          snapshot,
+        });
+      },
     });
   }
   /** Binds the plugin's Paseo API once; later calls are ignored. The first call runs recovery. */
@@ -244,7 +274,7 @@ export class Coordinator {
   }
   // Long poll: with `after`, hold the request until the ledger advances past it.
   async readState(input: RpcInput<typeof readState>): Promise<ChatState> {
-    const { after, generation, waitMs } = input;
+    const { after, generation, waitMs, messageLimit } = input;
     if (
       waitMs &&
       after !== undefined &&
@@ -252,7 +282,11 @@ export class Coordinator {
     )
       await this.store.waitForChange(after, waitMs);
     if (this.closed) throw new Error("The Chat coordinator is shutting down.");
-    return this.store.snapshot(after, generation);
+    return this.store.snapshot(
+      after,
+      generation,
+      messageLimit !== undefined ? { messageLimit } : undefined,
+    );
   }
   // The machine an assistant's executions run on; undefined is this daemon.
   private machineOf(assistant: Pick<Assistant, "serverId">): string | undefined {
@@ -341,6 +375,27 @@ export class Coordinator {
       subdirectory,
       content: input.content,
       expectedMtimeMs: input.expectedMtimeMs,
+    });
+  }
+  async readAssistantMemorySnapshot(assistantId: string, slug?: string): Promise<MemorySnapshot> {
+    const { serverId, subdirectory } = await this.memoryTarget(assistantId);
+    if (!serverId) return readMemorySnapshot(this.assistantDirectory(assistantId), slug);
+    return this.member().call(serverId, memberMemorySnapshot, {
+      assistantId,
+      subdirectory,
+      slug,
+    });
+  }
+  async syncAssistantTaskOutcome(assistantId: string, input: TaskOutcomeNoteInput): Promise<void> {
+    const { serverId, subdirectory } = await this.memoryTarget(assistantId);
+    if (!serverId) {
+      syncTaskOutcomeToNotes(this.assistantDirectory(assistantId), input);
+      return;
+    }
+    await this.member().call(serverId, memberTaskOutcomeSync, {
+      assistantId,
+      subdirectory,
+      outcome: input,
     });
   }
   /** Looks for work after a tool changed the ledger (a mailbox message to deliver). */
@@ -1135,6 +1190,30 @@ export class Coordinator {
       }),
     );
   }
+  private syncTaskOutcome(task: Task, anchor: string, text: string, detail?: string): void {
+    const conversation = this.store.get("conversations", task.conversationId);
+    const summary =
+      (detail || text || task.error || "").replace(/[\r\n]+/g, " ").trim() ||
+      (task.status === "completed" ? "Completed successfully." : task.status);
+    const outcomeInput: TaskOutcomeNoteInput = {
+      taskId: task.id,
+      anchor,
+      title: task.title || excerpt(task.prompt) || "Untitled task",
+      status: task.status as "completed" | "failed" | "cancelled",
+      directory: task.directory,
+      conversationId: task.conversationId,
+      conversationName: conversation?.name,
+      summary,
+      timestampMs: this.now(),
+    };
+    void this.queue.run(agentKey(task.assistantId), async () => {
+      try {
+        await this.syncAssistantTaskOutcome(task.assistantId, outcomeInput);
+      } catch (error) {
+        console.error("Bigbang task outcome note sync failed", error);
+      }
+    });
+  }
   // A task run reached an end state (`anchor` names the run: the task id or a follow-up turn id).
   // Posts its row and, for a task an assistant started, queues that assistant's receipt turn.
   private recordOutcome(task: Task, anchor: string, text: string): void {
@@ -1154,7 +1233,9 @@ export class Coordinator {
     let key: string | undefined = anchor === task.id ? undefined : anchor;
     if (budget) key = String(task.deadline);
     const row = this.postTaskEvent(task, type, { ...(key ? { key } : {}), detail });
-    if (budget || task.origin !== "assistant") return;
+    if (budget) return;
+    this.syncTaskOutcome(task, anchor, text, detail);
+    if (task.origin !== "assistant") return;
     this.queueReceipt(task, row);
   }
   // One receipt per task: the first outcome the requesting assistant has not been told about.
@@ -1200,6 +1281,30 @@ export class Coordinator {
       console.error("Bigbang work-agent limit check failed; the sweep will retry", error);
     }
   }
+  private async taskMemoryContext(task: Task): Promise<string | undefined> {
+    try {
+      const conversation = this.store.get("conversations", task.conversationId);
+      const slug = channelSlug(task.conversationId, conversation?.name);
+      const snapshot = await this.readAssistantMemorySnapshot(task.assistantId, slug);
+      const parts: string[] = [];
+      if (snapshot.memoryIndex.trim()) {
+        parts.push(`[MEMORY.md Index]\n${snapshot.memoryIndex.trim()}`);
+      }
+      if (snapshot.userPreferences.trim()) {
+        parts.push(`[User Preferences]\n${snapshot.userPreferences.trim()}`);
+      }
+      if (snapshot.channelOutcomes.trim()) {
+        parts.push(`[Recent Channel Outcomes]\n${snapshot.channelOutcomes.trim()}`);
+      }
+      return parts.length > 0 ? parts.join("\n\n") : undefined;
+    } catch (error) {
+      console.error(
+        "Failed to load assistant memory snapshot for task; continuing without memory context",
+        error,
+      );
+      return undefined;
+    }
+  }
   private async runTask(taskId: string): Promise<void> {
     const port = this.port;
     let task = this.store.get("tasks", taskId);
@@ -1209,9 +1314,11 @@ export class Coordinator {
         await this.cancel(task.id, "budget");
         return;
       }
+      const memoryContext = await this.taskMemoryContext(task);
+      const spec = taskSpec(task, memoryContext);
       if (!task.execution) {
         this.store.transaction(() => this.store.put("tasks", { ...task!, status: "creating" }));
-        const { workspaceId } = await port.createTaskWorkspace(taskSpec(task));
+        const { workspaceId } = await port.createTaskWorkspace(spec);
         if (this.closed) return;
         const latest = this.store.get("tasks", task.id)!;
         if (latest.status === "cancelled") return;
@@ -1222,7 +1329,7 @@ export class Coordinator {
         };
         this.store.transaction(() => this.store.put("tasks", task!));
       }
-      await port.createTaskAgent(taskSpec(task), task.execution!.workspaceId);
+      await port.createTaskAgent(spec, task.execution!.workspaceId);
       const latest = this.store.get("tasks", task.id)!;
       if (latest.status === "cancelled") {
         this.store.transaction(() =>

@@ -6,6 +6,7 @@ import { useRef, useEffect, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { AgentAvatar, StatusDot, UserAvatar } from "./avatars";
 import {
+  BoxesIcon,
   CheckIcon,
   ChatIcon,
   CopyIcon,
@@ -13,6 +14,7 @@ import {
   CloseIcon,
   ArrowLeftIcon,
   QuoteIcon,
+  SettingsIcon,
 } from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { copyText } from "./clipboard";
@@ -23,20 +25,24 @@ export function ChatHeader({
   label,
   seed,
   group,
+  subtitle,
   connected,
   tab,
   onTab,
   onSidebar,
   onEdit,
+  onOpenStudio,
 }: {
   label: string;
   seed: string;
   group: boolean;
+  subtitle?: string;
   connected: boolean;
   tab: string;
   onTab(value: string): void;
   onSidebar?: () => void;
   onEdit?: () => void;
+  onOpenStudio?: () => void;
 }) {
   const { palette: t, name } = useTheme();
   return (
@@ -73,19 +79,12 @@ export function ChatHeader({
             <MenuIcon color={t.textSecondary} size={16} />
           </Pressable>
         ) : null}
-        <Pressable
-          role="button"
-          accessibilityLabel={`Edit ${label}`}
-          onPress={onEdit}
-          disabled={!onEdit}
-        >
-          <View style={{ position: "relative" }}>
-            <AgentAvatar seed={seed} label={label} size={36} theme={t} name={name} />
-            <View style={{ position: "absolute", right: -2, bottom: -2 }}>
-              <StatusDot color={connected ? t.success : t.destructive} border={t.surfacePrimary} />
-            </View>
+        <View style={{ position: "relative" }}>
+          <AgentAvatar seed={seed} label={label} size={36} theme={t} name={name} />
+          <View style={{ position: "absolute", right: -2, bottom: -2 }}>
+            <StatusDot color={connected ? t.success : t.destructive} border={t.surfacePrimary} />
           </View>
-        </Pressable>
+        </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text
             role="heading"
@@ -95,15 +94,66 @@ export function ChatHeader({
             {label}
           </Text>
           <Text
-            style={type(t.textMuted, 11, {
-              letterSpacing: 1.6,
-              textTransform: "uppercase",
-              marginTop: 4,
-            })}
+            numberOfLines={1}
+            style={
+              subtitle
+                ? type(t.textSecondary, 11, { marginTop: 2 })
+                : type(t.textMuted, 11, {
+                    letterSpacing: 1.6,
+                    textTransform: "uppercase",
+                    marginTop: 4,
+                  })
+            }
           >
-            {group ? "Group chat" : "Private chat"}
+            {subtitle ?? (group ? "Group chat" : "Private chat")}
           </Text>
         </View>
+        {onOpenStudio ? (
+          <Pressable
+            role="button"
+            accessibilityLabel="Open in Studio"
+            onPress={onOpenStudio}
+            style={[
+              {
+                height: 34,
+                paddingHorizontal: 10,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: t.surfaceElevated,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+              },
+              ctrlShadow(t, name),
+            ]}
+          >
+            <BoxesIcon color={t.textSecondary} size={14} />
+            <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Studio</Text>
+          </Pressable>
+        ) : null}
+        {onEdit ? (
+          <Pressable
+            role="button"
+            accessibilityLabel={`Edit ${label}`}
+            onPress={onEdit}
+            style={[
+              {
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: t.surfaceElevated,
+                alignItems: "center",
+                justifyContent: "center",
+              },
+              ctrlShadow(t, name),
+            ]}
+          >
+            <SettingsIcon color={t.textSecondary} size={15} />
+          </Pressable>
+        ) : null}
       </View>
       <View style={{ flexDirection: "row", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
         {[
@@ -471,6 +521,7 @@ export function LiveTurnBubble({
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
+  const [expanded, setExpanded] = useState(false);
   const status = (
     <Text numberOfLines={1} style={type(t.textMuted, 11, { marginTop: 6 })}>
       {activity ? `${sender} · ${activity}…` : `${sender} · ${statusLabel}`}
@@ -479,9 +530,16 @@ export function LiveTurnBubble({
   const notes = (
     <>
       {commentary ? (
-        <Text numberOfLines={3} style={type(t.textMuted, 11, { marginTop: 6 })}>
-          {commentary}
-        </Text>
+        <Pressable
+          role="button"
+          accessibilityLabel={expanded ? "Collapse process notes" : "Expand process notes"}
+          onPress={() => setExpanded((current) => !current)}
+          style={{ marginTop: 6, maxWidth: "100%" }}
+        >
+          <Text numberOfLines={expanded ? undefined : 1} style={type(t.textMuted, 11)}>
+            {expanded ? `▾ ${commentary}` : `▸ ${commentary}`}
+          </Text>
+        </Pressable>
       ) : null}
       {text && activity ? status : null}
       {children}
@@ -524,10 +582,12 @@ export function ThreadHeader({
   onClose,
   compact,
   title = "Thread",
+  onOpenStudio,
 }: {
   onClose(): void;
   compact: boolean;
   title?: string;
+  onOpenStudio?: () => void;
 }) {
   const { palette: t } = useTheme();
   return (
@@ -544,6 +604,27 @@ export function ThreadHeader({
     >
       {compact ? <ArrowLeftIcon color={t.textMuted} /> : null}
       <Text style={type(t.textPrimary, 13, { fontWeight: "700", flex: 1 })}>{title}</Text>
+      {onOpenStudio ? (
+        <Pressable
+          role="button"
+          accessibilityLabel="Open thread in Studio"
+          onPress={onOpenStudio}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 4,
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: t.surfaceElevated,
+          }}
+        >
+          <BoxesIcon color={t.textSecondary} size={12} />
+          <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Studio</Text>
+        </Pressable>
+      ) : null}
       <Pressable role="button" accessibilityLabel="Close thread" onPress={onClose}>
         <CloseIcon color={t.textSecondary} size={16} />
       </Pressable>

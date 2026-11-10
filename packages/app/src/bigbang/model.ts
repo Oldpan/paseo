@@ -27,6 +27,8 @@ export function mergeChatState(previous: ChatState, incoming: ChatState): ChatSt
   if (incoming.generation !== previous.generation) return incoming;
   if (incoming.cursor < previous.cursor) return previous;
   const merge = <T extends { id: string }>(left: T[], right: T[]): T[] => {
+    if (right.length === 0) return left;
+    if (left.length === 0) return right;
     const entries = new Map(left.map((item) => [item.id, item]));
     for (const item of right) entries.set(item.id, item);
     return [...entries.values()];
@@ -64,9 +66,14 @@ export function studioColumnFor(
 }
 
 export function addStudioColumn(columns: StudioColumn[], column: StudioColumn): StudioColumn[] {
-  return columns.some((item) => studioKey(item) === studioKey(column))
-    ? columns
-    : [...columns, column];
+  const key = studioKey(column);
+  const index = columns.findIndex((item) => studioKey(item) === key);
+  if (index < 0) return [...columns, column];
+  const existing = columns[index]!;
+  if (existing.name === column.name && existing.group === column.group) return columns;
+  const next = columns.slice();
+  next[index] = column;
+  return next;
 }
 
 /**

@@ -22,6 +22,15 @@ describe("Bigbang data ownership", () => {
     expect(addStudioColumn(columns, a)).toBe(columns);
     expect(studioKey(a)).not.toBe(studioKey(b));
   });
+  it("moves and renames a column already open from another group", () => {
+    const a = { serverId: "mac", workspaceId: "w", name: "project", group: "General" };
+    const b = { ...a, serverId: "spark" };
+    const columns = addStudioColumn(addStudioColumn([], a), b);
+    expect(addStudioColumn(columns, { ...a, name: "Ada · Chat", group: "Chat" })).toEqual([
+      { ...a, name: "Ada · Chat", group: "Chat" },
+      b,
+    ]);
+  });
   it("merges incremental changes without losing history and ignores old responses", () => {
     const assistant = { id: "a", name: "Ada", provider: "codex/default", persona: "", memory: "" };
     const first = mergeChatState(EMPTY_CHAT_STATE, {
@@ -36,9 +45,9 @@ describe("Bigbang data ownership", () => {
     });
     expect(next.assistants).toEqual([{ ...assistant, name: "Grace" }]);
     expect(mergeChatState(next, first)).toBe(next);
-    expect(mergeChatState(next, { ...EMPTY_CHAT_STATE, cursor: 2 }).assistants).toEqual(
-      next.assistants,
-    );
+    const unchanged = mergeChatState(next, { ...EMPTY_CHAT_STATE, cursor: 3 });
+    expect(unchanged.assistants).toBe(next.assistants);
+    expect(unchanged.messages).toBe(next.messages);
   });
 
   it("merges Studios and peer messages, and accepts a coordinator that sends neither", () => {

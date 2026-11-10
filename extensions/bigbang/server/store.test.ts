@@ -582,4 +582,118 @@ describe("Chat ledger v2 store", () => {
     });
     expect(store.snapshot()).toEqual(before);
   });
+
+  it("keeps the changes table bounded to the latest cursor row while preserving monotonic seq", () => {
+    const { store, assistant } = fixture();
+    for (let index = 0; index < 10; index += 1) {
+      store.put("assistants", { ...assistant, name: `Ada-${index}` });
+    }
+    const count = (
+      store.database.prepare("SELECT COUNT(*) AS count FROM changes").get() as { count: number }
+    ).count;
+    expect(count).toBe(1);
+    expect(store.cursor()).toBeGreaterThanOrEqual(10);
+  });
+
+  it("windows initial snapshot messages per conversation while preserving thread roots", () => {
+    const { store, conversation } = fixture();
+    const root = store.putMessage({
+      id: "root-1",
+      conversationId: conversation.id,
+      threadId: null,
+      senderId: "user",
+      content: "Thread root",
+      createdAt: 1,
+      taskId: null,
+    });
+    for (let index = 2; index <= 5; index += 1) {
+      store.putMessage({
+        id: `m-${index}`,
+        conversationId: conversation.id,
+        threadId: null,
+        senderId: "user",
+        content: `Msg ${index}`,
+        createdAt: index,
+        taskId: null,
+      });
+    }
+    store.putMessage({
+      id: "reply-in-thread",
+      conversationId: conversation.id,
+      threadId: root.id,
+      senderId: "user",
+      content: "Thread reply",
+      createdAt: 6,
+      taskId: null,
+    });
+
+    const windowed = store.snapshot(0, undefined, { messageLimit: 2 });
+    expect(windowed.messages.map((message) => message.id)).toEqual([
+      "root-1",
+      "m-5",
+      "reply-in-thread",
+    ]);
+    expect(store.snapshot().messages).toHaveLength(6);
+  });
+
+  it("rolls a chat session over to a fresh execution agent after reaching maxTurns completed turns", () => {
+    const { store, coordinator, assistant, conversation } = fixture();
+    coordinator.send({
+      id: randomUUID(),
+      conversationId: conversation.id,
+      threadId: null,
+      content: "Turn 1",
+    });
+    const firstTurn = store.snapshot().turns[0];
+    store.transaction(() => {
+      store.put("turns", { ...firstTurn, status: "completed", accepted: true });
+      store.putMessage({
+        id: `final:${firstTurn.id}`,
+        conversationId: conversation.id,
+        threadId: null,
+        senderId: assistant.id,
+        content: "Answer 1",
+        createdAt: 2,
+        taskId: null,
+        kind: "final",
+        turnId: firstTurn.id,
+      });
+    });
+    coordinator.send({
+      id: randomUUID(),
+      conversationId: conversation.id,
+      threadId: null,
+      content: "Turn 2",
+    });
+    const secondTurn = store.snapshot().turns.find((turn) => turn.id !== firstTurn.id)!;
+    expect(secondTurn.agentId).toBe(firstTurn.agentId);
+
+    // While the second turn is still queued, bindChatSession never rotates mid-flight.
+    expect(bindChatSession(store, conversation.id, null, assistant, { maxTurns: 1 }).agentId).toBe(
+      firstTurn.agentId,
+    );
+
+    store.transaction(() => {
+      store.put("turns", { ...secondTurn, status: "completed", accepted: true });
+      store.putMessage({
+        id: `final:${secondTurn.id}`,
+        conversationId: conversation.id,
+        threadId: null,
+        senderId: assistant.id,
+        content: "Answer 2",
+        createdAt: 4,
+        taskId: null,
+        kind: "final",
+        turnId: secondTurn.id,
+      });
+    });
+
+    const rolled = bindChatSession(store, conversation.id, null, assistant, { maxTurns: 2 });
+    expect(rolled.id).toBe(firstTurn.chatSessionId);
+    expect(rolled.agentId).not.toBe(firstTurn.agentId);
+    expect(rolled.created).toBe(false);
+    expect(rolled.lastMessageId).toBeUndefined();
+    const state = store.snapshot();
+    expect(unseenMessages(state.messages, rolled, state.turns)).toHaveLength(4);
+  });
 });

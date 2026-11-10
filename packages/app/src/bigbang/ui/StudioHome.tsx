@@ -164,11 +164,13 @@ export function StudioMachine({
   label,
   connected,
   empty,
+  emptyLabel = "No workspaces yet.",
   children,
 }: {
   label: string;
   connected: boolean;
   empty: boolean;
+  emptyLabel?: string;
   children: ReactNode;
 }) {
   const { palette: t } = useTheme();
@@ -189,7 +191,7 @@ export function StudioMachine({
         </Text>
       </View>
       {empty ? (
-        <Text style={type(t.textMuted, 11, { paddingVertical: 6 })}>No workspaces yet.</Text>
+        <Text style={type(t.textMuted, 11, { paddingVertical: 6 })}>{emptyLabel}</Text>
       ) : (
         children
       )}

@@ -6,7 +6,7 @@ import { FormFrame } from "./ui/FormChrome";
 import { ResourceChoice } from "./ui/ResourceChoice";
 import { RetainedPanel } from "@/components/retained-panel";
 import { UsageSidebarRoot } from "@/usage/sidebar-item";
-import { useHosts, getHostRuntimeStore } from "@/runtime/host-runtime";
+import { useHosts } from "@/runtime/host-runtime";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
@@ -19,20 +19,21 @@ import {
   type Task,
   type Turn,
 } from "../../../../extensions/bigbang/shared/contracts";
-import { useAssistantMachines, useBigbangData, useMachines } from "./data";
+import { useAssistantMachines, useBigbangData, useMachines, type BigbangData } from "./data";
 import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
-import { taskTitle } from "./task-view";
+import { taskIdOfThread, taskTitle } from "./task-view";
 import { useBigbangTitle } from "./title";
 import { CoordinatorNotice } from "./coordinator-notice";
 import { useBigbangView } from "./store";
 import { palettes } from "./palette";
 import { BigbangChat } from "./chat";
 import { BigbangForm } from "./forms";
-import { Studio, StudioHomePanel } from "./studio";
+import { findLatestNonTaskTurn, turnColumnName } from "./chat-studio";
+import { openTurnProcess, Studio, StudioHomePanel } from "./studio";
 import { BigbangTheme, useBigbangDark } from "./ui/ThemeProvider";
 import { Sidebar } from "./ui/Sidebar";
 
-const FILL = { flex: 1, minHeight: 0 };
+const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
 const CONTENT = { flex: 1, minHeight: 0, flexDirection: "row" } as const;
 const OVERLAY = {
   position: "absolute",
@@ -51,12 +52,29 @@ const BACKDROP = {
   bottom: 0,
   backgroundColor: "rgba(0,0,0,0.45)",
 } as const;
+const WORKSPACES_MODAL = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 40,
+} as const;
 const ASSISTANT_FIELDS = [
   { name: "name", label: "Name", initial: "" },
   { name: "provider", label: "Provider / model", initial: "" },
   { name: "persona", label: "Persona", initial: "", multiline: true },
   { name: "memory", label: "Initial memory", initial: "", multiline: true },
 ];
+const ERROR_BANNER = {
+  paddingHorizontal: 16,
+  paddingVertical: 8,
+  borderBottomWidth: 1,
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+} as const;
+const DISMISS_TEXT = { fontSize: 12, marginLeft: 8 } as const;
 
 function assistantFormFields(input: {
   assistant: Assistant | undefined;
@@ -65,9 +83,24 @@ function assistantFormFields(input: {
   hosts: Array<{ serverId: string; label: string }>;
   formIds: ReturnType<typeof freshFormIds>;
   machines: MachineInfo[];
+  defaultServerId?: string | null;
 }) {
-  const { assistant, editing, coordinatorId, hosts, formIds, machines } = input;
-  const machineId = assistant?.serverId ?? coordinatorId;
+  const { assistant, editing, coordinatorId, hosts, formIds, machines, defaultServerId } = input;
+  const machineId = assistant?.serverId ?? defaultServerId ?? coordinatorId;
+  const machineOptions = machines
+    .filter((machine) => machine.role === "coordinator" || machine.role === "member")
+    .map((machine) => ({
+      id: machine.serverId,
+      value: machine.serverId,
+      label: machine.label,
+    }));
+  if (!machineOptions.some((o) => o.value === machineId)) {
+    machineOptions.unshift({
+      id: machineId,
+      value: machineId,
+      label: hosts.find((h) => h.serverId === machineId)?.label ?? machineId,
+    });
+  }
   return [
     { name: "id", label: "", initial: editing ?? formIds.assistant, hidden: true },
     { name: "chatId", label: "", initial: formIds.chat, hidden: true },
@@ -76,14 +109,9 @@ function assistantFormFields(input: {
       name: "server",
       label: "Machine",
       initial: machineId,
-      hidden: Boolean(editing) || machines.length < 2,
-      options: machines
-        .filter((machine) => machine.role === "coordinator" || machine.role === "member")
-        .map((machine) => ({
-          id: machine.serverId,
-          value: machine.serverId,
-          label: machine.label,
-        })),
+      hidden: !editing && machineOptions.length < 2,
+      readOnly: Boolean(editing),
+      options: machineOptions,
     },
     ...ASSISTANT_FIELDS.filter((field) => !editing || field.name !== "memory").map((field) => ({
       name: field.name,
@@ -115,7 +143,6 @@ export function BigbangScreen() {
   const coordinatorId = useBigbangView((state) => state.coordinatorId);
   const chatId = useBigbangView((state) => state.chatId);
   const mode = useBigbangView((state) => state.mode);
-  const section = useBigbangView((state) => state.section);
   const data = useBigbangData(coordinatorId);
   const selectCoordinator = useBigbangView((state) => state.selectCoordinator);
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
@@ -124,12 +151,24 @@ export function BigbangScreen() {
     null,
   );
   const [editing, setEditing] = useState<string | null>(null);
+  const [defaultServerId, setDefaultServerId] = useState<string | null>(null);
   // Ids for records a form creates. Fresh on every open so a second creation never reuses the
   // first one's ids; kept while the form is open so a retried save stays idempotent.
   const [formIds, setFormIds] = useState(freshFormIds);
   const [error, setError] = useState<string | null>(null);
   const [group, setGroup] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const dismissError = useCallback(() => setError(null), []);
+  const errorBannerStyle = useMemo(
+    () => [
+      ERROR_BANNER,
+      {
+        backgroundColor: palette.surfaceElevated,
+        borderBottomColor: palette.destructive,
+      },
+    ],
+    [palette.destructive, palette.surfaceElevated],
+  );
   const showSidebar = useCallback(() => setSidebarOpen(true), []);
   const hideSidebar = useCallback(() => setSidebarOpen(false), []);
   const text = useMemo(() => ({ color: palette.textPrimary }), [palette.textPrimary]);
@@ -141,21 +180,40 @@ export function BigbangScreen() {
   const close = useCallback(() => {
     setForm(null);
     setEditing(null);
+    setDefaultServerId(null);
   }, []);
   const openForm = useCallback((next: "assistant" | "group" | "task") => {
     setFormIds(freshFormIds());
     setForm(next);
+    // Forms overlay the chat pane (zIndex 50); the compact sidebar sits above that (zIndex 100).
+    setSidebarOpen(false);
   }, []);
   const showAssistant = useCallback(() => {
     setEditing(null);
+    setDefaultServerId(null);
     openForm("assistant");
   }, [openForm]);
+  const showAssistantForMachine = useCallback(
+    (serverId: string) => {
+      setEditing(null);
+      setDefaultServerId(serverId);
+      openForm("assistant");
+    },
+    [openForm],
+  );
   const showGroup = useCallback(() => openForm("group"), [openForm]);
   const showTask = useCallback(() => openForm("task"), [openForm]);
-  const showWorkspaces = useCallback(() => setForm("workspaces"), []);
-  const showHosts = useCallback(() => setForm("hosts"), []);
+  const showWorkspaces = useCallback(() => {
+    setForm("workspaces");
+    setSidebarOpen(false);
+  }, []);
+  const showHosts = useCallback(() => {
+    setForm("hosts");
+    setSidebarOpen(false);
+  }, []);
 
   const openTask = useCallback((task: Task) => {
+    setError(null);
     if (!task.execution) return;
     const { serverId, workspaceId, agentId } = task.execution;
     prepareWorkspaceTab(
@@ -167,8 +225,62 @@ export function BigbangScreen() {
       .openColumn({ serverId, workspaceId, name: taskTitle(task).slice(0, 40), group: "Tasks" });
   }, []);
   const openTurn = useCallback(
-    (turn: Turn) => openTurnProcess(turn, coordinatorId, setError),
-    [coordinatorId],
+    (turn: Turn) => {
+      const assistant = data.state.assistants.find((a) => a.id === turn.assistantId);
+      const conversation = data.state.conversations.find((c) => c.id === turn.conversationId);
+      const assistantName = assistant?.name ?? "Assistant";
+      const columnName = turnColumnName(assistantName, conversation, turn.threadId);
+      const studioGroup = conversation?.kind === "group" ? conversation.name : "Chat";
+      void openTurnProcess(turn, coordinatorId, setError, { columnName, group: studioGroup });
+    },
+    [coordinatorId, data.state.assistants, data.state.conversations],
+  );
+  const openChatStudio = useCallback(
+    (conversationId: string, targetThreadId: string | null) => {
+      setError(null);
+      const taskId = taskIdOfThread(targetThreadId);
+      if (taskId) {
+        const task = data.state.tasks.find((t) => t.id === taskId);
+        if (task?.execution) {
+          openTask(task);
+          return;
+        }
+        setError("This task has no execution workspace yet.");
+        return;
+      }
+      const conversation = data.state.conversations.find((c) => c.id === conversationId);
+      if (!conversation) return;
+      const studioGroup = conversation.kind === "group" ? conversation.name : "Chat";
+      let openedAny = false;
+      for (const memberId of conversation.members) {
+        const turn = findLatestNonTaskTurn(data.state.turns, memberId, {
+          conversationId,
+          threadId: targetThreadId,
+        });
+        if (turn) {
+          openedAny = true;
+          const assistant = data.state.assistants.find((a) => a.id === memberId);
+          const assistantName = assistant?.name ?? "Assistant";
+          const columnName = turnColumnName(assistantName, conversation, targetThreadId);
+          void openTurnProcess(turn, coordinatorId, setError, {
+            columnName,
+            group: studioGroup,
+            clearError: false,
+          });
+        }
+      }
+      if (!openedAny) {
+        setError("Send a message first so the assistant starts its execution workspace.");
+      }
+    },
+    [
+      coordinatorId,
+      data.state.assistants,
+      data.state.conversations,
+      data.state.tasks,
+      data.state.turns,
+      openTask,
+    ],
   );
   const machines = useAssistantMachines(data.invoke, form, editing);
   const assistant = data.state.assistants.find((item) => item.id === editing);
@@ -264,10 +376,41 @@ export function BigbangScreen() {
   const editAssistant = useCallback(
     (id: string) => {
       setEditing(id);
+      setDefaultServerId(null);
       openForm("assistant");
-      setSidebarOpen(false);
     },
     [openForm],
+  );
+  const openAssistantChat = useCallback(
+    (assistantId: string) => {
+      const existing = data.state.conversations.find(
+        (item) => item.kind === "dm" && item.members.includes(assistantId),
+      );
+      if (existing) {
+        selectChat(existing.id);
+        useBigbangView.getState().setSection("chat");
+        return;
+      }
+      const targetAssistant = data.state.assistants.find((item) => item.id === assistantId);
+      if (!targetAssistant) return;
+      void data
+        .call(createConversation, {
+          id: randomUUID(),
+          name: targetAssistant.name,
+          kind: "dm",
+          members: [assistantId],
+          roundtable: false,
+        })
+        .then((chat) => {
+          selectChat(chat.id);
+          useBigbangView.getState().setSection("chat");
+          return chat;
+        })
+        .catch((failure: unknown) => {
+          setError(failure instanceof Error ? failure.message : String(failure));
+        });
+    },
+    [data, selectChat],
   );
   const hostRows = useMemo(
     () =>
@@ -281,8 +424,17 @@ export function BigbangScreen() {
     [close, hosts],
   );
   const assistantFields = useMemo(
-    () => assistantFormFields({ assistant, editing, coordinatorId, hosts, formIds, machines }),
-    [assistant, editing, coordinatorId, hosts, formIds, machines],
+    () =>
+      assistantFormFields({
+        assistant,
+        editing,
+        coordinatorId,
+        hosts,
+        formIds,
+        machines,
+        defaultServerId,
+      }),
+    [assistant, editing, coordinatorId, hosts, formIds, machines, defaultServerId],
   );
   const groupFields = useMemo(
     () => [
@@ -364,22 +516,32 @@ export function BigbangScreen() {
     ],
   );
   const groupChange = useCallback((textValue: string) => setGroup(textValue), []);
-  const directoryMachines = useMachines(data.invoke, section === "members");
+  const directoryMachines = useMachines(data.invoke, Boolean(coordinatorId));
+  const hostLabels = useMemo(
+    () => ({
+      ...Object.fromEntries(directoryMachines.map((machine) => [machine.serverId, machine.label])),
+      ...Object.fromEntries(hosts.map((host) => [host.serverId, host.label])),
+    }),
+    [directoryMachines, hosts],
+  );
   const sidebarProps = {
     compact,
     chatId,
     coordinator:
       hosts.find((host) => host.serverId === coordinatorId)?.label ?? "Choose coordinator",
+    coordinatorId,
     connected: data.connected,
     conversations: data.state.conversations,
     assistants: data.state.assistants,
     machines: directoryMachines,
     messages: data.state.messages,
+    hostLabels,
     onSelect: selectChat,
     onAssistant: showAssistant,
     onEdit: editAssistant,
+    onOpenAssistant: openAssistantChat,
+    onAssistantForMachine: showAssistantForMachine,
     onGroup: showGroup,
-    onWorkspaces: showWorkspaces,
     onHosts: showHosts,
   };
   return (
@@ -400,10 +562,47 @@ export function BigbangScreen() {
                 />
               ) : null}
               {error ? (
-                <Text style={text} accessibilityRole="alert">
-                  {error}
-                </Text>
+                <PressHighlight
+                  role="button"
+                  accessibilityLabel="Dismiss error"
+                  onPress={dismissError}
+                  style={errorBannerStyle}
+                >
+                  <Text
+                    style={[text, { color: palette.destructive, flex: 1 }]}
+                    accessibilityRole="alert"
+                  >
+                    {error}
+                  </Text>
+                  <Text style={[text, DISMISS_TEXT]}>Dismiss</Text>
+                </PressHighlight>
               ) : null}
+              <RetainedPanel active={mode === "chat" && Boolean(coordinatorId)}>
+                <BigbangChat
+                  key={`${coordinatorId}:${chatId}`}
+                  data={data}
+                  palette={palette}
+                  hostLabels={hostLabels}
+                  onTask={showTask}
+                  onOpenTask={openTask}
+                  onOpenTurn={openTurn}
+                  onOpenStudio={openChatStudio}
+                  onEditAssistant={editAssistant}
+                  onSidebar={compact ? showSidebar : undefined}
+                />
+              </RetainedPanel>
+              <RetainedPanel active={mode === "studio"}>
+                <Studio
+                  palette={palette}
+                  data={data}
+                  coordinatorId={coordinatorId}
+                  hostLabels={hostLabels}
+                  active={mode === "studio"}
+                  onAdd={showWorkspaces}
+                  onSidebar={compact ? showSidebar : undefined}
+                  onError={setError}
+                />
+              </RetainedPanel>
               {form === "hosts" || !coordinatorId ? (
                 <FormFrame title="Chat coordinator" onClose={close}>
                   <Text style={text}>
@@ -426,28 +625,11 @@ export function BigbangScreen() {
                 close={close}
                 group={group}
                 groupChange={groupChange}
+                data={data}
+                coordinatorId={coordinatorId}
+                hostLabels={hostLabels}
+                onError={setError}
               />
-              <RetainedPanel active={!form && mode === "chat" && Boolean(coordinatorId)}>
-                <BigbangChat
-                  key={`${coordinatorId}:${chatId}`}
-                  data={data}
-                  palette={palette}
-                  onTask={showTask}
-                  onOpenTask={openTask}
-                  onOpenTurn={openTurn}
-                  onEditAssistant={editAssistant}
-                  onSidebar={compact ? showSidebar : undefined}
-                />
-              </RetainedPanel>
-              <RetainedPanel active={!form && mode === "studio"}>
-                <Studio
-                  palette={palette}
-                  data={data}
-                  active={!form && mode === "studio"}
-                  onAdd={showWorkspaces}
-                  onSidebar={compact ? showSidebar : undefined}
-                />
-              </RetainedPanel>
             </View>
           </View>
           {compact && sidebarOpen ? (
@@ -478,6 +660,10 @@ interface FormHostProps {
   save(values: Record<string, string>): Promise<void>;
   close(): void;
   groupChange(value: string): void;
+  data?: BigbangData;
+  coordinatorId?: string;
+  hostLabels?: Record<string, string>;
+  onError?(error: string | null): void;
 }
 function FormHost({
   form,
@@ -491,6 +677,10 @@ function FormHost({
   close,
   group,
   groupChange,
+  data,
+  coordinatorId,
+  hostLabels,
+  onError,
 }: FormHostProps) {
   return (
     <>
@@ -525,35 +715,20 @@ function FormHost({
         />
       ) : null}
       {form === "workspaces" ? (
-        <StudioHomePanel group={group} onGroupChange={groupChange} onClose={close} />
+        <View style={WORKSPACES_MODAL}>
+          <StudioHomePanel
+            group={group}
+            onGroupChange={groupChange}
+            onClose={close}
+            data={data}
+            coordinatorId={coordinatorId}
+            hostLabels={hostLabels}
+            onError={onError}
+          />
+        </View>
       ) : null}
     </>
   );
-}
-
-// Opens a chat execution in Studio. An assistant bound to another machine runs its executions there.
-function openTurnProcess(turn: Turn, coordinatorId: string, setError: (error: string) => void) {
-  const serverId = turn.serverId ?? coordinatorId;
-  const host = getHostRuntimeStore().getClient(serverId);
-  if (!host) {
-    setError("That assistant's machine is not connected in this app. Add it as a host first.");
-    return;
-  }
-  void host
-    .fetchAgent({ agentId: turn.agentId })
-    .then((result) => {
-      if (!result?.agent.workspaceId) throw new Error("Execution workspace is not available yet.");
-      const workspaceId = result.agent.workspaceId;
-      prepareWorkspaceTab(
-        { serverId, workspaceId, target: { kind: "agent", agentId: turn.agentId }, pin: true },
-        { openTab: useWorkspaceLayoutStore.getState().deferOpenTab },
-      );
-      useBigbangView
-        .getState()
-        .openColumn({ serverId, workspaceId, name: "Assistant process", group: "Chat" });
-      return getHostRuntimeStore().prepareWorkspaceRoute(serverId, workspaceId);
-    })
-    .catch((failure: Error) => setError(failure.message));
 }
 
 function freshFormIds() {

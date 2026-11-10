@@ -10,6 +10,7 @@ import type {
   TurnRead,
 } from "./execution";
 import { finalTextAfter, type ProjectionEntry } from "./projection";
+import { taskBrief } from "./prompts";
 
 interface FakeAgent {
   serverId: string | undefined;
@@ -135,7 +136,9 @@ export class FakeExecution implements ExecutionPort {
   }
   async createTaskAgent(task: TaskSpec): Promise<void> {
     const agent = this.agent(task.id, task.serverId);
-    agent.entries.push({ item: { type: "user_message", text: task.prompt, messageId: task.id } });
+    agent.entries.push({
+      item: { type: "user_message", text: taskBrief(task), messageId: task.id },
+    });
     agent.running = true;
   }
   async watch(_serverId: string, agentId: string, onChange: () => void): Promise<() => void> {

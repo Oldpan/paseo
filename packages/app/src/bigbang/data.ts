@@ -19,6 +19,9 @@ type MemberHello = import("zod").output<typeof memberHello.output>;
 
 type ChatStateCache = Pick<QueryClient, "getQueryData" | "setQueryData">;
 
+/** Initial per-conversation message window requested on a cold (`after = 0`) snapshot. */
+export const INITIAL_MESSAGE_LIMIT = 200;
+
 function applyChatState(cache: ChatStateCache, key: readonly unknown[], next: ChatState) {
   // Functional update: the snapshot fetch and the long poll both merge into the same cache entry.
   return cache.setQueryData<ChatState>(key, (previous) =>
@@ -45,6 +48,7 @@ export function useBigbangData(serverId: string) {
         await client.invokePluginRpc("bigbang", readState.name, {
           after: previous.cursor,
           generation: previous.generation,
+          ...(previous.cursor === 0 ? { messageLimit: INITIAL_MESSAGE_LIMIT } : {}),
         }),
       );
       return applyChatState(cache, key, next) ?? next;

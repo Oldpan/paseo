@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -8,6 +8,13 @@ import { Coordinator, type TurnEndedEvent } from "./coordinator";
 import { FakeExecution } from "./execution.fake";
 import { assistantInstructions } from "./chat-sessions";
 import { BIGBANG_TOOLS_NOTE } from "./tools-note";
+import {
+  MAX_MEMORY_INDEX_LINES,
+  channelSlug,
+  isoWeekKey,
+  prepareHome,
+  readMemorySnapshot,
+} from "./assistant-files";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -547,5 +554,155 @@ describe("file memory", () => {
     await expect(coordinator.readAssistantMemory({ assistantId: randomUUID() })).rejects.toThrow(
       "no longer exists",
     );
+  });
+
+  it("creates structured subdirectories when preparing assistant home", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "bigbang-prepare-home-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    prepareHome(dir, "Initial memory");
+
+    expect(existsSync(path.join(dir, "MEMORY.md"))).toBe(true);
+    expect(readFileSync(path.join(dir, "MEMORY.md"), "utf8")).toBe("Initial memory");
+    expect(existsSync(path.join(dir, "notes"))).toBe(true);
+    expect(existsSync(path.join(dir, "notes", "channels"))).toBe(true);
+    expect(existsSync(path.join(dir, "notes", "work-log"))).toBe(true);
+    expect(existsSync(path.join(dir, "notes", "archive"))).toBe(true);
+  });
+
+  it("truncates MEMORY.md to 200 lines in readMemorySnapshot", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "bigbang-snapshot-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    prepareHome(dir, "seed");
+
+    const lines = Array.from({ length: 300 }, (_, i) => `Line ${i + 1}`);
+    writeFileSync(path.join(dir, "MEMORY.md"), lines.join("\n"));
+    writeFileSync(path.join(dir, "notes", "user-preferences.md"), "Prefers concise replies");
+
+    const snapshot = readMemorySnapshot(dir);
+    const resultLines = snapshot.memoryIndex.split("\n");
+    expect(resultLines).toHaveLength(MAX_MEMORY_INDEX_LINES);
+    expect(resultLines[0]).toBe("Line 1");
+    expect(resultLines[199]).toBe("Line 200");
+    expect(snapshot.memoryIndex).not.toContain("Line 201");
+    expect(snapshot.userPreferences).toBe("Prefers concise replies");
+
+    writeFileSync(
+      path.join(dir, "MEMORY.md"),
+      Array.from({ length: 5 }, (_, i) => `CR ${i + 1}`).join("\r\n"),
+    );
+    expect(readMemorySnapshot(dir).memoryIndex.split("\n")).toEqual([
+      "CR 1",
+      "CR 2",
+      "CR 3",
+      "CR 4",
+      "CR 5",
+    ]);
+  });
+
+  it("ignores path-traversal slugs when reading a channel snapshot", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "bigbang-snapshot-trav-"));
+    cleanup.push(() => rmSync(parent, { recursive: true, force: true }));
+    const dir = path.join(parent, "home");
+    prepareHome(dir, "seed");
+    writeFileSync(path.join(parent, "secret.md"), "SECRET");
+    writeFileSync(
+      path.join(dir, "notes", "channels", "safe.md"),
+      "## Recent Durable Outcomes\n<!-- recent-durable-outcomes:start -->\n- ok\n<!-- recent-durable-outcomes:end -->\n",
+    );
+    expect(readMemorySnapshot(dir, "../secret").channelOutcomes).toBe("");
+    expect(readMemorySnapshot(dir, "/etc/passwd").channelOutcomes).toBe("");
+    expect(readMemorySnapshot(dir, "safe").channelOutcomes).toContain("ok");
+  });
+
+  it("syncs user-started task outcome to assistant home notes", async () => {
+    const f = fixture();
+    const task = f.coordinator.task({
+      id: randomUUID(),
+      conversationId: f.conversation.id,
+      assistantId: f.assistant.id,
+      prompt: "Implement caching",
+      serverId: "local",
+      directory: "/work/app",
+      provider: f.assistant.provider,
+      isolation: "directory",
+    });
+    await f.coordinator.idle();
+
+    f.execution.say(task.id, "Caching implemented with tests", "m1");
+    f.execution.finish(task.id);
+    f.coordinator.onTurnEnded({ agent: { id: task.id }, outcome: completed });
+    await f.coordinator.idle();
+    await f.coordinator.sweep();
+    await f.coordinator.sweep();
+
+    const homeDir = path.join(f.directory, "assistants", f.assistant.id);
+    const { week } = isoWeekKey(Date.now());
+    const workLogFile = path.join(homeDir, "notes", "work-log", `${week}.md`);
+    expect(existsSync(workLogFile)).toBe(true);
+    const workLog = readFileSync(workLogFile, "utf8");
+    expect(workLog).toContain("Implement caching");
+    expect(workLog.split(`<!-- task-outcome:${task.id}:${task.id} -->`).length - 1).toBe(1);
+    expect(workLog).toContain("completed in /work/app");
+
+    const channelFile = path.join(
+      homeDir,
+      "notes",
+      "channels",
+      `${channelSlug(f.conversation.id, f.conversation.name)}.md`,
+    );
+    expect(existsSync(channelFile)).toBe(true);
+    const channelNotes = readFileSync(channelFile, "utf8");
+    expect(channelNotes).toContain("## Recent Durable Outcomes");
+    expect(channelNotes).toContain("<!-- recent-durable-outcomes:start -->");
+    expect(channelNotes).toContain("<!-- recent-durable-outcomes:end -->");
+    expect(channelNotes.split(`<!-- task-id:${task.id} -->`).length - 1).toBe(1);
+    expect(channelNotes).toContain("Implement caching");
+  });
+
+  it("prepends a workspace memory hint on a fresh chat session", async () => {
+    const f = fixture();
+    const prefs = path.join(
+      f.directory,
+      "assistants",
+      f.assistant.id,
+      "notes",
+      "user-preferences.md",
+    );
+    writeFileSync(prefs, "Prefers concise replies");
+    const turn = await f.say("Hello");
+    const text = f.execution.sent.find((item) => item.messageId === turn.id)!.text;
+    expect(text).toContain("[Workspace memory to check if you need it]");
+    expect(text).toContain("MEMORY.md");
+    expect(text).toContain(
+      `notes/channels/${channelSlug(f.conversation.id, f.conversation.name)}.md`,
+    );
+    expect(text).toContain("[User preferences]");
+    expect(text).toContain("Prefers concise replies");
+    expect(text).toContain("You: Hello");
+  });
+
+  it("prepends a workspace memory hint after chat-session rollover", async () => {
+    const f = fixture();
+    const first = await f.say("Hello");
+    f.execution.say(first.agentId, "Hi", "m1");
+    f.execution.finish(first.agentId);
+    f.ended(first.agentId);
+    await f.coordinator.idle();
+
+    const session = f.store.getChatSession(first.chatSessionId!)!;
+    f.store.transaction(() =>
+      f.store.putChatSession({
+        ...session,
+        agentId: randomUUID(),
+        created: false,
+        lastMessageId: undefined,
+      }),
+    );
+    const next = await f.say("What did we decide?");
+    expect(next.agentId).not.toBe(first.agentId);
+    const text = f.execution.sent.find((item) => item.messageId === next.id)!.text;
+    expect(text).toContain("[Workspace memory to check if you need it]");
+    expect(text).toContain("notes/work-log/");
+    expect(text).toContain("You: What did we decide?");
   });
 });

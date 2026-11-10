@@ -24,10 +24,19 @@ import {
   memberHomePrepare,
   memberMemoryRead,
   memberMemoryWrite,
+  memberMemorySnapshot,
+  memberTaskOutcomeSync,
   memberPoll,
   memberRespond,
 } from "./shared/member";
-import { assistantRoot, prepareHome, readMemory, writeMemory } from "./server/assistant-files";
+import {
+  assistantRoot,
+  prepareHome,
+  readMemory,
+  readMemorySnapshot,
+  syncTaskOutcomeToNotes,
+  writeMemory,
+} from "./server/assistant-files";
 import type { MachinePort } from "./server/machines";
 import { callPluginRpc } from "./server/member/rpc";
 import { roleSettings, taskSettings, type RoleSettings, type TaskLimits } from "./shared/settings";
@@ -129,6 +138,11 @@ export default function contribute(server: PluginServerContext) {
   server.handle(memberMemoryWrite, (input) =>
     writeMemory(memberHome(input), input.content, input.expectedMtimeMs),
   );
+  server.handle(memberMemorySnapshot, (input) => readMemorySnapshot(memberHome(input), input.slug));
+  server.handle(memberTaskOutcomeSync, (input) => {
+    syncTaskOutcomeToNotes(memberHome(input), input.outcome);
+    return { ok: true as const };
+  });
   server.handle(memberRespond, (input) => relay.respond(input.callId, input.result));
 
   // Every agent on a Bigbang daemon lists the tools: providers list MCP tools once per session, so

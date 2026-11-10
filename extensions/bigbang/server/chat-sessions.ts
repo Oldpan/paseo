@@ -45,6 +45,15 @@ export function restoreChatSessions(store: ChatStore): void {
 export function assistantInstructions(assistant: Assistant): string {
   return `${assistant.persona}
 You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
+
+Structured memory hierarchy:
+- MEMORY.md (concise index <=200 lines, never a raw dump)
+- notes/user-preferences.md
+- notes/channels/<slug>.md
+- notes/tasks.md
+- notes/work-log/<ISO-week>.md
+- notes/archive/
+
 In a group chat, reply with exactly (pass) when you have nothing useful to add.
 To ask another assistant privately (it may run on another machine), use bigbang-send; bigbang-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.
 ${BIGBANG_TOOLS_NOTE}${autonomyInstructions(assistant)}`;
@@ -65,6 +74,10 @@ function autonomyInstructions(assistant: Assistant): string {
   return `
 You may start project work yourself with the bigbang-start_task tool. Your authorized projects: ${describeTargets(assistant)}. Pass the chosen one as target {serverId, directory}. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
 }
+/** Completed turns an execution agent handles before the lane rolls over to a fresh execution. */
+export const CHAT_SESSION_MAX_TURNS = 60;
+const SESSION_LIVE_STATUS = new Set(["queued", "creating", "running", "attention", "unknown"]);
+
 function legacySessionTurn(turns: Turn[]): Turn | undefined {
   const reverse = turns.toReversed();
   return (
@@ -74,15 +87,48 @@ function legacySessionTurn(turns: Turn[]): Turn | undefined {
     reverse[0]
   );
 }
+function rolloverIfDue(
+  store: ChatStore,
+  existing: ChatSession,
+  assistant: Assistant,
+  maxTurns: number,
+): ChatSession {
+  const allTurns = store.snapshot().turns;
+  if (allTurns.length < maxTurns) return existing;
+  const agentTurns = allTurns.filter(
+    (turn) =>
+      turn.agentId === existing.agentId &&
+      turn.conversationId === existing.conversationId &&
+      turn.threadId === existing.threadId &&
+      turn.assistantId === assistant.id &&
+      !turn.taskId,
+  );
+  if (agentTurns.some((turn) => SESSION_LIVE_STATUS.has(turn.status))) return existing;
+  if (agentTurns.filter((turn) => turn.status === "completed").length < maxTurns) return existing;
+  const instructions = assistantInstructions(assistant);
+  const rolled: ChatSession = {
+    ...existing,
+    agentId: randomUUID(),
+    provider: assistant.provider,
+    systemPrompt: instructions,
+    lastInstructions: instructions,
+    created: false,
+    lastMessageId: undefined,
+  };
+  store.putChatSession(rolled);
+  return rolled;
+}
 export function bindChatSession(
   store: ChatStore,
   conversationId: string,
   threadId: string | null,
   assistant: Assistant,
+  options?: { maxTurns?: number },
 ): ChatSession {
   const id = chatSessionKey(conversationId, threadId, assistant.id);
   const existing = store.getChatSession(id);
-  if (existing) return existing;
+  if (existing)
+    return rolloverIfDue(store, existing, assistant, options?.maxTurns ?? CHAT_SESSION_MAX_TURNS);
   const state = store.snapshot();
   const previous = legacySessionTurn(
     state.turns.filter(

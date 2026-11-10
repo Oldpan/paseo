@@ -23,11 +23,55 @@ export interface AssistantHome {
   directory: string;
 }
 
+export interface SnapshotOptions {
+  /** Per-conversation message window applied to a full (`after = 0`) snapshot. */
+  messageLimit?: number;
+}
+
+function windowMessages(messages: readonly Message[], limit: number): Message[] {
+  const byConversation = new Map<string, Message[]>();
+  for (const message of messages) {
+    let list = byConversation.get(message.conversationId);
+    if (!list) {
+      list = [];
+      byConversation.set(message.conversationId, list);
+    }
+    list.push(message);
+  }
+  const kept = new Set<string>();
+  for (const list of byConversation.values()) {
+    const tail = list.length > limit ? list.slice(-limit) : list;
+    for (const message of tail) {
+      kept.add(message.id);
+      if (message.threadId) kept.add(message.threadId);
+    }
+  }
+  return messages.filter((message) => kept.has(message.id));
+}
+
+function cloneSnapshot(state: ChatState, messageLimit?: number): ChatState {
+  return {
+    generation: state.generation,
+    cursor: state.cursor,
+    assistants: [...state.assistants],
+    conversations: [...state.conversations],
+    messages:
+      messageLimit !== undefined
+        ? windowMessages(state.messages, messageLimit)
+        : [...state.messages],
+    tasks: [...state.tasks],
+    turns: [...state.turns],
+    ...(state.studios ? { studios: [...state.studios] } : {}),
+    ...(state.peerMessages ? { peerMessages: [...state.peerMessages] } : {}),
+  };
+}
+
 export class ChatStore {
   private readonly db: DatabaseSync;
   private readonly generation: string;
   private readonly listeners = new Set<() => void>();
   private readonly waiters = new Set<{ after: number; resolve: (changed: boolean) => void }>();
+  private snapshotCache: ChatState | null = null;
   private depth = 0;
   private dirty = false;
   constructor(filename: string) {
@@ -36,7 +80,7 @@ export class ChatStore {
     this.db = new DatabaseSync(filename);
     if (filename !== ":memory:") chmodSync(filename, 0o600);
     this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(collection,id)); CREATE TABLE IF NOT EXISTS changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, id TEXT NOT NULL);",
+      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(collection,id)); CREATE INDEX IF NOT EXISTS records_seq ON records(seq); CREATE TABLE IF NOT EXISTS changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, id TEXT NOT NULL);",
     );
     this.db.exec("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     this.db.exec(
@@ -66,8 +110,11 @@ export class ChatStore {
   get currentGeneration(): string {
     return this.generation;
   }
-  snapshot(after = 0, generation = this.generation): ChatState {
+  snapshot(after = 0, generation = this.generation, options?: SnapshotOptions): ChatState {
     if (generation !== this.generation) after = 0;
+    if (after === 0 && this.snapshotCache) {
+      return cloneSnapshot(this.snapshotCache, options?.messageLimit);
+    }
     const result: Record<string, unknown> = {
       generation: this.generation,
       cursor: this.cursor(),
@@ -83,7 +130,12 @@ export class ChatStore {
       .prepare("SELECT collection, value FROM records WHERE seq > ? ORDER BY seq")
       .all(after) as Array<{ collection: Collection; value: string }>;
     for (const row of rows) (result[row.collection] as unknown[]).push(JSON.parse(row.value));
-    return stateSchema.parse(result);
+    const parsed = stateSchema.parse(result);
+    if (after === 0) {
+      this.snapshotCache = parsed;
+      return cloneSnapshot(parsed, options?.messageLimit);
+    }
+    return parsed;
   }
   get<K extends Collection>(collection: K, id: string): NonNullable<ChatState[K]>[number] | null {
     const row = this.db
@@ -92,9 +144,11 @@ export class ChatStore {
     return row ? JSON.parse(row.value) : null;
   }
   put<K extends Collection>(collection: K, value: NonNullable<ChatState[K]>[number]): void {
+    this.snapshotCache = null;
     const event = this.db
       .prepare("INSERT INTO changes(collection,id) VALUES (?,?)")
       .run(collection, value.id);
+    this.db.prepare("DELETE FROM changes WHERE seq < ?").run(event.lastInsertRowid);
     this.db
       .prepare(
         "INSERT INTO records(collection,id,value,seq) VALUES (?,?,?,?) ON CONFLICT(collection,id) DO UPDATE SET value=excluded.value,seq=excluded.seq",
@@ -307,6 +361,7 @@ export class ChatStore {
     } catch (error) {
       this.depth--;
       this.dirty = false;
+      this.snapshotCache = null;
       this.db.exec("ROLLBACK");
       throw error;
     }

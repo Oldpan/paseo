@@ -14,7 +14,7 @@ import type {
 } from "../../../../../extensions/bigbang/shared/contracts";
 import { MachinesSection } from "../machines";
 import { AgentAvatar, UserAvatar } from "./avatars";
-import { SettingsIcon, PlusIcon, ChevronIcon, PanelLeftOpenIcon } from "./icons";
+import { SettingsIcon, PlusIcon, ChevronIcon } from "./icons";
 import { Rail } from "./Rail";
 import { SidebarChannelRow, SidebarPanelToggle, SectionHeader } from "./SidebarControls";
 import { ctrlShadow, text as type } from "./theme";
@@ -24,16 +24,19 @@ interface SidebarProps {
   compact: boolean;
   chatId: string;
   coordinator: string;
+  coordinatorId: string;
   connected: boolean;
   conversations: Conversation[];
   assistants: Assistant[];
   machines: MachineInfo[];
   messages: Message[];
+  hostLabels: Record<string, string>;
   onSelect(id: string): void;
   onAssistant(): void;
   onEdit(id: string): void;
+  onOpenAssistant(assistantId: string): void;
+  onAssistantForMachine(serverId: string): void;
   onGroup(): void;
-  onWorkspaces(): void;
   onHosts(): void;
 }
 export function Sidebar(props: SidebarProps) {
@@ -49,7 +52,6 @@ export function Sidebar(props: SidebarProps) {
   const [filter, setFilter] = useState("");
   const [groupsOpen, setGroupsOpen] = useState(true);
   const [dmsOpen, setDmsOpen] = useState(true);
-  const [membersOpen, setMembersOpen] = useState(true);
   const chats = props.conversations.filter((item) =>
     item.name.toLowerCase().includes(filter.toLowerCase()),
   );
@@ -152,29 +154,14 @@ export function Sidebar(props: SidebarProps) {
               />
             ) : null}
             {section === "members" ? (
-              <>
-                <SectionHeader
-                  label="Members"
-                  count={props.assistants.length}
-                  expanded={membersOpen}
-                  onToggle={() => setMembersOpen(!membersOpen)}
-                  actionLabel="New assistant"
-                  onAction={props.onAssistant}
-                />
-                {membersOpen
-                  ? props.assistants.map((item) => (
-                      <DmRow
-                        key={item.id}
-                        id={item.id}
-                        label={item.name}
-                        description={item.provider}
-                        selected={false}
-                        onOpen={() => props.onEdit(item.id)}
-                      />
-                    ))
-                  : null}
-                <MachinesSection machines={props.machines} />
-              </>
+              <MachinesSection
+                machines={props.machines}
+                assistants={props.assistants}
+                coordinatorId={props.coordinatorId}
+                onOpenAssistant={props.onOpenAssistant}
+                onEditAssistant={props.onEdit}
+                onCreateAssistant={props.onAssistantForMachine}
+              />
             ) : (
               <>
                 <SectionHeader
@@ -216,14 +203,20 @@ export function Sidebar(props: SidebarProps) {
                       const last = props.messages
                         .filter((m) => m.conversationId === item.id && !m.threadId)
                         .sort((a, b) => b.createdAt - a.createdAt)[0];
+                      const machineLabel = assistant
+                        ? (props.hostLabels[assistant.serverId ?? props.coordinatorId] ??
+                          assistant.serverId)
+                        : undefined;
                       return (
                         <DmRow
                           key={item.id}
                           id={assistant?.id ?? item.id}
                           label={assistant?.name ?? item.name}
-                          description={last?.content ?? "Private chat"}
+                          badge={machineLabel}
+                          description={last?.content ?? assistant?.provider ?? "Private chat"}
                           selected={item.id === props.chatId}
                           onOpen={() => props.onSelect(item.id)}
+                          onEdit={assistant ? () => props.onEdit(assistant.id) : undefined}
                         />
                       );
                     })
@@ -257,23 +250,6 @@ export function Sidebar(props: SidebarProps) {
           </ScrollView>
           <Pressable
             role="button"
-            onPress={props.onWorkspaces}
-            accessibilityLabel="Add workspace"
-            style={{
-              padding: 12,
-              borderTopWidth: 1,
-              borderTopColor: t.dividerLine,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <PanelLeftOpenIcon color={t.textMuted} size={16} />
-            <Text style={type(t.textSecondary, 12, { flex: 1 })}>Workspaces</Text>
-            <PlusIcon color={t.textMuted} size={14} />
-          </Pressable>
-          <Pressable
-            role="button"
             onPress={rail.settings}
             accessibilityLabel="Your settings"
             style={{
@@ -299,26 +275,26 @@ function DmRow({
   id,
   label,
   description,
+  badge,
   selected,
   onOpen,
+  onEdit,
 }: {
   id: string;
   label: string;
   description: string;
+  badge?: string;
   selected: boolean;
   onOpen(): void;
+  onEdit?: () => void;
 }) {
   const { palette: t, name } = useTheme();
   return (
-    <Pressable
-      role="button"
-      accessibilityLabel={`Chat with ${label}`}
-      accessibilityState={{ selected }}
-      onPress={onOpen}
+    <View
       style={{
         flexDirection: "row",
         alignItems: "center",
-        gap: 10,
+        gap: 6,
         minWidth: 0,
         borderRadius: 12,
         borderWidth: 1,
@@ -333,23 +309,59 @@ function DmRow({
         ...(selected ? ctrlShadow(t, name) : null),
       }}
     >
-      <AgentAvatar seed={`${id}:${label}`} label={label} size={28} theme={t} name={name} />
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text
-          numberOfLines={1}
-          style={type(selected && name === "dark" ? t.onAccent : t.textPrimary, 13, {
-            fontWeight: "600",
-          })}
+      <Pressable
+        role="button"
+        accessibilityLabel={`Chat with ${label}`}
+        accessibilityState={{ selected }}
+        onPress={onOpen}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <AgentAvatar seed={`${id}:${label}`} label={label} size={28} theme={t} name={name} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text
+            numberOfLines={1}
+            style={type(selected && name === "dark" ? t.onAccent : t.textPrimary, 13, {
+              fontWeight: "600",
+            })}
+          >
+            {label}
+          </Text>
+          <Text
+            numberOfLines={1}
+            style={type(selected && name === "dark" ? "rgba(19,16,7,0.7)" : t.textSecondary, 10)}
+          >
+            {badge ? `${badge} · ${description}` : description}
+          </Text>
+        </View>
+      </Pressable>
+      {onEdit ? (
+        <Pressable
+          role="button"
+          accessibilityLabel={`Edit ${label}`}
+          onPress={onEdit}
+          style={[
+            {
+              borderRadius: 8,
+              width: 26,
+              height: 26,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: t.retroBorder,
+              backgroundColor: t.surfaceElevated,
+            },
+            ctrlShadow(t, name),
+          ]}
         >
-          {label}
-        </Text>
-        <Text
-          numberOfLines={1}
-          style={type(selected && name === "dark" ? "rgba(19,16,7,0.7)" : t.textSecondary, 10)}
-        >
-          {description}
-        </Text>
-      </View>
-    </Pressable>
+          <SettingsIcon color={t.textSecondary} size={13} />
+        </Pressable>
+      ) : null}
+    </View>
   );
 }

@@ -22,6 +22,7 @@ interface FormProps {
     initial: string;
     multiline?: boolean;
     hidden?: boolean;
+    readOnly?: boolean;
     options?: SelectFieldOption<string>[];
     modelHost?: string;
     /** Renders the assistant autonomy editor; its value is the JSON of `Autonomy`. */
@@ -98,13 +99,20 @@ function FormInput(props: FormInputProps) {
           value={props.value}
           hosts={props.field.autonomy.hosts}
           defaultHost={props.field.autonomy.defaultHost}
-          disabled={props.disabled}
+          disabled={props.disabled || Boolean(props.field.readOnly)}
           onChange={props.onChange}
         />
       </Field>
     );
   if (props.field.modelHost !== undefined) return <ModelInput {...props} />;
-  if (props.field.options) return <ChoiceInput {...props} options={props.field.options} />;
+  if (props.field.options)
+    return (
+      <ChoiceInput
+        {...props}
+        options={props.field.options}
+        disabled={props.disabled || Boolean(props.field.readOnly)}
+      />
+    );
   return (
     <Field label={props.field.label}>
       <FormTextInput
@@ -112,7 +120,7 @@ function FormInput(props: FormInputProps) {
         initialValue={props.value}
         onChangeText={props.onChange}
         multiline={props.field.multiline}
-        editable={!props.disabled}
+        editable={!props.disabled && !props.field.readOnly}
       />
     </Field>
   );

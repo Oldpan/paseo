@@ -1,4 +1,5 @@
 import type { Assistant, Conversation, Turn } from "../shared/contracts";
+import { channelSlug, isoWeekKey, type MemorySnapshot } from "./assistant-files";
 import type { Epoch } from "./roundtable";
 import { ROUNDTABLE_MAX_ROUNDS } from "./roundtable";
 
@@ -6,16 +7,52 @@ export const PASS_REPLY = "(pass)";
 const at = (assistant: Assistant) => `@${assistant.name}`;
 
 /** Opens the prompt of a turn that reports a finished task; the outcome follows as a bracketed line. */
-export const TASK_RECEIPT_LEAD = `A task you started has ended; its outcome is in brackets below. Tell the user what happened in your own words, with what matters to them and what you suggest next. Reply exactly ${PASS_REPLY} only if the user has already seen everything.`;
+export const TASK_RECEIPT_LEAD = `A task you started has ended; its outcome is in brackets below. Tell the user what happened in your own words, with what matters to them and what you suggest next. Reply exactly ${PASS_REPLY} only if the user has already seen everything. When a task finishes and reveals durable decisions, pitfalls, or user preferences, update MEMORY.md (keep under 200 lines) or the relevant file under notes/ in your working directory.`;
 
 /**
  * The first prompt of a task execution. A worktree task's working directory is its own worktree,
  * but a brief written in chat often names the source checkout by absolute path; without this line
  * the worker edits that checkout instead of its isolated copy.
  */
-export function taskBrief(task: { prompt: string; directory: string; isolation: string }): string {
-  if (task.isolation !== "worktree") return task.prompt;
-  return `You are working in an isolated Git worktree created from ${task.directory}; your current working directory is that worktree. Make every change inside your working directory and never modify ${task.directory} itself, even where the brief below names that path.\n\n${task.prompt}`;
+export function taskBrief(task: {
+  prompt: string;
+  directory: string;
+  isolation: string;
+  memoryContext?: string;
+}): string {
+  const base =
+    task.isolation === "worktree"
+      ? `You are working in an isolated Git worktree created from ${task.directory}; your current working directory is that worktree. Make every change inside your working directory and never modify ${task.directory} itself, even where the brief below names that path.\n\n${task.prompt}`
+      : task.prompt;
+  if (!task.memoryContext?.trim()) return base;
+  return `[Assistant Memory Snapshot (read-only context from your assistant home)]\n${task.memoryContext.trim()}\nDo not write personal memory files (MEMORY.md, notes/*) inside this project directory or worktree; durable memory updates belong in your assistant home workspace.\n\n${base}`;
+}
+
+export function workspaceMemoryHint(params: {
+  conversationId: string;
+  conversationName?: string;
+  now?: number;
+  snapshot?: MemorySnapshot;
+}): string {
+  const { week, date } = isoWeekKey(params.now ?? Date.now());
+  const slug = channelSlug(params.conversationId, params.conversationName);
+  const lines = [
+    "[Workspace memory to check if you need it]",
+    `Today: ${week} (${date})`,
+    "MEMORY.md",
+    "notes/user-preferences.md",
+    `notes/channels/${slug}.md`,
+    "notes/tasks.md",
+    `notes/work-log/${week}.md`,
+  ];
+  const sections: string[] = [lines.join("\n")];
+  if (params.snapshot?.userPreferences?.trim()) {
+    sections.push(`[User preferences]\n${params.snapshot.userPreferences.trim()}`);
+  }
+  if (params.snapshot?.channelOutcomes?.trim()) {
+    sections.push(`[Recent channel outcomes]\n${params.snapshot.channelOutcomes.trim()}`);
+  }
+  return sections.join("\n\n");
 }
 
 function reasonLine(turn: Turn, wokenBy: Assistant | undefined): string {

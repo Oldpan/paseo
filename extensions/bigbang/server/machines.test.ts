@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Assistant } from "../shared/contracts";
-import { callAgentTool } from "./agent-tools";
+import { callAgentTool, startTaskHandler } from "./agent-tools";
 import { closeFixtures, fixture } from "./chat-fixture";
 import type { MachinePort } from "./machines";
+import type { TaskOutcomeNoteInput } from "./assistant-files";
 
 afterEach(closeFixtures);
 
@@ -13,6 +14,8 @@ const SPARK = "srv_spark";
 function machines(members = new Set([SPARK])) {
   const calls: Array<[string, string, unknown]> = [];
   const memory = new Map<string, { content: string; mtimeMs: number }>();
+  const outcomes: TaskOutcomeNoteInput[] = [];
+  const fail = { outcomeSync: false, snapshot: false };
   const port: MachinePort = {
     self: async () => "srv_mac",
     isMember: (serverId) => members.has(serverId),
@@ -37,10 +40,24 @@ function machines(members = new Set([SPARK])) {
         memory.set(assistantId, next);
         return contract.output.parse(next);
       }
+      if (contract.name === "member.memory.snapshot") {
+        if (fail.snapshot) throw new Error("member snapshot offline");
+        return contract.output.parse({
+          memoryIndex: memory.get(assistantId)?.content ?? "",
+          userPreferences: "",
+          channelOutcomes: "",
+        });
+      }
+      if (contract.name === "member.task_outcome.sync") {
+        if (fail.outcomeSync) throw new Error("member outcome sync offline");
+        const { outcome } = input as { outcome: TaskOutcomeNoteInput };
+        outcomes.push(outcome);
+        return contract.output.parse({ ok: true });
+      }
       throw new Error(`unexpected ${contract.name}`);
     },
   };
-  return { port, calls, memory, members };
+  return { port, calls, memory, members, outcomes, fail };
 }
 
 function setup() {
@@ -65,6 +82,7 @@ describe("assistants bound to a machine", () => {
     const turn = f.running()!;
     expect(turn.serverId).toBe(SPARK);
     expect(f.execution.sent.at(-1)).toMatchObject({ messageId: turn.id, serverId: SPARK });
+    expect(f.execution.sent.at(-1)!.text).toContain("[Workspace memory to check if you need it]");
     expect(f.store.getChatSessionByAgent(turn.agentId)?.serverId).toBe(SPARK);
 
     f.execution.say(turn.agentId, "Spark", `m-${turn.id}`);
@@ -151,6 +169,89 @@ describe("assistants bound to a machine", () => {
     const request = f.store.get("turns", `mailbox:${sent.mailboxId}`)!;
     expect(request).toMatchObject({ serverId: SPARK, status: "running" });
     expect(f.execution.sent.at(-1)).toMatchObject({ messageId: request.id, serverId: SPARK });
+  });
+
+  it("loads a remote memory snapshot and syncs task outcomes without failing the ledger", async () => {
+    const f = setup();
+    const target = { serverId: "local", directory: "/work/app", isolation: "directory" as const };
+    f.coordinator.saveAssistant({
+      ...f.sam,
+      autonomy: { enabled: true, targets: [target] },
+    });
+    await f.say("Please fix the app", { conversationId: f.dm.id });
+    const turn = f.running()!;
+    const start = startTaskHandler(f.coordinator);
+    const out = start(
+      { prompt: "Fix the flaky test in app", target, title: "Remote fix" },
+      { caller: { agentId: turn.agentId, serverId: SPARK } },
+    );
+    await f.coordinator.idle();
+    expect(f.spark.calls.some(([, method]) => method === "member.memory.snapshot")).toBe(true);
+    const brief = f.execution.agents.get(out.taskId)!.entries[0].item.text;
+    expect(brief).toContain(
+      "[Assistant Memory Snapshot (read-only context from your assistant home)]",
+    );
+    expect(brief).toContain("Spark notes");
+    expect(brief).toContain("Do not write personal memory files");
+
+    f.execution.say(out.taskId, "Fixed on Spark", `m-${out.taskId}`);
+    f.execution.finish(out.taskId);
+    f.coordinator.onTurnEnded({ agent: { id: out.taskId }, outcome: { kind: "completed" } });
+    await f.coordinator.idle();
+    await f.coordinator.sweep();
+    expect(f.store.get("tasks", out.taskId)?.status).toBe("completed");
+    expect(f.spark.outcomes).toEqual([
+      expect.objectContaining({
+        taskId: out.taskId,
+        status: "completed",
+        title: "Remote fix",
+        summary: "Fixed on Spark",
+      }),
+    ]);
+  });
+
+  it("keeps a remote task completed when member outcome sync is down", async () => {
+    const f = setup();
+    f.spark.fail.outcomeSync = true;
+    const target = { serverId: "local", directory: "/work/app", isolation: "directory" as const };
+    f.coordinator.saveAssistant({
+      ...f.sam,
+      autonomy: { enabled: true, targets: [target] },
+    });
+    await f.say("Please fix the app", { conversationId: f.dm.id });
+    const turn = f.running()!;
+    const out = startTaskHandler(f.coordinator)(
+      { prompt: "Fix the flaky test in app", target, title: "Remote fix" },
+      { caller: { agentId: turn.agentId, serverId: SPARK } },
+    );
+    await f.coordinator.idle();
+    f.execution.say(out.taskId, "Done", `m-${out.taskId}`);
+    f.execution.finish(out.taskId);
+    f.coordinator.onTurnEnded({ agent: { id: out.taskId }, outcome: { kind: "completed" } });
+    await f.coordinator.idle();
+    expect(f.store.get("tasks", out.taskId)?.status).toBe("completed");
+    expect(f.spark.outcomes).toEqual([]);
+  });
+
+  it("starts a remote task without memory when the snapshot RPC fails", async () => {
+    const f = setup();
+    f.spark.fail.snapshot = true;
+    const target = { serverId: "local", directory: "/work/app", isolation: "directory" as const };
+    f.coordinator.saveAssistant({
+      ...f.sam,
+      autonomy: { enabled: true, targets: [target] },
+    });
+    await f.say("Please fix the app", { conversationId: f.dm.id });
+    const turn = f.running()!;
+    const out = startTaskHandler(f.coordinator)(
+      { prompt: "Fix the flaky test in app", target },
+      { caller: { agentId: turn.agentId, serverId: SPARK } },
+    );
+    await f.coordinator.idle();
+    expect(f.store.get("tasks", out.taskId)?.status).toBe("running");
+    const brief = f.execution.agents.get(out.taskId)!.entries[0].item.text;
+    expect(brief).not.toContain("[Assistant Memory Snapshot");
+    expect(brief).toContain("Fix the flaky test in app");
   });
 
   it("authorizes a relayed tool call only from the assistant's own machine", async () => {

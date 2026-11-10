@@ -45,6 +45,7 @@ export interface TaskSpec {
   isolation: "worktree" | "directory";
   directory: string;
   serverId: string;
+  memoryContext?: string;
 }
 /** An agent a task's executor started (labelled with the executor as its parent). */
 export interface ChildAgent {

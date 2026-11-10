@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Assistant, Message, Task, Turn } from "../shared/contracts";
@@ -12,6 +15,14 @@ import {
 } from "./agent-tools";
 import { TASK_RECEIPT_LEAD, taskBrief } from "./prompts";
 import { deterministicTaskId } from "./task-events";
+import {
+  NOTE_SEGMENT_MAX,
+  channelSlug,
+  isoWeekKey,
+  isSafeNoteSegment,
+  readMemorySnapshot,
+  syncTaskOutcomeToNotes,
+} from "./assistant-files";
 
 afterEach(closeFixtures);
 
@@ -779,5 +790,242 @@ describe("task brief", () => {
     expect(taskBrief({ prompt: "Fix it.", directory: "/work/app", isolation: "directory" })).toBe(
       "Fix it.",
     );
+  });
+
+  it("injects assistant read-only memory snapshot into task brief when provided", () => {
+    const brief = taskBrief({
+      prompt: "Add new endpoint.",
+      directory: "/work/app",
+      isolation: "worktree",
+      memoryContext:
+        "[MEMORY.md Index]\n- Always write unit tests\n\n[User Preferences]\n- Prefer TypeScript",
+    });
+    expect(brief).toContain(
+      "[Assistant Memory Snapshot (read-only context from your assistant home)]",
+    );
+    expect(brief).toContain("- Always write unit tests");
+    expect(brief).toContain("- Prefer TypeScript");
+    expect(brief).toContain(
+      "Do not write personal memory files (MEMORY.md, notes/*) inside this project directory",
+    );
+    expect(brief).toContain("You are working in an isolated Git worktree created from /work/app");
+    expect(brief.endsWith("Add new endpoint.")).toBe(true);
+  });
+});
+
+describe("channel slug safety", () => {
+  it("strips path traversal and keeps a single safe note segment", () => {
+    for (const [id, name] of [
+      ["../etc/passwd", "../../etc/passwd"],
+      ["/etc/passwd", "foo/../../bar"],
+      ["..", "."],
+      ["conv/id", "name with spaces and / slashes"],
+      [`${"a".repeat(200)}`, `${"b".repeat(300)}`],
+    ] as const) {
+      const slug = channelSlug(id, name);
+      expect(isSafeNoteSegment(slug)).toBe(true);
+      expect(slug).not.toContain("..");
+      expect(slug).not.toContain("/");
+      expect(slug).not.toContain("\\");
+      expect(slug.length).toBeLessThanOrEqual(NOTE_SEGMENT_MAX);
+    }
+    expect(channelSlug("", "")).toBe("channel");
+    expect(channelSlug("conv-1", "General")).toBe("general-conv1");
+  });
+});
+
+describe("task outcome note sync", () => {
+  const cleanup: Array<() => void> = [];
+  afterEach(() => {
+    for (const close of cleanup.splice(0)) close();
+  });
+  function notesHome() {
+    const dir = mkdtempSync(path.join(tmpdir(), "bigbang-notes-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  }
+  function outcome(
+    dir: string,
+    extra: Partial<Parameters<typeof syncTaskOutcomeToNotes>[1]> & { taskId: string },
+  ) {
+    syncTaskOutcomeToNotes(dir, {
+      anchor: extra.anchor ?? extra.taskId,
+      title: extra.title ?? extra.taskId,
+      status: extra.status ?? "completed",
+      directory: extra.directory ?? "/work/repo",
+      conversationId: extra.conversationId ?? "conv-1",
+      conversationName: extra.conversationName ?? "General",
+      summary: extra.summary ?? `${extra.taskId} done`,
+      timestampMs: extra.timestampMs ?? Date.now(),
+      ...extra,
+    });
+  }
+
+  it("writes idempotently to work-log and maintains at most 5 outcomes in channels", () => {
+    const dir = notesHome();
+    const now = Date.now();
+    const { week } = isoWeekKey(now);
+
+    outcome(dir, {
+      taskId: "task-1",
+      anchor: "anchor-1",
+      title: "First task",
+      summary: "First pass done",
+      timestampMs: now,
+    });
+
+    const workLogPath = path.join(dir, "notes", "work-log", `${week}.md`);
+    expect(existsSync(workLogPath)).toBe(true);
+    let workLog = readFileSync(workLogPath, "utf8");
+    expect(workLog).toContain("<!-- task-outcome:task-1:anchor-1 -->");
+    expect(workLog).toContain("First pass done");
+
+    outcome(dir, {
+      taskId: "task-1",
+      anchor: "anchor-1",
+      title: "First task",
+      summary: "Updated summary",
+      timestampMs: now,
+    });
+
+    workLog = readFileSync(workLogPath, "utf8");
+    const occurrences = workLog.split("<!-- task-outcome:task-1:anchor-1 -->").length - 1;
+    expect(occurrences).toBe(1);
+    expect(workLog).toContain("Updated summary");
+    expect(workLog).not.toContain("First pass done");
+
+    for (let i = 2; i <= 7; i++) {
+      outcome(dir, {
+        taskId: `task-${i}`,
+        anchor: `anchor-${i}`,
+        title: `Task ${i}`,
+        summary: `Result of task ${i}`,
+        timestampMs: now + i * 1000,
+      });
+    }
+
+    const slug = channelSlug("conv-1", "General");
+    const channelPath = path.join(dir, "notes", "channels", `${slug}.md`);
+    expect(existsSync(channelPath)).toBe(true);
+    const channelNotes = readFileSync(channelPath, "utf8");
+    expect(channelNotes).toContain("## Recent Durable Outcomes");
+    expect(channelNotes).toContain("<!-- recent-durable-outcomes:start -->");
+    expect(channelNotes).toContain("<!-- recent-durable-outcomes:end -->");
+
+    expect(channelNotes).toContain("<!-- task-id:task-7 -->");
+    expect(channelNotes).toContain("<!-- task-id:task-6 -->");
+    expect(channelNotes).toContain("<!-- task-id:task-5 -->");
+    expect(channelNotes).toContain("<!-- task-id:task-4 -->");
+    expect(channelNotes).toContain("<!-- task-id:task-3 -->");
+    expect(channelNotes).not.toContain("<!-- task-id:task-1 -->");
+    expect(channelNotes).not.toContain("<!-- task-id:task-2 -->");
+    const start = channelNotes.indexOf("<!-- recent-durable-outcomes:start -->");
+    const end = channelNotes.indexOf("<!-- recent-durable-outcomes:end -->");
+    const bullets = channelNotes
+      .slice(start, end)
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+    expect(bullets).toHaveLength(5);
+  });
+
+  it("preserves agent-written content outside the managed outcomes markers", () => {
+    const dir = notesHome();
+    const now = Date.now();
+    const { week } = isoWeekKey(now);
+    outcome(dir, { taskId: "task-keep", title: "Keep me", timestampMs: now });
+
+    const slug = channelSlug("conv-1", "General");
+    const channelPath = path.join(dir, "notes", "channels", `${slug}.md`);
+    const workLogPath = path.join(dir, "notes", "work-log", `${week}.md`);
+    writeFileSync(
+      channelPath,
+      `# Channel: #General\n\nAgent decision: always use worktrees.\n\n## Recent Durable Outcomes\n<!-- recent-durable-outcomes:start -->\n- [2026-01-01] **Keep me** (completed): first ${"<!-- task-id:task-keep -->"}\n<!-- recent-durable-outcomes:end -->\n\n## Other notes\nDo not drop this section.\n`,
+    );
+    writeFileSync(
+      workLogPath,
+      `# Work Log (${week})\n\nAgent preamble stays.\n- [2026-01-01] **Keep me** (completed in /work/repo): first <!-- task-outcome:task-keep:task-keep -->\nAgent epilogue stays.\n`,
+    );
+
+    outcome(dir, {
+      taskId: "task-keep",
+      title: "Keep me",
+      summary: "updated",
+      timestampMs: now,
+    });
+    outcome(dir, {
+      taskId: "task-new",
+      title: "New",
+      summary: "another",
+      timestampMs: now + 1,
+    });
+
+    const channelNotes = readFileSync(channelPath, "utf8");
+    expect(channelNotes).toContain("Agent decision: always use worktrees.");
+    expect(channelNotes).toContain("## Other notes");
+    expect(channelNotes).toContain("Do not drop this section.");
+    expect(channelNotes).toContain("<!-- task-id:task-keep -->");
+    expect(channelNotes).toContain("updated");
+    expect(channelNotes).toContain("<!-- task-id:task-new -->");
+    expect((channelNotes.match(/## Recent Durable Outcomes/g) ?? []).length).toBe(1);
+
+    const workLog = readFileSync(workLogPath, "utf8");
+    expect(workLog).toContain("Agent preamble stays.");
+    expect(workLog).toContain("Agent epilogue stays.");
+    expect(workLog.split("<!-- task-outcome:task-keep:task-keep -->").length - 1).toBe(1);
+    expect(workLog).toContain("updated");
+    expect(workLog).toContain("<!-- task-outcome:task-new:task-new -->");
+  });
+
+  it("never writes channel notes outside the assistant home for traversal-like names", () => {
+    const parent = notesHome();
+    const dir = path.join(parent, "home");
+    writeFileSync(path.join(parent, "secret.md"), "SECRET");
+    outcome(dir, {
+      taskId: "task-x",
+      conversationId: "../secret",
+      conversationName: "../../etc/passwd",
+    });
+    expect(readFileSync(path.join(parent, "secret.md"), "utf8")).toBe("SECRET");
+    expect(existsSync(path.join(parent, "passwd.md"))).toBe(false);
+    expect(existsSync(path.join(parent, "etc"))).toBe(false);
+    const channels = path.join(dir, "notes", "channels");
+    expect(existsSync(channels)).toBe(true);
+    expect(readMemorySnapshot(dir, "../secret").channelOutcomes).toBe("");
+    expect(readMemorySnapshot(dir, "../../etc/passwd").channelOutcomes).toBe("");
+  });
+
+  it("syncs outcome to assistant home notes when assistant starts a task", async () => {
+    const f = setup();
+    const homeDir = path.join(f.directory, "assistants", f.ada.id);
+    writeFileSync(path.join(homeDir, "MEMORY.md"), "Likes TypeScript");
+
+    const turn = await f.reply();
+    const { taskId } = f.call(turn, { target: LOCAL, title: "Autonomous fix" });
+    await f.coordinator.idle();
+
+    // Verify task agent received injected memory context from Ada's home
+    const agent = f.execution.agents.get(taskId)!;
+    expect(agent.entries[0].item.text).toContain(
+      "[Assistant Memory Snapshot (read-only context from your assistant home)]",
+    );
+    expect(agent.entries[0].item.text).toContain("Likes TypeScript");
+
+    await f.finishTask(taskId, "Autonomous fix complete");
+    await f.coordinator.sweep();
+    await f.coordinator.sweep();
+
+    const { week } = isoWeekKey(f.clock.t);
+    const workLogPath = path.join(homeDir, "notes", "work-log", `${week}.md`);
+    expect(existsSync(workLogPath)).toBe(true);
+    const workLog = readFileSync(workLogPath, "utf8");
+    expect(workLog).toContain("Autonomous fix");
+    expect(workLog.split(`<!-- task-outcome:${taskId}:${taskId} -->`).length - 1).toBe(1);
+
+    const channelSlugStr = channelSlug(f.dm.id, f.dm.name);
+    const channelPath = path.join(homeDir, "notes", "channels", `${channelSlugStr}.md`);
+    expect(existsSync(channelPath)).toBe(true);
+    const channelNotes = readFileSync(channelPath, "utf8");
+    expect(channelNotes).toContain("Autonomous fix");
+    expect(channelNotes.split(`<!-- task-id:${taskId} -->`).length - 1).toBe(1);
   });
 });

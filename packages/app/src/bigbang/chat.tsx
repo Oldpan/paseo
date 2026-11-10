@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { text as type } from "./ui/theme";
 import { randomUUID } from "expo-crypto";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -53,9 +53,11 @@ import type { GroupComposerState } from "./ui/GroupComposer";
 interface ChatProps {
   data: BigbangData;
   palette: Palette;
+  hostLabels?: Record<string, string>;
   onTask(): void;
   onOpenTask(task: Task): void;
   onOpenTurn(turn: Turn): void;
+  onOpenStudio?(conversationId: string, threadId: string | null): void;
   onEditAssistant(id: string): void;
   onSidebar?(): void;
 }
@@ -73,6 +75,46 @@ const TASKS = { padding: 20, gap: 12 };
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const HINT_DEBOUNCE_MS = 150;
 function noMention() {}
+function machineLabel(
+  serverId: string | undefined,
+  coordinatorId: string,
+  hosts: ReadonlyArray<{ serverId: string; label: string }>,
+  hostLabels?: Record<string, string>,
+): string {
+  const machineId = serverId ?? coordinatorId;
+  return (
+    hostLabels?.[machineId] ?? hosts.find((host) => host.serverId === machineId)?.label ?? machineId
+  );
+}
+/** ChatHeader line under the title: machine · provider for a DM, count · machines for a group. */
+function headerSubtitle(
+  conversation: { kind: string; members: readonly string[] } | undefined,
+  assistant: Assistant | undefined,
+  assistants: readonly Assistant[],
+  coordinatorId: string,
+  hosts: ReadonlyArray<{ serverId: string; label: string }>,
+  hostLabels?: Record<string, string>,
+): string | undefined {
+  if (conversation?.kind === "dm" && assistant)
+    return [machineLabel(assistant.serverId, coordinatorId, hosts, hostLabels), assistant.provider]
+      .filter(Boolean)
+      .join(" · ");
+  if (conversation?.kind !== "group") return undefined;
+  const groupMembers = assistants.filter((item) => conversation.members.includes(item.id));
+  const names = [
+    ...new Set(
+      groupMembers.map((item) => machineLabel(item.serverId, coordinatorId, hosts, hostLabels)),
+    ),
+  ];
+  return `${groupMembers.length} assistants${names.length ? ` · ${names.join(", ")}` : ""}`;
+}
+function headerEdit(
+  kind: string | undefined,
+  assistant: Assistant | undefined,
+  edit: () => void,
+): (() => void) | undefined {
+  return kind === "dm" && assistant ? edit : undefined;
+}
 /** Task navigation and RPCs shared by the cards, receipt rows and the Tasks tab. */
 function useTaskWiring(
   data: BigbangData,
@@ -139,19 +181,118 @@ function TasksTab({
     </ScrollView>
   );
 }
+function computeThreadTitle(
+  threadId: string | null,
+  tasks: readonly Task[],
+  roundtable: RoundtableProgress | null,
+): string {
+  const taskId = taskIdOfThread(threadId);
+  if (!taskId) return roundtableTitle(roundtable);
+  const threadTask = tasks.find((task) => task.id === taskId);
+  return `Task thread${threadTask ? `: ${taskTitle(threadTask)}` : ""}`;
+}
+
+function chatHeaderTitle(
+  conversation: { kind: string; name: string } | undefined,
+  assistant: Assistant | undefined,
+): string {
+  if (conversation?.kind === "dm") return assistant?.name ?? "Bigbang";
+  return conversation?.name ?? "Bigbang";
+}
+
+function ChatSplitPane({
+  props,
+  compact,
+  threadId,
+  roundtable,
+  wiring,
+  threadTitle,
+  threadStyle,
+  leaveThread,
+  onOpenStudioThread,
+}: {
+  props: ChatProps;
+  compact: boolean;
+  threadId: string | null;
+  roundtable: RoundtableProgress | null;
+  wiring: TaskWiring;
+  threadTitle: string;
+  threadStyle: StyleProp<ViewStyle>;
+  leaveThread(): void;
+  onOpenStudioThread?: () => void;
+}) {
+  return (
+    <View style={SPLIT}>
+      {!compact || !threadId ? (
+        <ConversationPane
+          key="root"
+          {...props}
+          threadId={null}
+          phone={compact}
+          roundtable={null}
+          wiring={wiring}
+        />
+      ) : null}
+      {threadId ? (
+        <View style={compact ? FLEX : threadStyle}>
+          <ThreadHeader
+            onClose={leaveThread}
+            compact={compact}
+            title={threadTitle}
+            onOpenStudio={onOpenStudioThread}
+          />
+          <ConversationPane
+            key={threadId}
+            {...props}
+            threadId={threadId}
+            phone={compact}
+            roundtable={roundtable}
+            wiring={wiring}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export function BigbangChat(props: ChatProps) {
   const { data, palette, onEditAssistant, onSidebar } = props;
   const compact = useIsCompactFormFactor();
   const chatId = useBigbangView((state) => state.chatId);
+  const coordinatorId = useBigbangView((state) => state.coordinatorId);
   const threadId = useBigbangView((state) => state.threadId);
   const setThread = useBigbangView((state) => state.setThread);
   const [tab, setTab] = useState("chat");
   const conversation = data.state.conversations.find((item) => item.id === chatId);
   const assistant = data.state.assistants.find((item) => item.id === conversation?.members[0]);
+  const hosts = useHosts();
   const leaveThread = useCallback(() => setThread(null), [setThread]);
   const edit = useCallback(() => {
     if (assistant) onEditAssistant(assistant.id);
   }, [assistant, onEditAssistant]);
+  const onOpenStudio = props.onOpenStudio;
+  const conversationId = conversation?.id;
+  const openStudioRoot = useCallback(() => {
+    if (conversationId && onOpenStudio) onOpenStudio(conversationId, null);
+  }, [conversationId, onOpenStudio]);
+  const openStudioThread = useCallback(() => {
+    if (conversationId && threadId && onOpenStudio) onOpenStudio(conversationId, threadId);
+  }, [conversationId, onOpenStudio, threadId]);
+  const onOpenStudioRootProp = conversation && onOpenStudio ? openStudioRoot : undefined;
+  const onOpenStudioThreadProp =
+    conversation && threadId && onOpenStudio ? openStudioThread : undefined;
+  const subtitle = useMemo(
+    () =>
+      headerSubtitle(
+        conversation,
+        assistant,
+        data.state.assistants,
+        coordinatorId,
+        hosts,
+        props.hostLabels,
+      ),
+    [assistant, conversation, coordinatorId, data.state.assistants, hosts, props.hostLabels],
+  );
   const roundtable = useMemo(
     () => roundtableProgress(data.state.messages, data.state.turns, chatId, threadId),
     [chatId, data.state.messages, data.state.turns, threadId],
@@ -161,48 +302,36 @@ export function BigbangChat(props: ChatProps) {
     [palette.retroBorder],
   );
   const wiring = useTaskWiring(data, props.onOpenTask, setTab);
-  const threadTask = data.state.tasks.find((task) => task.id === taskIdOfThread(threadId));
-  const threadTitle = taskIdOfThread(threadId)
-    ? `Task thread${threadTask ? `: ${taskTitle(threadTask)}` : ""}`
-    : roundtableTitle(roundtable);
+  const threadTitle = useMemo(
+    () => computeThreadTitle(threadId, data.state.tasks, roundtable),
+    [data.state.tasks, roundtable, threadId],
+  );
   return (
     <View style={FLEX}>
       <ChatHeader
-        label={(conversation?.kind === "dm" ? assistant?.name : conversation?.name) ?? "Bigbang"}
+        label={chatHeaderTitle(conversation, assistant)}
         seed={`${assistant?.id}:${assistant?.name}`}
         group={conversation?.kind === "group"}
+        subtitle={subtitle}
         connected={data.connected}
         tab={tab}
         onTab={setTab}
         onSidebar={onSidebar}
-        onEdit={assistant ? edit : undefined}
+        onEdit={headerEdit(conversation?.kind, assistant, edit)}
+        onOpenStudio={onOpenStudioRootProp}
       />
       {tab === "chat" ? (
-        <View style={SPLIT}>
-          {!compact || !threadId ? (
-            <ConversationPane
-              key="root"
-              {...props}
-              threadId={null}
-              phone={compact}
-              roundtable={null}
-              wiring={wiring}
-            />
-          ) : null}
-          {threadId ? (
-            <View style={compact ? FLEX : threadStyle}>
-              <ThreadHeader onClose={leaveThread} compact={compact} title={threadTitle} />
-              <ConversationPane
-                key={threadId}
-                {...props}
-                threadId={threadId}
-                phone={compact}
-                roundtable={roundtable}
-                wiring={wiring}
-              />
-            </View>
-          ) : null}
-        </View>
+        <ChatSplitPane
+          props={props}
+          compact={compact}
+          threadId={threadId}
+          roundtable={roundtable}
+          wiring={wiring}
+          threadTitle={threadTitle}
+          threadStyle={threadStyle}
+          leaveThread={leaveThread}
+          onOpenStudioThread={onOpenStudioThreadProp}
+        />
       ) : null}
       {tab === "task" ? <TasksTab data={data} palette={palette} wiring={wiring} /> : null}
       {tab === "memory" ? (
@@ -276,6 +405,14 @@ function ConversationPane({
     () => new Map(data.state.messages.map((message) => [message.id, message])),
     [data.state.messages],
   );
+  const assistantsById = useMemo(
+    () => new Map(data.state.assistants.map((assistant) => [assistant.id, assistant])),
+    [data.state.assistants],
+  );
+  const tasksById = useMemo(
+    () => new Map(data.state.tasks.map((task) => [task.id, task])),
+    [data.state.tasks],
+  );
   const pendingMessage = useRef<{
     id: string;
     content: string;
@@ -340,7 +477,7 @@ function ConversationPane({
     const nameOf = (senderId: string) => {
       if (senderId === "user") return "You";
       if (senderId === "system") return "System";
-      return data.state.assistants.find((item) => item.id === senderId)?.name ?? "Assistant";
+      return assistantsById.get(senderId)?.name ?? "Assistant";
     };
     return sortMessages(
       data.state.messages.filter(
@@ -349,8 +486,8 @@ function ConversationPane({
           (message.threadId === threadId || message.id === threadId),
       ),
     ).map((message) => {
-      const task = data.state.tasks.find((item) => item.id === message.taskId);
-      const assistant = data.state.assistants.find((item) => item.id === message.senderId);
+      const task = message.taskId ? tasksById.get(message.taskId) : undefined;
+      const assistant = assistantsById.get(message.senderId);
       const original = message.quoteOf ? messagesById.get(message.quoteOf) : undefined;
       const taskId = message.taskId;
       const inTaskThread = threadId !== null && message.id === threadId;
@@ -381,8 +518,7 @@ function ConversationPane({
           task && isTaskRoot(message)
             ? {
                 task,
-                assistantName: data.state.assistants.find((item) => item.id === task.assistantId)
-                  ?.name,
+                assistantName: assistantsById.get(task.assistantId)?.name,
                 hostLabel: wiring.hostLabel(task.serverId),
                 inThread: inTaskThread,
                 actions: wiring.actionsFor(task, inTaskThread),
@@ -390,7 +526,17 @@ function ConversationPane({
             : undefined,
       };
     });
-  }, [chatId, conversation, data, messagesById, setThread, threadId, wiring]);
+  }, [
+    assistantsById,
+    chatId,
+    conversation,
+    data.state.messages,
+    messagesById,
+    setThread,
+    tasksById,
+    threadId,
+    wiring,
+  ]);
   const turns = useMemo(
     () =>
       data.state.turns
@@ -402,7 +548,7 @@ function ConversationPane({
             !turn.finalMessageId,
         )
         .map((turn) => {
-          const assistant = data.state.assistants.find((item) => item.id === turn.assistantId);
+          const assistant = assistantsById.get(turn.assistantId);
           return {
             turn,
             node: (
@@ -416,7 +562,7 @@ function ConversationPane({
             ),
           };
         }),
-    [chatId, coordinatorId, data, onOpenTurn, threadId],
+    [assistantsById, chatId, coordinatorId, data.state.turns, onOpenTurn, threadId],
   );
   useLiveTurnDemand(
     `bigbang:${draftKey}`,

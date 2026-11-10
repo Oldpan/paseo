@@ -18,10 +18,18 @@ export function FormFrame({
   const { palette: t } = useTheme();
   return (
     <View
+      accessibilityViewIsModal
+      pointerEvents="auto"
       style={{
-        flex: 1,
-        minHeight: 0,
-        backgroundColor: t.chatSurface,
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 50,
+        // Android draws `elevation` above sibling shadows; zIndex alone can lose to chat bubbles.
+        elevation: 50,
+        backgroundColor: "rgba(0,0,0,0.55)",
         alignItems: "center",
         justifyContent: "center",
         padding: 24,

@@ -245,6 +245,8 @@ export const readState = defineRpc({
     generation: z.string().optional(),
     // Long poll: with `after`, wait up to this long for the cursor to advance past it.
     waitMs: z.number().int().min(0).max(20000).optional(),
+    // Optional per-conversation message window on a full (after=0) snapshot.
+    messageLimit: z.number().int().min(1).max(2000).optional(),
   }),
   output: stateSchema,
 });
@@ -299,6 +301,7 @@ export const startTask = defineRpc({
       directory: true,
       provider: true,
       isolation: true,
+      title: true,
     })
     .extend({
       id: z.string().uuid(),

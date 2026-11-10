@@ -109,3 +109,37 @@ export const memberMemoryWrite = defineRpc({
   }),
   output: memoryOutput,
 });
+
+export const memberMemorySnapshot = defineRpc({
+  name: "member.memory.snapshot",
+  input: assistantHomeInput.extend({
+    slug: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9_-]{0,79}$/i)
+      .optional(),
+  }),
+  output: z.object({
+    memoryIndex: z.string(),
+    userPreferences: z.string(),
+    channelOutcomes: z.string(),
+  }),
+});
+
+export const taskOutcomeInputSchema = z.object({
+  taskId: z.string(),
+  anchor: z.string(),
+  title: z.string(),
+  status: z.enum(["completed", "failed", "cancelled"]),
+  directory: z.string(),
+  conversationId: z.string(),
+  conversationName: z.string().optional(),
+  summary: z.string(),
+  timestampMs: z.number(),
+});
+export type TaskOutcomeInput = z.output<typeof taskOutcomeInputSchema>;
+
+export const memberTaskOutcomeSync = defineRpc({
+  name: "member.task_outcome.sync",
+  input: assistantHomeInput.extend({ outcome: taskOutcomeInputSchema }),
+  output: z.object({ ok: z.literal(true) }),
+});

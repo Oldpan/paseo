@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { FlatList, ScrollView, Text, View, type ListRenderItemInfo } from "react-native";
 import { isNoteMessage } from "../model";
 import { BigbangInput } from "./FormChrome";
 import type {
@@ -86,20 +86,96 @@ export function ChatPane({
   peers?: ReactNode;
 }) {
   const { palette: t } = useTheme();
-  const list = useRef<ScrollView>(null);
+  const list = useRef<FlatList<MessageRow>>(null);
   const atBottom = useRef(true);
   useEffect(() => {
     if (atBottom.current) list.current?.scrollToEnd({ animated: false });
   }, [rows.length, turns.length]);
   // Streaming text grows the content without changing the row count.
-  const followContent = () => {
+  const followContent = useCallback(() => {
     if (atBottom.current) list.current?.scrollToEnd({ animated: false });
-  };
+  }, []);
+  const keyExtractor = useCallback((row: MessageRow) => row.message.id, []);
+  const renderRow = useCallback(({ item: row }: ListRenderItemInfo<MessageRow>) => {
+    if (row.event)
+      return (
+        <TaskEventRow
+          id={row.message.id}
+          note={row.event.note}
+          onOpen={row.event.onOpen}
+          respond={row.event.respond}
+        />
+      );
+    if (isNoteMessage(row.message))
+      return <NoteRow id={row.message.id} content={row.note ?? row.message.content} />;
+    if (row.taskCard?.inThread)
+      return (
+        <View testID={`message-${row.message.id}`} style={{ padding: 4 }}>
+          <TaskCard {...row.taskCard} />
+        </View>
+      );
+    return (
+      <ChatMessage
+        id={row.message.id}
+        content={row.message.content}
+        sender={row.sender}
+        seed={row.seed}
+        user={row.message.senderId === "user"}
+        createdAt={row.message.createdAt}
+        replyCount={row.replyCount}
+        onReply={row.reply}
+        onQuote={row.onQuote}
+        quote={row.quote}
+      >
+        {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
+      </ChatMessage>
+    );
+  }, []);
+  const footer = useMemo(
+    () =>
+      turns.length > 0 || peers ? (
+        <>
+          {turns.map((item) => (
+            <View key={item.turn.id}>{item.node}</View>
+          ))}
+          {peers}
+        </>
+      ) : null,
+    [peers, turns],
+  );
+  const empty = useMemo(
+    () =>
+      !rows.length ? (
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 32,
+            gap: 10,
+          }}
+        >
+          <Text style={type(t.textPrimary, 22, { fontWeight: "700" })}>Start a conversation</Text>
+          <Text style={type(t.textMuted, 13, { textAlign: "center" })}>
+            Your assistant keeps its identity and memory across projects.
+          </Text>
+        </View>
+      ) : null,
+    [rows.length, t.textMuted, t.textPrimary],
+  );
   return (
     <View style={{ flex: 1, minWidth: 0, minHeight: 0, backgroundColor: t.chatSurface }}>
-      <ScrollView
+      <FlatList
         ref={list}
         testID="chat-message-scroll"
+        data={rows}
+        keyExtractor={keyExtractor}
+        renderItem={renderRow}
+        ListFooterComponent={footer}
+        ListEmptyComponent={empty}
+        initialNumToRender={24}
+        maxToRenderPerBatch={16}
+        windowSize={7}
         keyboardShouldPersistTaps="handled"
         style={{ flex: 1, minHeight: 0 }}
         contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 12, flexGrow: 1 }}
@@ -109,65 +185,7 @@ export function ChatPane({
           atBottom.current =
             e.contentSize.height - e.layoutMeasurement.height - e.contentOffset.y < 80;
         }}
-      >
-        {rows.map((row) =>
-          row.event ? (
-            <TaskEventRow
-              key={row.message.id}
-              id={row.message.id}
-              note={row.event.note}
-              onOpen={row.event.onOpen}
-              respond={row.event.respond}
-            />
-          ) : isNoteMessage(row.message) ? (
-            <NoteRow
-              key={row.message.id}
-              id={row.message.id}
-              content={row.note ?? row.message.content}
-            />
-          ) : row.taskCard?.inThread ? (
-            <View key={row.message.id} testID={`message-${row.message.id}`} style={{ padding: 4 }}>
-              <TaskCard {...row.taskCard} />
-            </View>
-          ) : (
-            <ChatMessage
-              key={row.message.id}
-              id={row.message.id}
-              content={row.message.content}
-              sender={row.sender}
-              seed={row.seed}
-              user={row.message.senderId === "user"}
-              createdAt={row.message.createdAt}
-              replyCount={row.replyCount}
-              onReply={row.reply}
-              onQuote={row.onQuote}
-              quote={row.quote}
-            >
-              {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
-            </ChatMessage>
-          ),
-        )}
-        {turns.map((item) => (
-          <View key={item.turn.id}>{item.node}</View>
-        ))}
-        {peers}
-        {!rows.length ? (
-          <View
-            style={{
-              flex: 1,
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 32,
-              gap: 10,
-            }}
-          >
-            <Text style={type(t.textPrimary, 22, { fontWeight: "700" })}>Start a conversation</Text>
-            <Text style={type(t.textMuted, 13, { textAlign: "center" })}>
-              Your assistant keeps its identity and memory across projects.
-            </Text>
-          </View>
-        ) : null}
-      </ScrollView>
+      />
       {error ? (
         <Text
           accessibilityRole="alert"

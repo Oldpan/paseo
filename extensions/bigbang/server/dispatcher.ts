@@ -67,6 +67,8 @@ export interface DispatcherDeps {
   admit(turn: Turn): boolean;
   /** The execution confirmed a turn: it has the message. */
   accepted(turn: Turn): void;
+  /** Formats a memory hint when a session is fresh (first turn, branch, rollover). */
+  memoryHint?: (turn: Turn, assistant: Assistant, isFreshSession: boolean) => string;
 }
 
 // A turn is persisted `prepared` before anything is sent. If the process dies in between, the
@@ -228,6 +230,7 @@ export class Dispatcher {
         "This chat already has an execution with another model. Keep that model or start a new chat; it will not create a second execution automatically.",
       );
     const state = store.snapshot();
+    const isFreshSession = !session.lastMessageId;
     // A roundtable thread's root message is part of the discussion but lives outside the thread.
     const rootId = turn.kind === "roundtable" ? turn.threadId : null;
     let delta = unseenMessages(state.messages, session, state.turns, rootId);
@@ -239,6 +242,10 @@ export class Dispatcher {
       prompt = delta.length > 0 ? `${prompt}\n\n${turn.prompt}` : turn.prompt;
     if (instructions !== session.lastInstructions)
       prompt = `Updated assistant instructions:\n${instructions}\n\n${prompt}`;
+    if (isFreshSession && this.deps.memoryHint && !turn.mailboxId) {
+      const hint = this.deps.memoryHint(turn, assistant, isFreshSession);
+      if (hint?.trim()) prompt = `${hint.trim()}\n\n${prompt}`;
+    }
     const history = laneMessages(state.messages, turn.conversationId, turn.threadId, rootId);
     const threadUsers = laneMessages(state.messages, turn.conversationId, turn.threadId);
     const prepared: Turn = {
