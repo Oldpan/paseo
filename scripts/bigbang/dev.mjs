@@ -20,6 +20,15 @@ export function createDevProfile(repoRoot, inheritedEnv) {
     const isExpoSetting = key.startsWith("EXPO_");
     if (!isPaseoSetting && !isExpoSetting && key !== "APP_VARIANT") env[key] = value;
   }
+  const noProxyEntries = new Set(
+    (inheritedEnv.NO_PROXY || inheritedEnv.no_proxy || "localhost,127.0.0.1,::1,0.0.0.0")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  noProxyEntries.add("100.107.11.10");
+  noProxyEntries.add("100.72.105.59");
+  const noProxy = [...noProxyEntries].join(",");
   Object.assign(env, {
     PASEO_HOME: home,
     PASEO_BIGBANG_BUILD: "1",
@@ -34,6 +43,8 @@ export function createDevProfile(repoRoot, inheritedEnv) {
     APP_VARIANT: "bigbang",
     EXPO_PORT: "8181",
     BROWSER: "none",
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
   });
   return { repoRoot, stateRoot, home, origins, env };
 }

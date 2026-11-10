@@ -240,12 +240,12 @@ async function sendAndAwaitTurn(coordinator, { conversationId, threadId, content
   return { messageId, result };
 }
 
-function taskCompletionProbe(coordinator, taskId, resources) {
+function taskCompletionProbe(coordinator, taskId, resources, workspaceKey = "taskWorkspaceId") {
   return async () => {
     const state = await invoke(coordinator, "chat.state", { after: 0 });
     const task = state.tasks.find((item) => item.id === taskId);
     if (!task) return null;
-    if (task.execution?.workspaceId) resources.taskWorkspaceId = task.execution.workspaceId;
+    if (task.execution?.workspaceId) resources[workspaceKey] = task.execution.workspaceId;
     if (task.status === "failed" || task.status === "cancelled") {
       throw new Error(`Task ended prematurely: ${task.status} (${task.error ?? "no error"})`);
     }
@@ -285,6 +285,22 @@ async function cleanupSmokeResources(client, resources, evidence) {
       if (workspaceId) resources.taskWorkspaceId = workspaceId;
     });
   }
+  if (!resources.skyTaskWorkspaceId && resources.skyTaskId) {
+    await ignoreError("lookup sky task workspace", async () => {
+      const workspaceId = await lookupTaskWorkspaceId(coordinator, resources.skyTaskId);
+      if (workspaceId) resources.skyTaskWorkspaceId = workspaceId;
+    });
+  }
+  if (resources.taskId) {
+    await ignoreError("cancel task", () =>
+      invoke(coordinator, "chat.task.cancel", { id: resources.taskId }),
+    );
+  }
+  if (resources.skyTaskId) {
+    await ignoreError("cancel sky task", () =>
+      invoke(coordinator, "chat.task.cancel", { id: resources.skyTaskId }),
+    );
+  }
   if (resources.studioId) {
     await ignoreError("archive studio", () =>
       invoke(coordinator, "studio.archive", { id: resources.studioId }),
@@ -293,6 +309,11 @@ async function cleanupSmokeResources(client, resources, evidence) {
   if (resources.taskWorkspaceId) {
     await ignoreError("archive task workspace", () =>
       client.workspaces.archive(resources.taskWorkspaceId),
+    );
+  }
+  if (resources.skyTaskWorkspaceId) {
+    await ignoreError("archive sky task workspace", () =>
+      coordinator.workspaces.archive(resources.skyTaskWorkspaceId),
     );
   }
   if (resources.tempDir) {
@@ -316,6 +337,8 @@ async function cleanupSmokeResources(client, resources, evidence) {
     tempDir: resources.tempDir ?? null,
     studioId: resources.studioId ?? null,
     taskWorkspaceId: resources.taskWorkspaceId ?? null,
+    skyTaskId: resources.skyTaskId ?? null,
+    skyTaskWorkspaceId: resources.skyTaskWorkspaceId ?? null,
     coordinatorDisposed,
   };
   if (evidence.step5) evidence.step5.cleanedUp = true;
@@ -366,7 +389,13 @@ async function step1(coordinator, evidence) {
       dmId: maxDm.id,
     },
   };
-  return { sky, max, skyDm, maxDm };
+  return {
+    sky,
+    max,
+    skyDm,
+    maxDm,
+    coordinatorMachine: machinesResult.coordinatorMachine,
+  };
 }
 
 async function step2(coordinator, { sky, max }, evidence) {
@@ -430,9 +459,14 @@ async function step3(coordinator, { skyDm, maxDm }, evidence) {
   };
 }
 
-async function step4(coordinator, { max, maxDm }, resources, evidence) {
+async function step4(
+  coordinator,
+  { sky, max, skyDm, maxDm, coordinatorMachine },
+  resources,
+  evidence,
+) {
   console.log(
-    "\n[Step 4] Starting task execution on Max and verifying deterministic notes sync...",
+    "\n[Step 4] Starting task execution on Max and verifying concurrent chat & notes sync...",
   );
   const taskId = randomUUID();
   resources.taskId = taskId;
@@ -453,15 +487,36 @@ async function step4(coordinator, { max, maxDm }, resources, evidence) {
   if (startedTask.execution?.workspaceId) {
     resources.taskWorkspaceId = startedTask.execution.workspaceId;
   }
-  console.log(`Task started: ${taskId} in ${resources.tempDir}`);
+  console.log(`Max task started: ${taskId} in ${resources.tempDir}`);
 
-  const taskResult = await poll(taskCompletionProbe(coordinator, taskId, resources), {
-    timeoutMs: 120000,
-    intervalMs: 2000,
-    description: "task completion and committed result message",
+  console.log("Sending concurrent chat message to Max while task runs...");
+  const maxChatPromise = sendAndAwaitTurn(coordinator, {
+    conversationId: maxDm.id,
+    threadId: null,
+    content: "While your task runs, reply with MAX_CHAT_CONCURRENT_OK only.",
+    label: "Max (concurrent chat)",
   });
+
+  const [maxChatTurn, taskResult] = await Promise.all([
+    maxChatPromise,
+    poll(taskCompletionProbe(coordinator, taskId, resources, "taskWorkspaceId"), {
+      timeoutMs: 120000,
+      intervalMs: 2000,
+      description: "Max task completion and committed result message",
+    }),
+  ]);
   resources.taskWorkspaceId = taskResult.task.execution.workspaceId;
-  console.log(`Task completed! Result message: "${taskResult.resultMessage.content}"`);
+  console.log(`Max task completed! Result message: "${taskResult.resultMessage.content}"`);
+  console.log(`Max concurrent chat reply: "${maxChatTurn.result.finalMsg.content}"`);
+
+  assert(taskResult.task.execution?.agentId, "Expected Max task to have an execution agentId");
+  assert(
+    maxChatTurn.result.turn.agentId !== taskResult.task.execution.agentId,
+    `Expected Max chat turn agentId (${maxChatTurn.result.turn.agentId}) to differ from task execution agentId (${taskResult.task.execution.agentId})`,
+  );
+  console.log(
+    `Verified Max chat turn agentId (${maxChatTurn.result.turn.agentId}) != task execution agentId (${taskResult.task.execution.agentId})`,
+  );
 
   const maxAssistantDir = path.join(stateRoot, "paseo-home", "bigbang", "assistants", max.id);
   const maxAssistantHome = existsSync(path.join(maxAssistantDir, "home", "notes"))
@@ -484,11 +539,82 @@ async function step4(coordinator, { max, maxDm }, resources, evidence) {
   console.log(`Verified work-log note at: ${workLogPath}`);
   console.log(`Verified channel note at: ${channelNotesPath}`);
 
+  console.log("\n[Step 4b] Starting task execution on Sky (Grok on Spark) with concurrent chat...");
+  const resolvedCoordinatorMachine =
+    coordinatorMachine ?? (await waitForMachines(coordinator)).coordinatorMachine;
+  const coordinatorServerId = sky.serverId ?? resolvedCoordinatorMachine.serverId;
+
+  const skyTaskId = randomUUID();
+  resources.skyTaskId = skyTaskId;
+
+  const startedSkyTask = await invoke(coordinator, "chat.task.start", {
+    id: skyTaskId,
+    conversationId: skyDm.id,
+    assistantId: sky.id,
+    serverId: coordinatorServerId,
+    directory: "/ai/code/paseo-bigbang",
+    provider: sky.provider,
+    isolation: "worktree",
+    title: "Sky smoke task verification",
+    prompt: "Reply with SKY_TASK_OK only. Do not create or modify any files.",
+  });
+  if (startedSkyTask.execution?.workspaceId) {
+    resources.skyTaskWorkspaceId = startedSkyTask.execution.workspaceId;
+  }
+  console.log(
+    `Sky task started: ${skyTaskId} in /ai/code/paseo-bigbang (worktree) on ${coordinatorServerId}`,
+  );
+
+  console.log("Sending concurrent chat message to Sky while task runs...");
+  const skyChatPromise = sendAndAwaitTurn(coordinator, {
+    conversationId: skyDm.id,
+    threadId: null,
+    content: "While your task runs, reply with SKY_CHAT_CONCURRENT_OK only.",
+    label: "Sky (concurrent chat)",
+  });
+
+  const [skyChatTurn, skyTaskResult] = await Promise.all([
+    skyChatPromise,
+    poll(taskCompletionProbe(coordinator, skyTaskId, resources, "skyTaskWorkspaceId"), {
+      timeoutMs: 120000,
+      intervalMs: 2000,
+      description: "Sky task completion and committed result message",
+    }),
+  ]);
+  resources.skyTaskWorkspaceId = skyTaskResult.task.execution.workspaceId;
+  console.log(`Sky task completed! Result message: "${skyTaskResult.resultMessage.content}"`);
+  console.log(`Sky concurrent chat reply: "${skyChatTurn.result.finalMsg.content}"`);
+
+  assert(skyTaskResult.task.execution?.agentId, "Expected Sky task to have an execution agentId");
+  assert(
+    skyChatTurn.result.turn.agentId !== skyTaskResult.task.execution.agentId,
+    `Expected Sky chat turn agentId (${skyChatTurn.result.turn.agentId}) to differ from task execution agentId (${skyTaskResult.task.execution.agentId})`,
+  );
+  console.log(
+    `Verified Sky chat turn agentId (${skyChatTurn.result.turn.agentId}) != task execution agentId (${skyTaskResult.task.execution.agentId})`,
+  );
+
   evidence.step4 = {
     taskId,
     startedTask,
     task: taskResult.task,
     resultMessage: taskResult.resultMessage,
+    maxChatTurn: {
+      messageId: maxChatTurn.messageId,
+      turnId: maxChatTurn.result.turn.id,
+      reply: maxChatTurn.result.finalMsg.content,
+      agentId: maxChatTurn.result.turn.agentId,
+    },
+    skyTaskId,
+    startedSkyTask,
+    skyTask: skyTaskResult.task,
+    skyResultMessage: skyTaskResult.resultMessage,
+    skyChatTurn: {
+      messageId: skyChatTurn.messageId,
+      turnId: skyChatTurn.result.turn.id,
+      reply: skyChatTurn.result.finalMsg.content,
+      agentId: skyChatTurn.result.turn.agentId,
+    },
     workLogPath,
     workLogContent,
     channelNotesPath,
@@ -579,6 +705,8 @@ async function main() {
     studioId: undefined,
     taskId: undefined,
     taskWorkspaceId: undefined,
+    skyTaskId: undefined,
+    skyTaskWorkspaceId: undefined,
   };
 
   try {

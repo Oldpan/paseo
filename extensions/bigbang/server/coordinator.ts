@@ -1043,7 +1043,7 @@ export class Coordinator {
           message.threadId === turn.threadId &&
           message.senderId === "user",
       );
-    if (!turn.taskId && latestUser?.id !== turn.seenUserId)
+    if (!turn.taskId && turn.kind !== "task_receipt" && latestUser?.id !== turn.seenUserId)
       return { status: "cancelled", error: SUPERSEDED };
     if (finish.outcome?.kind === "canceled")
       return { status: "cancelled", error: finish.outcome.reason };

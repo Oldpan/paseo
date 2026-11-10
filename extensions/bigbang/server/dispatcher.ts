@@ -4,6 +4,7 @@ import type { ChatStore } from "./store";
 import {
   assistantInstructions,
   bindChatSession,
+  boundHistoryThrough,
   chatPrompt,
   laneMessages,
   runnableChatTurns,
@@ -233,7 +234,8 @@ export class Dispatcher {
     const isFreshSession = !session.lastMessageId;
     // A roundtable thread's root message is part of the discussion but lives outside the thread.
     const rootId = turn.kind === "roundtable" ? turn.threadId : null;
-    let delta = unseenMessages(state.messages, session, state.turns, rootId);
+    const throughId = turn.kind === "task_receipt" ? turn.triggerId : undefined;
+    let delta = unseenMessages(state.messages, session, state.turns, rootId, throughId);
     if (turn.kind === "roundtable") delta = delta.slice(-ROUNDTABLE_HISTORY_LIMIT);
     const instructions = assistantInstructions(assistant);
     let prompt = this.turnPrompt(turn, assistant, chatPrompt(delta, assistant, state.assistants));
@@ -246,7 +248,11 @@ export class Dispatcher {
       const hint = this.deps.memoryHint(turn, assistant, isFreshSession);
       if (hint?.trim()) prompt = `${hint.trim()}\n\n${prompt}`;
     }
-    const history = laneMessages(state.messages, turn.conversationId, turn.threadId, rootId);
+    const history = boundHistoryThrough(
+      laneMessages(state.messages, turn.conversationId, turn.threadId, rootId),
+      throughId,
+      session.lastMessageId,
+    );
     const threadUsers = laneMessages(state.messages, turn.conversationId, turn.threadId);
     const prepared: Turn = {
       ...turn,
@@ -270,6 +276,7 @@ export class Dispatcher {
     if (turn.mailboxId) return turn.prompt;
     const store = this.deps.store;
     const conversation = store.get("conversations", turn.conversationId);
+    const body = turn.kind === "task_receipt" ? messages || `[${turn.prompt}]` : messages;
     if (conversation?.kind === "group")
       return `${groupPreamble({
         turn,
@@ -277,9 +284,8 @@ export class Dispatcher {
         conversation,
         assistants: store.snapshot().assistants,
         epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
-      })}\n\n${messages || "(no new messages)"}`;
-    const prompt =
-      messages || "Continue this roundtable discussion with another useful contribution.";
+      })}\n\n${body || "(no new messages)"}`;
+    const prompt = body || "Continue this roundtable discussion with another useful contribution.";
     return turn.kind === "task_receipt" ? `${TASK_RECEIPT_LEAD}\n\n${prompt}` : prompt;
   }
 }

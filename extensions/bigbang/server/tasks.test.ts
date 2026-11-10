@@ -374,6 +374,117 @@ describe("task thread and receipts", () => {
     await f.finishTask(taskId, "Done");
     await f.say("And one more thing", { conversationId: f.dm.id });
     expect(f.store.get("turns", `receipt:${taskId}`)?.status).not.toBe("cancelled");
+
+    await f.endReply(turn, "I started the task");
+    const receiptTurn = f.store.get("turns", `receipt:${taskId}`)!;
+    expect(receiptTurn.status).toBe("running");
+    await f.endReply(receiptTurn, "The task has finished");
+    expect(f.store.get("turns", receiptTurn.id)).toMatchObject({ status: "completed" });
+    expect(f.finals().some((m) => m.content === "The task has finished")).toBe(true);
+
+    const userTurn = f.store.snapshot().turns.findLast((item) => item.status === "running")!;
+    expect(userTurn.status).toBe("running");
+    expect(f.sentTo(userTurn)).toContain("You: And one more thing");
+    await f.endReply(userTurn, "Got your extra note");
+    expect(f.store.get("turns", userTurn.id)).toMatchObject({ status: "completed" });
+    expect(f.finals().some((m) => m.content === "Got your extra note")).toBe(true);
+
+    const turn2 = await f.reply("Start another job");
+    const { taskId: taskId2 } = f.call(turn2, { target: LOCAL, prompt: "Second job" });
+    await f.coordinator.idle();
+    await f.endReply(turn2, "Starting second job");
+
+    await f.finishTask(taskId2, "Second done");
+    const receiptTurn2 = f.store.get("turns", `receipt:${taskId2}`)!;
+    expect(receiptTurn2.status).toBe("running");
+
+    await f.say("New message while receipt is running", { conversationId: f.dm.id });
+    await f.endReply(receiptTurn2, "Second task completed");
+    expect(f.store.get("turns", receiptTurn2.id)).toMatchObject({ status: "completed" });
+    expect(f.finals().some((m) => m.content === "Second task completed")).toBe(true);
+
+    const userTurn2 = f.store.snapshot().turns.findLast((item) => item.status === "running")!;
+    expect(userTurn2.status).toBe("running");
+    expect(f.sentTo(userTurn2)).toContain("You: New message while receipt is running");
+    await f.endReply(userTurn2, "Processed your message while receipt was running");
+    expect(f.store.get("turns", userTurn2.id)).toMatchObject({ status: "completed" });
+  });
+
+  it("preserves messages and receipt when user writes both before task completion and before receipt runs", async () => {
+    const f = setup();
+    const turn1 = await f.reply("Start task");
+    const { taskId } = f.call(turn1, { target: LOCAL, prompt: "Background job" });
+    await f.coordinator.idle();
+
+    // User sends msg2 while turn1 is running
+    await f.say("Message 2 while turn1 is running", { conversationId: f.dm.id });
+
+    // Task finishes while turn1 is still running, so turn2 is in front of the receipt in the queue
+    await f.finishTask(taskId, "Task 1 finished");
+
+    // Turn 1 ends; turn2 runs next
+    await f.endReply(turn1, "Started background job");
+    const turn2 = f.store.snapshot().turns.findLast((item) => item.status === "running")!;
+    expect(turn2.status).toBe("running");
+
+    // Turn 2 ends with its reply
+    await f.endReply(turn2, "Answer to message 2");
+    expect(f.store.get("turns", turn2.id)).toMatchObject({ status: "completed" });
+
+    // User sends msg3 before receiptTurn runs to completion
+    await f.say("Message 3 before receipt runs", { conversationId: f.dm.id });
+
+    // Receipt runs next; its prompt has the bracketed fallback outcome
+    const receiptTurn = f.store.get("turns", `receipt:${taskId}`)!;
+    expect(receiptTurn.status).toBe("running");
+    expect(f.sentTo(receiptTurn)).toContain('["Background job" completed.\nTask 1 finished]');
+    await f.endReply(receiptTurn, "Noted task 1 is finished");
+    expect(f.store.get("turns", receiptTurn.id)).toMatchObject({ status: "completed" });
+
+    // Turn 3 runs next and was not dropped by the receipt turn
+    const turn3 = f.store.snapshot().turns.findLast((item) => item.status === "running")!;
+    expect(turn3.status).toBe("running");
+    expect(f.sentTo(turn3)).toContain("You: Message 3 before receipt runs");
+    await f.endReply(turn3, "Answer to message 3");
+    expect(f.store.get("turns", turn3.id)).toMatchObject({ status: "completed" });
+
+    expect(f.replies().map((m) => m.content)).toEqual([
+      "Answer to message 2",
+      "Noted task 1 is finished",
+      "Answer to message 3",
+    ]);
+  });
+
+  it("continues chatting in the main conversation while a task is running", async () => {
+    const f = setup();
+    const turn = await f.reply();
+    const { taskId } = f.call(turn, { target: LOCAL });
+    await f.coordinator.idle();
+    await f.endReply(turn, "Started task");
+
+    expect(f.task(taskId).status).toBe("running");
+
+    await f.say("While that runs, what is 2 + 2?", { conversationId: f.dm.id });
+    const chatTurn = f.store.snapshot().turns.findLast((item) => item.status === "running")!;
+    expect(chatTurn).toBeDefined();
+    expect(chatTurn.agentId).not.toBe(taskId);
+    expect(f.task(taskId).status).toBe("running");
+    expect(f.sentTo(chatTurn)).toContain("While that runs, what is 2 + 2?");
+
+    await f.endReply(chatTurn, "It is 4.");
+    expect(f.store.get("turns", chatTurn.id)?.status).toBe("completed");
+
+    await f.finishTask(taskId, "All tests pass");
+    const receipt = f.store.get("turns", `receipt:${taskId}`)!;
+    expect(receipt.status).toBe("running");
+    expect(receipt.agentId).toBe(chatTurn.agentId);
+    await f.endReply(receipt, "Task completed: All tests pass");
+    expect(f.store.get("turns", receipt.id)?.status).toBe("completed");
+    expect(f.replies().map((message) => message.content)).toEqual([
+      "Started task",
+      "It is 4.",
+      "Task completed: All tests pass",
+    ]);
   });
 
   it("reports a failure and a cancellation as receipts too", async () => {

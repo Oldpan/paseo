@@ -182,13 +182,33 @@ export function laneMessages(
       (message.threadId === threadId || (rootId != null && message.id === rootId)),
   );
 }
+export function boundHistoryThrough(
+  history: Message[],
+  throughId?: string,
+  lastMessageId?: string,
+): Message[] {
+  if (!throughId) return history;
+  const throughIndex = history.findIndex((message) => message.id === throughId);
+  if (throughIndex < 0) return history;
+  const lastIndex = lastMessageId
+    ? history.findIndex((message) => message.id === lastMessageId)
+    : -1;
+  const boundIndex = Math.max(throughIndex, lastIndex);
+  return history.slice(0, boundIndex + 1);
+}
+
 export function unseenMessages(
   messages: Message[],
   session: ChatSession,
   turns: Turn[] = [],
   rootId?: string | null,
+  throughId?: string,
 ): Message[] {
-  const history = laneMessages(messages, session.conversationId, session.threadId, rootId);
+  const history = boundHistoryThrough(
+    laneMessages(messages, session.conversationId, session.threadId, rootId),
+    throughId,
+    session.lastMessageId,
+  );
   // Lifecycle rows are interface chrome, except an outcome the assistant has yet to report. A task
   // the assistant started is already in its own history, so it is not told about it again.
   const visible = (message: Message) =>
