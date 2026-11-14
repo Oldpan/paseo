@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatStore } from "./store";
 import { Coordinator, type TurnEndedEvent } from "./coordinator";
 import { FakeExecution } from "./execution.fake";
-import { assistantInstructions } from "./chat-sessions";
+import { assistantInstructions, chatAgentTitle } from "./chat-sessions";
 import { BIGBANG_TOOLS_NOTE } from "./tools-note";
 import {
   MAX_MEMORY_INDEX_LINES,
@@ -783,5 +783,259 @@ describe("file memory", () => {
     expect(text).toContain("[Workspace memory to check if you need it]");
     expect(text).toContain("notes/work-log/");
     expect(text).toContain("You: What did we decide?");
+  });
+});
+
+describe("sub-thread fork_context and semantic Studio tab titles", () => {
+  it("forks main-lane context on the first sub-thread turn with a root header when main session is at or past root (Option 1), and does not fork again on turn 2", async () => {
+    const f = fixture();
+    const firstTurn = await f.say("Remember our launch codename is ORION");
+    f.execution.say(firstTurn.agentId, "Noted: ORION.", "m1");
+    f.execution.finish(firstTurn.agentId);
+    f.ended(firstTurn.agentId);
+    await f.coordinator.idle();
+
+    const secondTurn = await f.say("Also we use PostgreSQL 17");
+    f.execution.say(secondTurn.agentId, "Got it, PostgreSQL 17.", "m2");
+    f.execution.finish(secondTurn.agentId);
+    f.ended(secondTurn.agentId);
+    await f.coordinator.idle();
+
+    // User opens a sub-thread on the earlier message #1 (`firstTurn.triggerId`).
+    const threadMsg1 = randomUUID();
+    f.coordinator.send({
+      id: threadMsg1,
+      conversationId: f.conversation.id,
+      threadId: firstTurn.triggerId!,
+      content: "Should we keep that codename private?",
+    });
+    await f.coordinator.idle();
+
+    const threadTurn1 = f.store.snapshot().turns.find((t) => t.triggerId === threadMsg1)!;
+    expect(threadTurn1.agentId).not.toBe(firstTurn.agentId);
+    expect(threadTurn1.forkFromAgentId).toBe(firstTurn.agentId);
+    expect(f.execution.forkedFrom).toEqual([{ agentId: firstTurn.agentId }]);
+
+    const sent1 = f.execution.sent.find((item) => item.messageId === threadTurn1.id)!;
+    expect(sent1.attachments).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("ORION"),
+      }),
+    ]);
+    // Unseen main-lane delta is 0 messages (no duplicate main-lane body), with root anchor header prepended.
+    expect(sent1.text).toContain(
+      '[Thread started from message by You: "Remember our launch codename is ORION"]',
+    );
+    expect(sent1.text).not.toContain("You: Remember our launch codename is ORION");
+    expect(sent1.text).not.toContain("PostgreSQL 17");
+    expect(sent1.text).toContain("You: Should we keep that codename private?");
+    expect(f.execution.agents.get(firstTurn.agentId)?.title).toBe("Ada · DM");
+    expect(f.execution.agents.get(threadTurn1.agentId)?.title).toBe(
+      "Ada · Thread: Remember our launch ",
+    );
+
+    f.execution.say(threadTurn1.agentId, "Yes, keep ORION internal.", "tm1");
+    f.execution.finish(threadTurn1.agentId);
+    f.ended(threadTurn1.agentId);
+    await f.coordinator.idle();
+
+    // Second turn in the sub-thread does NOT call forkContext again.
+    const threadMsg2 = randomUUID();
+    f.coordinator.send({
+      id: threadMsg2,
+      conversationId: f.conversation.id,
+      threadId: firstTurn.triggerId!,
+      content: "Who else knows it?",
+    });
+    await f.coordinator.idle();
+
+    const threadTurn2 = f.store.snapshot().turns.find((t) => t.triggerId === threadMsg2)!;
+    expect(threadTurn2.agentId).toBe(threadTurn1.agentId);
+    expect(threadTurn2.forkFromAgentId).toBeUndefined();
+    expect(f.execution.forkedFrom).toHaveLength(1);
+    const sent2 = f.execution.sent.find((item) => item.messageId === threadTurn2.id)!;
+    expect(sent2.attachments).toBeUndefined();
+    expect(sent2.text).toBe("You: Who else knows it?");
+  });
+
+  it("includes unseen main-lane delta (lastMessageId, M] when root message M is after assistant's last main-lane turn", async () => {
+    const f = fixture();
+    const sky = f.coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Sky",
+      provider: "codex/test-model",
+      persona: " Peer ",
+    });
+    const channel = f.coordinator.createConversation({
+      id: randomUUID(),
+      name: "General",
+      kind: "group",
+      members: [f.assistant.id, sky.id],
+      roundtable: false,
+    });
+
+    // 1. User talks to @Ada in #General main lane.
+    const m1 = randomUUID();
+    f.coordinator.send({
+      id: m1,
+      conversationId: channel.id,
+      threadId: null,
+      content: "@Ada set baseline to v1",
+    });
+    await f.coordinator.idle();
+    const adaMainTurn = f.store.snapshot().turns.find((t) => t.triggerId === m1)!;
+    f.execution.say(adaMainTurn.agentId, "Baseline is v1.", "am1");
+    f.execution.finish(adaMainTurn.agentId);
+    f.ended(adaMainTurn.agentId);
+    await f.coordinator.idle();
+
+    // 2. User talks to @Sky in #General main lane (Ada is only recent/awareness and passes, or we check before Ada runs, or Sky replies).
+    // Let's post a message M2 and reply from Sky while Ada's mainSession cursor stays at m1.
+    const m2 = randomUUID();
+    const skyReplyId = randomUUID();
+    f.store.transaction(() => {
+      f.store.putMessage({
+        id: m2,
+        conversationId: channel.id,
+        threadId: null,
+        senderId: "user",
+        content: "@Sky deploy v2 to staging",
+        createdAt: Date.now(),
+        taskId: null,
+        kind: "user",
+      });
+      f.store.putMessage({
+        id: skyReplyId,
+        conversationId: channel.id,
+        threadId: null,
+        senderId: sky.id,
+        content: "Deployed v2 to staging cluster.",
+        createdAt: Date.now() + 1,
+        taskId: null,
+        kind: "final",
+      });
+    });
+
+    // 3. User starts a sub-thread on Sky's message `skyReplyId` (`M`) and asks `@Ada`.
+    const threadMsg = randomUUID();
+    f.coordinator.send({
+      id: threadMsg,
+      conversationId: channel.id,
+      threadId: skyReplyId,
+      content: "@Ada please verify the staging health check",
+    });
+    await f.coordinator.idle();
+
+    const adaThreadTurn = f.store
+      .snapshot()
+      .turns.find((t) => t.triggerId === threadMsg && t.assistantId === f.assistant.id)!;
+    expect(adaThreadTurn.forkFromAgentId).toBe(adaMainTurn.agentId);
+    const sent = f.execution.sent.find((item) => item.messageId === adaThreadTurn.id)!;
+    expect(sent.attachments).toHaveLength(1);
+    // Unseen main-lane delta (m1, skyReplyId] includes m2 and skyReplyId, but not m1 or Ada's own reply.
+    expect(sent.text).not.toContain("set baseline to v1");
+    expect(sent.text).not.toContain("Baseline is v1.");
+    expect(sent.text).toContain("You: @Sky deploy v2 to staging");
+    expect(sent.text).toContain("Sky: Deployed v2 to staging cluster.");
+    expect(sent.text).toContain("You: @Ada please verify the staging health check");
+    expect(f.execution.agents.get(adaMainTurn.agentId)?.title).toBe("Ada · #General");
+    expect(f.execution.agents.get(adaThreadTurn.agentId)?.title).toBe(
+      "Ada · #General › Deployed v2 to stagi",
+    );
+  });
+
+  it("includes main-lane messages up through M without fork_context when the assistant never spoke in the main lane", async () => {
+    const f = fixture();
+    const sky = f.coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Sky",
+      provider: "codex/test-model",
+      persona: "Peer",
+    });
+    const channel = f.coordinator.createConversation({
+      id: randomUUID(),
+      name: "General",
+      kind: "group",
+      members: [f.assistant.id, sky.id],
+      roundtable: false,
+    });
+
+    const rootId = randomUUID();
+    f.coordinator.send({
+      id: rootId,
+      conversationId: channel.id,
+      threadId: null,
+      content: "@Ada initial architecture draft",
+    });
+    await f.coordinator.idle();
+    const adaMainTurn = f.store.snapshot().turns.find((t) => t.triggerId === rootId)!;
+    f.execution.say(adaMainTurn.agentId, "Here is the v1 draft.", "am1");
+    f.execution.finish(adaMainTurn.agentId);
+    f.ended(adaMainTurn.agentId);
+    await f.coordinator.idle();
+
+    // Sky has never spoken in #General main lane. Now user opens a thread on rootId and asks @Sky.
+    const threadMsg = randomUUID();
+    f.coordinator.send({
+      id: threadMsg,
+      conversationId: channel.id,
+      threadId: rootId,
+      content: "@Sky review this draft",
+    });
+    await f.coordinator.idle();
+
+    const skyThreadTurn = f.store
+      .snapshot()
+      .turns.find((t) => t.triggerId === threadMsg && t.assistantId === sky.id)!;
+    expect(skyThreadTurn.forkFromAgentId).toBeUndefined();
+    expect(f.execution.forkedFrom).toEqual([]);
+    const sent = f.execution.sent.find((item) => item.messageId === skyThreadTurn.id)!;
+    expect(sent.attachments).toBeUndefined();
+    expect(sent.text).toContain("You: @Ada initial architecture draft");
+    expect(sent.text).toContain("You: @Sky review this draft");
+    expect(f.execution.agents.get(skyThreadTurn.agentId)?.title).toBe(
+      "Sky · #General › @Ada initial archite",
+    );
+  });
+
+  it("formats chatAgentTitle for DM, Channel, sub-threads, and Mailbox", () => {
+    expect(
+      chatAgentTitle({
+        assistantName: "Max",
+        conversation: { kind: "dm", name: "Max" },
+        threadId: null,
+      }),
+    ).toBe("Max · DM");
+    expect(
+      chatAgentTitle({
+        assistantName: "Max",
+        conversation: { kind: "group", name: "General" },
+        threadId: null,
+      }),
+    ).toBe("Max · #General");
+    expect(
+      chatAgentTitle({
+        assistantName: "Max",
+        conversation: { kind: "dm", name: "Max" },
+        threadId: "m1",
+        rootMessage: { content: "Debug memory leak" },
+      }),
+    ).toBe("Max · Thread: Debug memory leak");
+    expect(
+      chatAgentTitle({
+        assistantName: "Max",
+        conversation: { kind: "group", name: "General" },
+        threadId: "m1",
+        rootMessage: { content: "Debug memory leak" },
+      }),
+    ).toBe("Max · #General › Debug memory leak");
+    expect(
+      chatAgentTitle({
+        assistantName: "Max",
+        conversationId: "mailbox:max-id",
+        threadId: null,
+      }),
+    ).toBe("Max · Mailbox");
   });
 });

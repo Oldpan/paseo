@@ -1,6 +1,15 @@
-import type { PaseoAgentPermissionResponse, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
+import type {
+  AgentForkContextPayload,
+  PaseoAgentHandle,
+  PaseoAgentPermissionResponse,
+  PaseoAgentSendOptions,
+  PaseoApi,
+} from "@getpaseo/client";
 import { finalTextAfter, type ProjectionEntry, type TurnProjection } from "./projection";
 import { taskBrief } from "./prompts";
+
+export type TextAgentAttachment = NonNullable<AgentForkContextPayload["attachment"]>;
+export type DispatchAttachments = PaseoAgentSendOptions["attachments"];
 
 export interface PermissionInfo {
   requestId: string;
@@ -29,6 +38,7 @@ export interface ChatAgentSpec {
   agentId: string;
   assistantId: string;
   assistantName: string;
+  title?: string;
   provider: string;
   systemPrompt: string;
   /** The machine the assistant is bound to; omitted means this daemon. */
@@ -79,8 +89,15 @@ export interface AssistantHomes {
 export interface ExecutionPort {
   isLocal(serverId: string): Promise<boolean>;
   ensureChatAgent(spec: ChatAgentSpec): Promise<void>;
+  forkContext?(agentId: string, serverId?: string): Promise<TextAgentAttachment | null>;
   /** Idempotent per messageId: the daemon records it as the user_message anchor. */
-  dispatch(agentId: string, text: string, messageId: string, serverId?: string): Promise<void>;
+  dispatch(
+    agentId: string,
+    text: string,
+    messageId: string,
+    serverId?: string,
+    attachments?: DispatchAttachments,
+  ): Promise<void>;
   readTurn(agentId: string, messageId: string, serverId?: string): Promise<TurnRead>;
   /** False when the execution does not exist. */
   cancel(agentId: string, serverId?: string): Promise<boolean>;
@@ -226,18 +243,31 @@ export class PaseoExecution implements ExecutionPort {
     await api.workspaces.ref(workspaceId).agents.create({
       agentId: spec.agentId,
       idempotencyKey: `chat-session:${spec.agentId}`,
-      title: `${spec.assistantName} · Chat`,
+      title: spec.title ?? `${spec.assistantName} · Chat`,
       config: { provider: spec.provider, systemPrompt: spec.systemPrompt },
     });
+  }
+  async forkContext(agentId: string, serverId?: string): Promise<TextAgentAttachment | null> {
+    try {
+      const payload = await (await this.on(serverId)).agents.ref(agentId).forkContext();
+      return payload.attachment;
+    } catch {
+      return null;
+    }
   }
   async dispatch(
     agentId: string,
     text: string,
     messageId: string,
     serverId?: string,
+    attachments?: DispatchAttachments,
   ): Promise<void> {
     const agent = (await this.on(serverId)).agents.ref(agentId);
-    await agent.send(text, { messageId, activeTurnBehavior: "steer" });
+    await agent.send(text, {
+      messageId,
+      activeTurnBehavior: "steer",
+      ...(attachments?.length ? { attachments } : {}),
+    });
     await agent.refresh();
     if (agent.status === "closed")
       throw outcomeUnknown(

@@ -26,7 +26,7 @@ Chat executions live in background workspaces so they stay out of the Studio sid
 
 ## A turn
 
-1. Persist the turn as prepared, then send only the messages that execution has not seen, with `messageId` set to the turn id. Native history already holds earlier turns; replaying the chat creates conflicting histories.
+1. Persist the turn as prepared, then send only the messages that execution has not seen, with `messageId` set to the turn id. Native history already holds earlier turns; replaying the chat creates conflicting histories. A sub-thread's first turn attaches `agent.fork_context` from the assistant's main-lane execution when one exists, then adds only the main-lane messages between the main-lane cursor and the thread's root message (or a one-line root anchor header when the main-lane cursor is already at or past the root message).
 2. The `user_message` whose `messageId` equals the turn id anchors the turn in the execution's timeline. Recovery after a crash looks for that anchor: present means accepted, absent means send the same message again.
 3. When the turn ends, read the anchored slice of the timeline and commit its final assistant text as `final:<turnId>`. Do not use `waitForFinish().lastMessage`: it has no anchor and races with the next turn or with input typed in Studio. Codex starts a new assistant item with `\n\n---\n\n`; the final answer is the last item, with that marker removed.
 4. A reply of exactly `(pass)` commits nothing. Silence is a valid answer for awareness, mention, Peer Inbox and roundtable turns.

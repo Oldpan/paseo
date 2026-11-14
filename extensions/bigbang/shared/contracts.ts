@@ -156,6 +156,8 @@ export const turnSchema = z.object({
   mailboxId: z.string().optional(),
   // The mailbox replies this turn hands back to the assistant that asked.
   mailboxWakeupIds: z.array(z.string()).optional(),
+  // Main-lane agent id whose timeline context is forked into the first turn of a sub-thread.
+  forkFromAgentId: z.string().optional(),
   contextThroughId: z.string().optional(),
   conversationId: z.string(),
   threadId: z.string().nullable(),

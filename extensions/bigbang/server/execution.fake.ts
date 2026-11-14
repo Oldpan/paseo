@@ -3,10 +3,12 @@ import type {
   ChatAgentSpec,
   ChildAgent,
   DeliverOptions,
+  DispatchAttachments,
   WorkspaceAgent,
   ExecutionPort,
   PermissionInfo,
   TaskSpec,
+  TextAgentAttachment,
   TurnRead,
 } from "./execution";
 import { finalTextAfter, type ProjectionEntry } from "./projection";
@@ -14,6 +16,7 @@ import { taskBrief } from "./prompts";
 
 interface FakeAgent {
   serverId: string | undefined;
+  title?: string;
   entries: ProjectionEntry[];
   running: boolean;
   closed: boolean;
@@ -24,8 +27,14 @@ interface FakeAgent {
 /** In-memory ExecutionPort for tests: a timeline per agent, no daemon. */
 export class FakeExecution implements ExecutionPort {
   readonly agents = new Map<string, FakeAgent>();
-  readonly sent: Array<{ agentId: string; text: string; messageId: string; serverId?: string }> =
-    [];
+  readonly sent: Array<{
+    agentId: string;
+    text: string;
+    messageId: string;
+    serverId?: string;
+    attachments?: DispatchAttachments;
+  }> = [];
+  readonly forkedFrom: Array<{ agentId: string; serverId?: string }> = [];
   readonly cancelled: string[] = [];
   readonly permissionResponses: Array<{
     agentId: string;
@@ -67,13 +76,27 @@ export class FakeExecution implements ExecutionPort {
       throw new Error("The existing chat execution is unavailable.");
     if (this.agents.get(spec.agentId)?.archived)
       throw new Error("This chat execution is archived. Restore it in Studio before continuing.");
-    this.agent(spec.agentId, spec.serverId);
+    const agent = this.agent(spec.agentId, spec.serverId);
+    agent.title ??= spec.title ?? `${spec.assistantName} · Chat`;
+  }
+  async forkContext(agentId: string, serverId?: string): Promise<TextAgentAttachment | null> {
+    this.forkedFrom.push({ agentId, ...(serverId ? { serverId } : {}) });
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.serverId !== serverId || agent.entries.length === 0) return null;
+    const text = agent.entries.map(({ item }) => `${item.type}: ${item.text ?? ""}`).join("\n");
+    return {
+      type: "text",
+      mimeType: "text/plain",
+      title: `Forked context from ${agentId}`,
+      text,
+    };
   }
   async dispatch(
     agentId: string,
     text: string,
     messageId: string,
     serverId?: string,
+    attachments?: DispatchAttachments,
   ): Promise<void> {
     if (this.rejectNextDispatch) {
       const error = this.rejectNextDispatch;
@@ -81,7 +104,13 @@ export class FakeExecution implements ExecutionPort {
       throw error;
     }
     const agent = this.agent(agentId, serverId);
-    this.sent.push({ agentId, text, messageId, ...(serverId ? { serverId } : {}) });
+    this.sent.push({
+      agentId,
+      text,
+      messageId,
+      ...(serverId ? { serverId } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+    });
     if (
       !agent.entries.some(
         ({ item }) => item.type === "user_message" && item.messageId === messageId,

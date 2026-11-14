@@ -7,6 +7,7 @@ import {
   selectLiveTurn,
   selectTurnStream,
   summarizeCommentary,
+  turnColumnName,
 } from "./live-turn";
 
 const at = new Date("2026-10-27T00:00:00Z");
@@ -225,5 +226,19 @@ describe("single-line bubble status and process stream slicing", () => {
     expect(slice.found).toBe(false);
     expect(slice.tail).toEqual([tool("grep", "completed"), assistant("Latest reply")]);
     expect(slice.head).toEqual([]);
+  });
+
+  it("formats semantic Studio column names for DM, channel, sub-thread, and mailbox", () => {
+    expect(turnColumnName("Max", { kind: "dm", name: "Max" }, null)).toBe("Max · DM");
+    expect(turnColumnName("Max", { kind: "group", name: "General" }, null)).toBe("Max · #General");
+    expect(
+      turnColumnName("Max", { kind: "dm", name: "Max" }, "m1", { content: "Short root message" }),
+    ).toBe("Max · Thread: Short root message");
+    expect(
+      turnColumnName("Max", { kind: "group", name: "General" }, "m1", {
+        content: "Multi\nline   root message over twenty chars",
+      }),
+    ).toBe("Max · #General › Multi line root mess");
+    expect(turnColumnName("Max", undefined, null, null, "mailbox:max")).toBe("Max · Mailbox");
   });
 });

@@ -58,6 +58,8 @@ export type {
 import type { PluginTimelineItem } from "@getpaseo/protocol/agent-types";
 import type {
   AgentBackgroundWorkItem,
+  AgentForkContextOptions,
+  AgentForkContextPayload,
   FetchAgentsEntry,
   FetchAgentsOptions,
   FetchAgentsPageInfo,
@@ -68,6 +70,7 @@ import type {
   SendMessageOptions,
   WaitForFinishResult,
 } from "./daemon-client.js";
+export type { AgentForkContextOptions, AgentForkContextPayload } from "./daemon-client.js";
 
 /**
  * Coding turns routinely run for minutes, so the handle waits far longer than
@@ -461,6 +464,7 @@ export interface PaseoAgentHandle {
    * rejecting.
    */
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
+  forkContext(options?: AgentForkContextOptions): Promise<AgentForkContextPayload>;
   archive(): Promise<{ archivedAt: string }>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
@@ -1191,6 +1195,7 @@ function createAgentHandleFactory(
         return result;
       },
       commands: (options) => daemonClient.listCommands({ agentId: id, ...options }),
+      forkContext: (options) => daemonClient.buildAgentForkContext(id, options),
       archive: async () => {
         const result = await daemonClient.archiveAgent(id);
         if (current) {

@@ -1,13 +1,17 @@
-import type { Assistant, Turn } from "../shared/contracts";
+import type { Assistant, ChatState, Message, Turn } from "../shared/contracts";
 import type { ExecutionPort } from "./execution";
 import type { ChatStore } from "./store";
 import {
+  type ChatSession,
   assistantInstructions,
   bindChatSession,
   boundHistoryThrough,
+  chatAgentTitle,
   chatPrompt,
+  chatSessionKey,
   laneMessages,
   runnableChatTurns,
+  threadRootHeader,
   unseenMessages,
 } from "./chat-sessions";
 import { TASK_RECEIPT_LEAD, groupPreamble } from "./prompts";
@@ -150,13 +154,25 @@ export class Dispatcher {
   private async send(turn: Turn, assistant: Assistant): Promise<void> {
     const port = this.deps.execution();
     if (!port) return;
+    const serverId = this.serverOf(turn);
     if (turn.chatSessionId) {
       const session = this.deps.store.getChatSession(turn.chatSessionId);
       if (!session) throw new Error("Chat execution binding is missing.");
+      const conversation = this.deps.store.get("conversations", session.conversationId);
+      const rootMessage = session.threadId
+        ? this.deps.store.get("messages", session.threadId)
+        : null;
       await port.ensureChatAgent({
         agentId: session.agentId,
         assistantId: assistant.id,
         assistantName: assistant.name,
+        title: chatAgentTitle({
+          assistantName: assistant.name,
+          conversationId: session.conversationId,
+          conversation,
+          threadId: session.threadId,
+          rootMessage,
+        }),
         provider: session.provider,
         systemPrompt: session.systemPrompt,
         ...(session.serverId ? { serverId: session.serverId } : {}),
@@ -167,7 +183,17 @@ export class Dispatcher {
           this.deps.store.putChatSession({ ...session, created: true }),
         );
     } else if (!turn.taskId) throw new Error("Chat execution binding is missing.");
-    await port.dispatch(turn.agentId, turn.prompt, turn.id, this.serverOf(turn));
+    const forked =
+      turn.forkFromAgentId && port.forkContext
+        ? await port.forkContext(turn.forkFromAgentId, serverId)
+        : null;
+    await port.dispatch(
+      turn.agentId,
+      turn.prompt,
+      turn.id,
+      serverId,
+      forked ? [forked] : undefined,
+    );
     if (this.deps.closed()) return;
     this.accept(turn);
   }
@@ -232,13 +258,18 @@ export class Dispatcher {
       );
     const state = store.snapshot();
     const isFreshSession = !session.lastMessageId;
-    // A roundtable thread's root message is part of the discussion but lives outside the thread.
-    const rootId = turn.kind === "roundtable" ? turn.threadId : null;
+    const rootId = turn.threadId;
     const throughId = turn.kind === "task_receipt" ? turn.triggerId : undefined;
-    let delta = unseenMessages(state.messages, session, state.turns, rootId, throughId);
-    if (turn.kind === "roundtable") delta = delta.slice(-ROUNDTABLE_HISTORY_LIMIT);
+    const {
+      delta: rawDelta,
+      forkFromAgentId,
+      rootHeader,
+    } = this.resolveChatDelta(turn, session, assistant, state, throughId);
+    const delta = turn.kind === "roundtable" ? rawDelta.slice(-ROUNDTABLE_HISTORY_LIMIT) : rawDelta;
     const instructions = assistantInstructions(assistant);
-    let prompt = this.turnPrompt(turn, assistant, chatPrompt(delta, assistant, state.assistants));
+    const formattedDelta = chatPrompt(delta, assistant, state.assistants);
+    const messageBody = [rootHeader, formattedDelta].filter(Boolean).join("\n\n");
+    let prompt = this.turnPrompt(turn, assistant, messageBody);
     // Returning mailbox replies follow whatever the lane said since the assistant last looked.
     if (turn.mailboxWakeupIds)
       prompt = delta.length > 0 ? `${prompt}\n\n${turn.prompt}` : turn.prompt;
@@ -258,6 +289,7 @@ export class Dispatcher {
       ...turn,
       agentId: session.agentId,
       chatSessionId: session.id,
+      ...(forkFromAgentId ? { forkFromAgentId } : {}),
       prepared: true,
       accepted: turn.accepted ?? false,
       provider: session.provider,
@@ -269,6 +301,70 @@ export class Dispatcher {
     };
     store.transaction(() => store.put("turns", prepared));
     return prepared;
+  }
+  private resolveChatDelta(
+    turn: Turn,
+    session: ChatSession,
+    assistant: Assistant,
+    state: ChatState,
+    throughId: string | undefined,
+  ): { delta: Message[]; forkFromAgentId?: string; rootHeader: string | null } {
+    if (session.lastMessageId || turn.threadId === null) {
+      return {
+        delta: unseenMessages(state.messages, session, state.turns, turn.threadId, throughId),
+        rootHeader: null,
+      };
+    }
+    const mainSession = this.deps.store.getChatSession(
+      chatSessionKey(turn.conversationId, null, assistant.id),
+    );
+    const mainLane = laneMessages(state.messages, turn.conversationId, null);
+    const rootIndex = mainLane.findIndex((message) => message.id === turn.threadId);
+    if (mainSession?.created && mainSession.lastMessageId) {
+      const lastIndex = mainLane.findIndex((message) => message.id === mainSession.lastMessageId);
+      if (lastIndex < 0 || rootIndex < 0) {
+        return {
+          delta: unseenMessages(state.messages, session, state.turns, turn.threadId, throughId),
+          forkFromAgentId: mainSession.agentId,
+          rootHeader: null,
+        };
+      }
+      const threadDelta = unseenMessages(state.messages, session, state.turns, null, throughId);
+      if (rootIndex > lastIndex) {
+        const mainDelta = unseenMessages(
+          state.messages,
+          mainSession,
+          state.turns,
+          null,
+          turn.threadId,
+        );
+        return {
+          delta: [...mainDelta, ...threadDelta],
+          forkFromAgentId: mainSession.agentId,
+          rootHeader: null,
+        };
+      }
+      return {
+        delta: threadDelta,
+        forkFromAgentId: mainSession.agentId,
+        rootHeader: threadRootHeader(mainLane[rootIndex], assistant, state.assistants),
+      };
+    }
+    if (rootIndex >= 0) {
+      const mainDelta = unseenMessages(
+        state.messages,
+        { ...session, threadId: null, lastMessageId: undefined },
+        state.turns,
+        null,
+        turn.threadId,
+      );
+      const threadDelta = unseenMessages(state.messages, session, state.turns, null, throughId);
+      return { delta: [...mainDelta, ...threadDelta], rootHeader: null };
+    }
+    return {
+      delta: unseenMessages(state.messages, session, state.turns, turn.threadId, throughId),
+      rootHeader: null,
+    };
   }
   // A private chat prompts with the messages alone; a group says who is here and why it woke you.
   // A mailbox request carries its own prompt.

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Assistant, Message, Turn } from "../shared/contracts";
+import type { Assistant, Conversation, Message, Turn } from "../shared/contracts";
 import type { ChatStore } from "./store";
 import { receiptText } from "./task-events";
 import { BIGBANG_TOOLS_NOTE } from "./tools-note";
@@ -24,6 +24,44 @@ export function mailboxLaneId(assistantId: string): string {
 }
 export function isMailboxLane(conversationId: string): boolean {
   return conversationId.startsWith("mailbox:");
+}
+export function chatAgentTitle(input: {
+  assistantName: string;
+  conversationId?: string;
+  conversation?: Pick<Conversation, "kind" | "name"> | null;
+  threadId: string | null;
+  rootMessage?: Pick<Message, "content"> | null;
+}): string {
+  const { assistantName, conversationId, conversation, threadId, rootMessage } = input;
+  if (conversationId && isMailboxLane(conversationId)) return `${assistantName} · Mailbox`;
+  const excerpt = rootMessage?.content.replace(/\s+/g, " ").trim().slice(0, 20) ?? "";
+  if (conversation?.kind === "group") {
+    const channel = conversation.name.startsWith("#")
+      ? conversation.name.slice(1)
+      : conversation.name;
+    if (threadId !== null) return `${assistantName} · #${channel} › ${excerpt || "Thread"}`;
+    return `${assistantName} · #${channel}`;
+  }
+  if (threadId !== null) {
+    return excerpt ? `${assistantName} · Thread: ${excerpt}` : `${assistantName} · Thread`;
+  }
+  if (conversation?.kind === "dm") return `${assistantName} · DM`;
+  return `${assistantName} · Chat`;
+}
+export function threadRootHeader(
+  rootMessage: Message | undefined,
+  assistant: Assistant,
+  assistants: Assistant[],
+): string | null {
+  if (!rootMessage) return null;
+  const sender =
+    rootMessage.senderId === "user"
+      ? "You"
+      : (assistants.find((item) => item.id === rootMessage.senderId)?.name ??
+        (rootMessage.senderId === assistant.id ? assistant.name : "Assistant"));
+  const compact = rootMessage.content.replace(/\s+/g, " ").trim();
+  const snippet = compact.length > 160 ? `${compact.slice(0, 159)}…` : compact;
+  return `[Thread started from message by ${sender}: "${snippet}"]`;
 }
 export function chatSessionKey(
   conversationId: string,

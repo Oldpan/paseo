@@ -59,9 +59,23 @@ describe("findLatestNonTaskTurn", () => {
 });
 
 describe("turnColumnName", () => {
-  it("names DM, group, and thread columns", () => {
-    expect(turnColumnName("Ada", { kind: "dm", name: "Ada" }, null)).toBe("Ada · Chat");
-    expect(turnColumnName("Ada", { kind: "group", name: "Lab" }, null)).toBe("Ada · Lab");
-    expect(turnColumnName("Ada", { kind: "group", name: "Lab" }, "thread-1")).toBe("Ada · Thread");
+  it("names DM, group, sub-thread, and mailbox columns", () => {
+    expect(turnColumnName("Ada", { kind: "dm", name: "Ada" }, null)).toBe("Ada · DM");
+    expect(turnColumnName("Ada", { kind: "group", name: "Lab" }, null)).toBe("Ada · #Lab");
+    expect(
+      turnColumnName("Ada", { kind: "dm", name: "Ada" }, "thread-1", {
+        content: "Investigate caching layer options",
+      }),
+    ).toBe("Ada · Thread: Investigate caching ");
+    expect(turnColumnName("Ada", { kind: "dm", name: "Ada" }, "thread-1")).toBe("Ada · Thread");
+    expect(
+      turnColumnName("Ada", { kind: "group", name: "Lab" }, "thread-1", {
+        content: "Release checklist",
+      }),
+    ).toBe("Ada · #Lab › Release checklist");
+    expect(turnColumnName("Ada", { kind: "group", name: "Lab" }, "thread-1")).toBe(
+      "Ada · #Lab › Thread",
+    );
+    expect(turnColumnName("Ada", undefined, null, null, "mailbox:ada")).toBe("Ada · Mailbox");
   });
 });

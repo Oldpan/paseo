@@ -1,4 +1,5 @@
 import type { StreamItem } from "@/types/stream";
+export { turnColumnName } from "./chat-studio";
 
 export interface LiveTurnView {
   /** The turn's anchoring user_message is in the stream. Otherwise the other fields are empty. */

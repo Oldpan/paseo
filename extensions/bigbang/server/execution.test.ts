@@ -266,4 +266,78 @@ describe("PaseoExecution", () => {
       permission: { requestId: "req-1", title: "Run ls" },
     });
   });
+
+  it("uses spec.title when creating a chat agent and falls back to Assistant · Chat", async () => {
+    const home = directory();
+    const homes = memoryHomes(home);
+    const titles: string[] = [];
+    const api = {
+      agents: { ref: () => ({ refresh: async () => null, current: () => null, archivedAt: null }) },
+      workspaces: {
+        create: vi.fn(async () => ({ id: "wks_home", current: () => ({ background: true }) })),
+        ref: () => ({
+          agents: {
+            create: async (options: { title?: string }) => {
+              titles.push(options.title ?? "");
+              return {};
+            },
+          },
+        }),
+      },
+    } as unknown as PaseoApi;
+    const execution = new PaseoExecution(api, homes);
+
+    await execution.ensureChatAgent(spec);
+    await execution.ensureChatAgent({
+      ...spec,
+      agentId: "agent-2",
+      title: "Ada · #General › Plan",
+    });
+
+    expect(titles).toEqual(["Ada · Chat", "Ada · #General › Plan"]);
+  });
+
+  it("forks context from an existing agent and forwards attachments on dispatch", async () => {
+    const attachment = {
+      type: "text" as const,
+      mimeType: "text/plain" as const,
+      title: "Forked context",
+      text: "User: Secret is 42",
+    };
+    const send = vi.fn(async () => undefined);
+    const forkContext = vi.fn(async () => ({
+      requestId: "r1",
+      agentId: "main-agent",
+      attachment,
+      itemCount: 2,
+      boundaryMessageId: null,
+      error: null,
+    }));
+    const api = {
+      agents: {
+        ref: (id: string) => ({
+          forkContext:
+            id === "main-agent"
+              ? forkContext
+              : async () => {
+                  throw new Error("no timeline");
+                },
+          send,
+          refresh: async () => ({ agent: { status: "running" } }),
+          status: "running",
+        }),
+      },
+    } as unknown as PaseoApi;
+    const execution = new PaseoExecution(api, memoryHomes());
+
+    expect(await execution.forkContext("main-agent")).toEqual(attachment);
+    expect(await execution.forkContext("missing-agent")).toBeNull();
+
+    await execution.dispatch("thread-agent", "You: Follow up", "turn-1", undefined, [attachment]);
+    expect(send).toHaveBeenCalledWith("You: Follow up", {
+      messageId: "turn-1",
+      activeTurnBehavior: "steer",
+      attachments: [attachment],
+    });
+  });
 });

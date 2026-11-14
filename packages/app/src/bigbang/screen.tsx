@@ -255,12 +255,21 @@ export function BigbangScreen() {
       setProcessTurnId(null);
       const targetAssistant = data.state.assistants.find((a) => a.id === turn.assistantId);
       const conversation = data.state.conversations.find((c) => c.id === turn.conversationId);
+      const rootMessage = turn.threadId
+        ? data.state.messages.find((m) => m.id === turn.threadId)
+        : undefined;
       const assistantName = targetAssistant?.name ?? "Assistant";
-      const columnName = turnColumnName(assistantName, conversation, turn.threadId);
+      const columnName = turnColumnName(
+        assistantName,
+        conversation,
+        turn.threadId,
+        rootMessage,
+        turn.conversationId,
+      );
       const studioGroup = conversation?.kind === "group" ? conversation.name : "Chat";
       void openTurnProcess(turn, coordinatorId, setError, { columnName, group: studioGroup });
     },
-    [coordinatorId, data.state.assistants, data.state.conversations],
+    [coordinatorId, data.state.assistants, data.state.conversations, data.state.messages],
   );
   const openTurn = useCallback((turn: Turn) => {
     setError(null);
@@ -281,6 +290,9 @@ export function BigbangScreen() {
       }
       const conversation = data.state.conversations.find((c) => c.id === conversationId);
       if (!conversation) return;
+      const rootMessage = targetThreadId
+        ? data.state.messages.find((m) => m.id === targetThreadId)
+        : undefined;
       const studioGroup = conversation.kind === "group" ? conversation.name : "Chat";
       let openedAny = false;
       for (const memberId of conversation.members) {
@@ -292,7 +304,13 @@ export function BigbangScreen() {
           openedAny = true;
           const assistant = data.state.assistants.find((a) => a.id === memberId);
           const assistantName = assistant?.name ?? "Assistant";
-          const columnName = turnColumnName(assistantName, conversation, targetThreadId);
+          const columnName = turnColumnName(
+            assistantName,
+            conversation,
+            targetThreadId,
+            rootMessage,
+            conversationId,
+          );
           void openTurnProcess(turn, coordinatorId, setError, {
             columnName,
             group: studioGroup,
@@ -308,6 +326,7 @@ export function BigbangScreen() {
       coordinatorId,
       data.state.assistants,
       data.state.conversations,
+      data.state.messages,
       data.state.tasks,
       data.state.turns,
       openTask,
