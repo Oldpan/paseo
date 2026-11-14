@@ -286,8 +286,15 @@ export const sendMessage = defineRpc({
     quoteOf: z.string().optional(),
     // "roundtable" starts an ordered discussion from a root message with 2-6 explicit mentions.
     responseMode: z.literal("roundtable").optional(),
+    // "steer" supersedes the active turn in the lane immediately instead of waiting for it to finish.
+    delivery: z.literal("steer").optional(),
   }),
   output: z.object({ id: z.string() }),
+});
+export const cancelTurn = defineRpc({
+  name: "bigbang.turn.cancel",
+  input: z.object({ id: z.string() }),
+  output: turnSchema,
 });
 export const startTask = defineRpc({
   name: "chat.task.start",

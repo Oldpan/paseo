@@ -11,6 +11,7 @@ import type {
 import { Composer } from "./Composer";
 import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
+import { PendingQueueBar, type PendingQueueItem } from "./PendingQueueBar";
 import { TaskCard, TaskEventRow, type TaskCardActions } from "./TaskChrome";
 import type { TaskEventNote } from "../task-view";
 import { text as type } from "./theme";
@@ -24,6 +25,8 @@ export interface MessageRow {
   reply?: () => void;
   /** Quotes this message in the composer; set on assistant replies in a group chat. */
   onQuote?: () => void;
+  /** Opens the process drawer for the turn that produced this assistant message. */
+  onOpenProcess?: () => void;
   /** The message this one quotes, resolved to a sender name and a short text. */
   quote?: { sender: string; text: string };
   /** Display text of a system or task_event row. */
@@ -66,6 +69,11 @@ export function ChatPane({
   group,
   locked = false,
   peers,
+  queue,
+  onSteerQueued,
+  onRemoveQueued,
+  onStop,
+  cancelling = false,
 }: {
   rows: MessageRow[];
   turns: LiveTurn[];
@@ -84,6 +92,12 @@ export function ChatPane({
   locked?: boolean;
   /** Peer requests this lane has open (Paseo-hosted mailbox and Studio traffic). */
   peers?: ReactNode;
+  /** Messages queued while a turn is active in this lane. */
+  queue?: readonly PendingQueueItem[];
+  onSteerQueued?(id: string): void;
+  onRemoveQueued?(id: string): void;
+  onStop?(): void;
+  cancelling?: boolean;
 }) {
   const { palette: t } = useTheme();
   const list = useRef<FlatList<MessageRow>>(null);
@@ -125,6 +139,7 @@ export function ChatPane({
         replyCount={row.replyCount}
         onReply={row.reply}
         onQuote={row.onQuote}
+        onOpenProcess={row.onOpenProcess}
         quote={row.quote}
       >
         {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
@@ -194,13 +209,21 @@ export function ChatPane({
           {error}
         </Text>
       ) : null}
+      {queue && queue.length > 0 && onSteerQueued && onRemoveQueued ? (
+        <PendingQueueBar
+          items={queue}
+          busy={pending}
+          onSteer={onSteerQueued}
+          onRemove={onRemoveQueued}
+        />
+      ) : null}
       <Composer
         draft={draft}
         setDraft={setDraft}
         draftKey={draftKey}
         failed={locked}
-        showCancel={false}
-        cancelling={false}
+        showCancel={Boolean(onStop) && turns.length > 0}
+        cancelling={cancelling}
         phone={phone}
         connected={connected}
         pendingFiles={EMPTY_FILES}
@@ -211,7 +234,7 @@ export function ChatPane({
         onRemovePending={ignoreFile}
         onPasteFiles={ignoreFile}
         onSend={onSend}
-        onStop={ignoreFile}
+        onStop={onStop ?? ignoreFile}
         footerAction={<Chip onPress={onTask}>Create task</Chip>}
         group={group}
       />

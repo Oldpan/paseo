@@ -237,7 +237,7 @@ export class PaseoExecution implements ExecutionPort {
     serverId?: string,
   ): Promise<void> {
     const agent = (await this.on(serverId)).agents.ref(agentId);
-    await agent.send(text, { messageId });
+    await agent.send(text, { messageId, activeTurnBehavior: "steer" });
     await agent.refresh();
     if (agent.status === "closed")
       throw outcomeUnknown(

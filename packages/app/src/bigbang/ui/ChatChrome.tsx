@@ -18,10 +18,11 @@ import {
 } from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { copyText } from "./clipboard";
+import { formatLiveTurnStatus } from "../live-turn";
 import { bubbleShadow, ctrlShadow, text as type, selectedFillProps, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
-function HeaderIconButton({
+export function HeaderIconButton({
   label,
   onPress,
   size = 32,
@@ -62,7 +63,7 @@ function HeaderIconButton({
   );
 }
 
-function StudioButton({ label, onPress }: { label: string; onPress(): void }) {
+export function StudioButton({ label, onPress }: { label: string; onPress(): void }) {
   const { palette: t, name } = useTheme();
   return (
     <Pressable
@@ -296,6 +297,110 @@ export function Chip({
     </Pressable>
   );
 }
+function MessageActionBar({
+  actionsShown,
+  copied,
+  content,
+  onCopied,
+  onQuote,
+  onReply,
+}: {
+  actionsShown: boolean;
+  copied: boolean;
+  content: string;
+  onCopied(copied: boolean): void;
+  onQuote?: () => void;
+  onReply?: () => void;
+}) {
+  const { palette: t, name } = useTheme();
+  return (
+    <View
+      pointerEvents={actionsShown ? "auto" : "none"}
+      style={[
+        {
+          position: "absolute",
+          bottom: "100%",
+          marginBottom: 6,
+          right: 0,
+          zIndex: 20,
+          flexDirection: "row",
+          gap: 2,
+          borderRadius: 10,
+          borderWidth: 1,
+          borderColor: t.retroBorder,
+          backgroundColor: t.surfaceSecondary,
+          padding: 2,
+          opacity: actionsShown ? 1 : 0,
+        },
+        ctrlShadow(t, name),
+      ]}
+    >
+      <Pressable
+        role="button"
+        accessibilityLabel={copied ? "Copied" : "Copy message"}
+        onPress={() => {
+          void copyText(content).then((status) => {
+            return onCopied(status === "copied");
+          });
+        }}
+        style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+      >
+        {copied ? <CheckIcon color={t.success} /> : <CopyIcon color={t.textSecondary} />}
+      </Pressable>
+      {onQuote ? (
+        <Pressable
+          role="button"
+          accessibilityLabel="Quote message"
+          onPress={onQuote}
+          style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+        >
+          <QuoteIcon color={t.textSecondary} size={14} />
+        </Pressable>
+      ) : null}
+      {onReply ? (
+        <Pressable
+          role="button"
+          accessibilityLabel="Reply in thread"
+          onPress={onReply}
+          style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+        >
+          <ChatIcon color={t.textSecondary} size={14} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function MessageFooterChips({
+  user,
+  replyCount,
+  onReply,
+  onOpenProcess,
+}: {
+  user: boolean;
+  replyCount: number;
+  onReply?: () => void;
+  onOpenProcess?: () => void;
+}) {
+  const showProcess = !user && Boolean(onOpenProcess);
+  const showReplies = Boolean(onReply && replyCount > 0);
+  if (!showProcess && !showReplies) return null;
+  return (
+    <View style={{ marginTop: 6, flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+      {showProcess && onOpenProcess ? (
+        <Chip onPress={onOpenProcess} label="View process">
+          View process
+        </Chip>
+      ) : null}
+      {showReplies && onReply ? (
+        <Chip onPress={onReply} label="Open thread">
+          {replyCount} {replyCount === 1 ? "reply" : "replies"}
+        </Chip>
+      ) : null}
+    </View>
+  );
+}
+
 export function ChatMessage({
   id,
   content,
@@ -306,6 +411,7 @@ export function ChatMessage({
   replyCount,
   onReply,
   onQuote,
+  onOpenProcess,
   quote,
   children,
 }: {
@@ -319,6 +425,8 @@ export function ChatMessage({
   onReply?: () => void;
   /** Quotes this message in the composer. Group chats offer it on assistant replies. */
   onQuote?: () => void;
+  /** Opens the process drawer for the turn that produced this assistant message. */
+  onOpenProcess?: () => void;
   /** The message this one answers, shown as a compact block above its text. */
   quote?: { sender: string; text: string };
   children?: ReactNode;
@@ -345,6 +453,7 @@ export function ChatMessage({
 
   // Hover only exists on web with a pointer; touch layouts keep the actions in reach.
   const actionsShown = hovered || !isWeb || compact;
+  const alignment = user ? "flex-end" : "flex-start";
   const avatar = user ? (
     <UserAvatar label="You" size={32} theme={t} name={name} />
   ) : (
@@ -356,7 +465,7 @@ export function ChatMessage({
       style={{
         position: "relative",
         flexDirection: "row",
-        justifyContent: user ? "flex-end" : "flex-start",
+        justifyContent: alignment,
         alignItems: "flex-start",
         gap: 10,
         paddingHorizontal: 4,
@@ -370,7 +479,7 @@ export function ChatMessage({
           flex: 1,
           minWidth: 0,
           maxWidth: "100%",
-          alignItems: user ? "flex-end" : "flex-start",
+          alignItems: alignment,
         }}
       >
         <View
@@ -378,7 +487,7 @@ export function ChatMessage({
             flexDirection: "row",
             flexWrap: "wrap",
             alignItems: "center",
-            justifyContent: user ? "flex-end" : "flex-start",
+            justifyContent: alignment,
             gap: 6,
             marginBottom: 4,
             width: "100%",
@@ -400,60 +509,14 @@ export function ChatMessage({
           accessibilityLabel={`Message from ${sender}`}
           style={{ position: "relative", maxWidth: "100%" }}
         >
-          <View
-            pointerEvents={actionsShown ? "auto" : "none"}
-            style={[
-              {
-                position: "absolute",
-                bottom: "100%",
-                marginBottom: 6,
-                right: 0,
-                zIndex: 20,
-                flexDirection: "row",
-                gap: 2,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: t.surfaceSecondary,
-                padding: 2,
-                opacity: actionsShown ? 1 : 0,
-              },
-              ctrlShadow(t, name),
-            ]}
-          >
-            <Pressable
-              role="button"
-              accessibilityLabel={copied ? "Copied" : "Copy message"}
-              onPress={() => {
-                void copyText(content).then((status) => {
-                  return setCopied(status === "copied");
-                });
-              }}
-              style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
-            >
-              {copied ? <CheckIcon color={t.success} /> : <CopyIcon color={t.textSecondary} />}
-            </Pressable>
-            {onQuote ? (
-              <Pressable
-                role="button"
-                accessibilityLabel="Quote message"
-                onPress={onQuote}
-                style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
-              >
-                <QuoteIcon color={t.textSecondary} size={14} />
-              </Pressable>
-            ) : null}
-            {onReply ? (
-              <Pressable
-                role="button"
-                accessibilityLabel="Reply in thread"
-                onPress={onReply}
-                style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
-              >
-                <ChatIcon color={t.textSecondary} size={14} />
-              </Pressable>
-            ) : null}
-          </View>
+          <MessageActionBar
+            actionsShown={actionsShown}
+            copied={copied}
+            content={content}
+            onCopied={setCopied}
+            onQuote={onQuote}
+            onReply={onReply}
+          />
           <View
             style={[
               {
@@ -472,13 +535,12 @@ export function ChatMessage({
           </View>
         </View>
         {children}
-        {onReply && replyCount > 0 ? (
-          <View style={{ marginTop: 6 }}>
-            <Chip onPress={onReply} label="Open thread">
-              {replyCount} {replyCount === 1 ? "reply" : "replies"}
-            </Chip>
-          </View>
-        ) : null}
+        <MessageFooterChips
+          user={user}
+          replyCount={replyCount}
+          onReply={onReply}
+          onOpenProcess={onOpenProcess}
+        />
       </View>
       {user ? avatar : null}
     </View>
@@ -559,7 +621,7 @@ export function NoteRow({ id, content }: { id: string; content: string }) {
 }
 /**
  * The reply an assistant is still writing. Renders like a committed message once text arrives and
- * as a status line before that. `children` carry the process chip and any inline approvals.
+ * as a single status line before that; full process steps stay folded inside the Process Drawer.
  */
 export function LiveTurnBubble({
   id,
@@ -583,29 +645,10 @@ export function LiveTurnBubble({
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
-  const [expanded, setExpanded] = useState(false);
   const status = (
     <Text numberOfLines={1} style={type(t.textMuted, 11, { marginTop: 6 })}>
-      {activity ? `${sender} · ${activity}…` : `${sender} · ${statusLabel}`}
+      {formatLiveTurnStatus({ sender, activity, commentary, statusLabel })}
     </Text>
-  );
-  const notes = (
-    <>
-      {commentary ? (
-        <Pressable
-          role="button"
-          accessibilityLabel={expanded ? "Collapse process notes" : "Expand process notes"}
-          onPress={() => setExpanded((current) => !current)}
-          style={{ marginTop: 6, maxWidth: "100%" }}
-        >
-          <Text numberOfLines={expanded ? undefined : 1} style={type(t.textMuted, 11)}>
-            {expanded ? `▾ ${commentary}` : `▸ ${commentary}`}
-          </Text>
-        </Pressable>
-      ) : null}
-      {text && activity ? status : null}
-      {children}
-    </>
   );
   if (text)
     return (
@@ -618,7 +661,8 @@ export function LiveTurnBubble({
         createdAt={createdAt}
         replyCount={0}
       >
-        {notes}
+        {status}
+        {children}
       </ChatMessage>
     );
   return (
@@ -635,7 +679,7 @@ export function LiveTurnBubble({
       <AgentAvatar seed={seed} label={sender} size={32} theme={t} name={name} />
       <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
         {status}
-        {notes}
+        {children}
       </View>
     </View>
   );

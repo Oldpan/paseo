@@ -164,6 +164,22 @@ export function bindChatSession(
   store.putChatSession(session);
   return session;
 }
+/** Turns a new user message in `(conversationId, threadId)` supersedes. `steer` also supersedes in-flight turns. */
+export function supersededLaneTurns(
+  turns: readonly Turn[],
+  conversationId: string,
+  threadId: string | null,
+  delivery?: "steer",
+): Turn[] {
+  return turns.filter(
+    (turn) =>
+      turn.conversationId === conversationId &&
+      turn.threadId === threadId &&
+      (delivery === "steer" ? SESSION_LIVE_STATUS.has(turn.status) : turn.status === "queued") &&
+      // A task outcome is not answered by a newer message; the assistant still reports it.
+      turn.kind !== "task_receipt",
+  );
+}
 const OUTCOME_EVENTS = new Set(["task_completed", "task_failed", "task_cancelled"]);
 function isOutcome(message: Message): boolean {
   return OUTCOME_EVENTS.has(message.event?.type ?? "");

@@ -9,6 +9,7 @@ import {
   type Message,
   type Task,
   type Turn,
+  cancelTurn,
   readAssistantMemory,
   readState,
   respondTaskPermission,
@@ -38,7 +39,7 @@ import {
 } from "./assistant-files";
 import type { Machine, MachinePort } from "./machines";
 import { ChatStore } from "./store";
-import { queueTurn, restoreChatSessions } from "./chat-sessions";
+import { queueTurn, restoreChatSessions, supersededLaneTurns } from "./chat-sessions";
 import { Fanout } from "./fanout";
 import { Roundtable, roundtableStartMembers } from "./roundtable";
 import { Dispatcher, KeyedQueue, agentKey, errorMessage, failureStatus } from "./dispatcher";
@@ -470,6 +471,12 @@ export class Coordinator {
             )
             .map((turn) => turn.agentId)
         : [];
+    const superseded = supersededLaneTurns(
+      state.turns,
+      conversation.id,
+      input.threadId,
+      input.delivery,
+    );
     this.store.transaction(() => {
       const message = this.store.putMessage({
         id: input.id,
@@ -482,18 +489,11 @@ export class Coordinator {
         kind: "user",
         ...(input.quoteOf ? { quoteOf: input.quoteOf } : {}),
       });
-      for (const previous of state.turns.filter(
-        (turn) =>
-          turn.conversationId === conversation.id &&
-          turn.threadId === input.threadId &&
-          turn.status === "queued" &&
-          // A task outcome is not answered by a newer message; the assistant still reports it.
-          turn.kind !== "task_receipt",
-      ))
+      for (const previous of superseded)
         this.store.put("turns", {
           ...previous,
           status: "cancelled",
-          error: "Superseded by a newer message.",
+          error: SUPERSEDED,
         });
       // Peer messages waiting for a batch belong to the conversation this message just replaced.
       this.store.clearInbox(conversation.id, input.threadId);
@@ -504,6 +504,25 @@ export class Coordinator {
       else if (epoch) this.roundtable.advance(this.roundtable.restart(epoch, message).id);
       else this.fanout.wakeForUserMessage(conversation, message);
     });
+    if (input.delivery === "steer") {
+      const activeAgents = new Set(
+        this.store
+          .snapshot()
+          .turns.filter((turn) => LIVE.has(turn.status))
+          .map((turn) => turn.agentId),
+      );
+      for (const previous of superseded) {
+        if (
+          previous.accepted &&
+          TURN_LIVE.has(previous.status) &&
+          !activeAgents.has(previous.agentId)
+        ) {
+          void this.queue.run(agentKey(previous.agentId), async () => {
+            await this.port?.cancel(previous.agentId, this.serverFor(previous));
+          });
+        }
+      }
+    }
     for (const agentId of staleAgents) this.settle(agentId);
     this.kick();
     return { id: input.id };
@@ -729,6 +748,32 @@ export class Coordinator {
       return settled;
     }
     return cancelled;
+  }
+
+  /** Cancels an active or queued chat turn and stops its execution when in flight. */
+  async cancelTurn(input: string | RpcInput<typeof cancelTurn>): Promise<Turn> {
+    const id = typeof input === "string" ? input : input.id;
+    const turn = this.store.get("turns", id);
+    if (!turn) throw new Error("Turn no longer exists.");
+    if (!LIVE.has(turn.status)) return turn;
+    const cancelled: Turn = {
+      ...turn,
+      status: "cancelled",
+      error: null,
+    };
+    this.store.transaction(() => {
+      this.store.put("turns", cancelled);
+      this.mailbox.turnEnded(cancelled, "");
+      if (turn.epochId) this.roundtable.advance(turn.epochId);
+    });
+    this.mailbox.senderTurnCancelled(cancelled);
+    if ((turn.accepted || TURN_LIVE.has(turn.status) || turn.status === "creating") && this.port) {
+      await this.queue.run(agentKey(turn.agentId), async () => {
+        await this.port?.cancel(turn.agentId, this.serverFor(turn));
+      });
+    }
+    this.kick();
+    return this.store.get("turns", id) ?? cancelled;
   }
 
   // Hooks: record and enqueue; never await coordinator work from the plugin callback.

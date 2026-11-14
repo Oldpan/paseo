@@ -29,6 +29,7 @@ import { BigbangChat } from "./chat";
 import { BigbangForm } from "./forms";
 import { findLatestNonTaskTurn, turnColumnName } from "./chat-studio";
 import { openTurnProcess, Studio, StudioHomePanel } from "./studio";
+import { TurnProcessDrawer } from "./turn-process-drawer";
 import { BigbangTheme, useBigbangDark } from "./ui/ThemeProvider";
 import { AnimatedDrawer } from "./ui/AnimatedDrawer";
 import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
@@ -181,6 +182,8 @@ export function BigbangScreen() {
   const [error, setError] = useState<string | null>(null);
   const [group, setGroup] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [processTurnId, setProcessTurnId] = useState<string | null>(null);
+  const closeProcessDrawer = useCallback(() => setProcessTurnId(null), []);
   const dismissError = useCallback(() => setError(null), []);
   const errorBannerStyle = useMemo(
     () => [
@@ -247,17 +250,22 @@ export function BigbangScreen() {
       .getState()
       .openColumn({ serverId, workspaceId, name: taskTitle(task).slice(0, 40), group: "Tasks" });
   }, []);
-  const openTurn = useCallback(
+  const openTurnInStudio = useCallback(
     (turn: Turn) => {
-      const assistant = data.state.assistants.find((a) => a.id === turn.assistantId);
+      setProcessTurnId(null);
+      const targetAssistant = data.state.assistants.find((a) => a.id === turn.assistantId);
       const conversation = data.state.conversations.find((c) => c.id === turn.conversationId);
-      const assistantName = assistant?.name ?? "Assistant";
+      const assistantName = targetAssistant?.name ?? "Assistant";
       const columnName = turnColumnName(assistantName, conversation, turn.threadId);
       const studioGroup = conversation?.kind === "group" ? conversation.name : "Chat";
       void openTurnProcess(turn, coordinatorId, setError, { columnName, group: studioGroup });
     },
     [coordinatorId, data.state.assistants, data.state.conversations],
   );
+  const openTurn = useCallback((turn: Turn) => {
+    setError(null);
+    setProcessTurnId(turn.id);
+  }, []);
   const openChatStudio = useCallback(
     (conversationId: string, targetThreadId: string | null) => {
       setError(null);
@@ -393,6 +401,7 @@ export function BigbangScreen() {
       changeChat(id);
       setForm(null);
       setSidebarOpen(false);
+      setProcessTurnId(null);
     },
     [changeChat],
   );
@@ -536,6 +545,13 @@ export function BigbangScreen() {
     }),
     [directoryMachines, hosts],
   );
+  const processTurn = useMemo(
+    () =>
+      mode === "chat" && processTurnId
+        ? (data.state.turns.find((item) => item.id === processTurnId) ?? null)
+        : null,
+    [data.state.turns, mode, processTurnId],
+  );
   const sidebarProps = {
     compact,
     chatId,
@@ -615,6 +631,15 @@ export function BigbangScreen() {
                   onError={setError}
                 />
               </RetainedPanel>
+              <TurnProcessDrawer
+                turn={processTurn}
+                data={data}
+                coordinatorId={coordinatorId}
+                hostLabels={hostLabels}
+                compact={compact}
+                onClose={closeProcessDrawer}
+                onOpenStudio={openTurnInStudio}
+              />
               {form === "hosts" ||
               (!coordinatorId && viewHydrated && hostRegistryStatus === "ready" && bootSettled) ? (
                 <CoordinatorPickerModal

@@ -11,10 +11,31 @@ export interface LiveTurnView {
   activity: string | null;
 }
 
+export interface TurnStreamSlice {
+  /** The turn's anchoring user_message is in the stream. */
+  found: boolean;
+  /** Retained stream items belonging to this turn (after its prompt anchor). */
+  tail: StreamItem[];
+  /** Live streaming head items belonging to this turn. */
+  head: StreamItem[];
+}
+
+export const TURN_STATUS_LABEL: Record<string, string> = {
+  queued: "Queued",
+  creating: "Starting…",
+  running: "Thinking…",
+  attention: "Waiting for you",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  unknown: "Reconnecting…",
+};
+
 // Codex prepends this to a new assistant item that follows an earlier one in the same turn.
 // Keep in step with extensions/bigbang/server/projection.ts, which commits the same text.
 const ASSISTANT_MESSAGE_BOUNDARY = "\n\n---\n\n";
 const NOT_FOUND: LiveTurnView = { found: false, commentary: "", text: "", activity: null };
+const EMPTY_STREAM_ITEMS: StreamItem[] = [];
 
 function stripBoundary(text: string): string {
   return text.startsWith(ASSISTANT_MESSAGE_BOUNDARY)
@@ -109,4 +130,98 @@ export function isSilentAwareness(input: {
     !input.hasPermissions &&
     (input.text.trim() === "" || isPassPrefix(input.text))
   );
+}
+
+/**
+ * Extracts a single-line summary of the latest commentary block so the chat bubble can show one
+ * real-time status line while the full process stays folded inside the Process Drawer.
+ */
+export function summarizeCommentary(commentary: string): string | null {
+  const blocks = commentary
+    .split("\n\n")
+    .map((block) => block.replace(/\s+/g, " ").trim())
+    .filter((block) => block.length > 0);
+  return blocks.at(-1) ?? null;
+}
+
+/**
+ * Formats the single-line status indicator for an in-flight turn:
+ * `activity` if present, otherwise a single-line summary of `commentary`, otherwise `statusLabel`.
+ */
+export function formatLiveTurnStatus(input: {
+  sender: string;
+  activity: string | null;
+  commentary: string;
+  statusLabel: string;
+}): string {
+  const activity = input.activity?.trim();
+  if (activity) return `${input.sender} · ${activity}…`;
+  const note = summarizeCommentary(input.commentary);
+  if (note) return `${input.sender} · ${note}`;
+  return `${input.sender} · ${input.statusLabel}`;
+}
+
+/**
+ * Slices an execution agent's `tail` and `head` stream items to the segment belonging to `turnId`
+ * (everything after the anchoring `user_message` up to the next `user_message`). Excluding the
+ * synthetic `user_message` prompt keeps `AgentStreamView` from folding completed turns behind a
+ * collapsed summary row inside the Process Drawer.
+ */
+export function selectTurnStream(
+  tail: readonly StreamItem[],
+  head: readonly StreamItem[],
+  turnId: string,
+): TurnStreamSlice {
+  const tailAnchor = tail.findLastIndex(
+    (item) => item.kind === "user_message" && item.messageId === turnId,
+  );
+  if (tailAnchor >= 0) {
+    const nextInTail = tail.findIndex(
+      (item, index) => index > tailAnchor && item.kind === "user_message",
+    );
+    if (nextInTail >= 0) {
+      return {
+        found: true,
+        tail: tail.slice(tailAnchor + 1, nextInTail),
+        head: EMPTY_STREAM_ITEMS,
+      };
+    }
+    const nextInHead = head.findIndex((item) => item.kind === "user_message");
+    return {
+      found: true,
+      tail: tail.slice(tailAnchor + 1),
+      head: nextInHead < 0 ? (head as StreamItem[]) : head.slice(0, nextInHead),
+    };
+  }
+
+  const headAnchor = head.findLastIndex(
+    (item) => item.kind === "user_message" && item.messageId === turnId,
+  );
+  if (headAnchor >= 0) {
+    const nextInHead = head.findIndex(
+      (item, index) => index > headAnchor && item.kind === "user_message",
+    );
+    return {
+      found: true,
+      tail: EMPTY_STREAM_ITEMS,
+      head: nextInHead < 0 ? head.slice(headAnchor + 1) : head.slice(headAnchor + 1, nextInHead),
+    };
+  }
+
+  if (tail.length === 0 && head.length === 0) {
+    return { found: false, tail: EMPTY_STREAM_ITEMS, head: EMPTY_STREAM_ITEMS };
+  }
+  const lastUser = tail.findLastIndex((item) => item.kind === "user_message");
+  if (lastUser >= 0 && (lastUser + 1 < tail.length || head.length > 0)) {
+    return {
+      found: false,
+      tail: tail.slice(lastUser + 1),
+      head: head as StreamItem[],
+    };
+  }
+  return {
+    found: false,
+    tail: tail as StreamItem[],
+    head: head as StreamItem[],
+  };
 }

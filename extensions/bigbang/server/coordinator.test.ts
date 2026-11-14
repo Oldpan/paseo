@@ -126,6 +126,85 @@ describe("event-driven Chat coordination", () => {
     expect(finals()).toHaveLength(0);
   });
 
+  it("steers an active turn immediately with delivery='steer' while preserving the session agentId", async () => {
+    const { store, execution, coordinator, conversation, say, ended, finals } = fixture();
+    const first = await say("First question");
+    execution.say(first.agentId, "Partial first answer", "m1");
+
+    const steerMsgId = randomUUID();
+    coordinator.send({
+      id: steerMsgId,
+      conversationId: conversation.id,
+      threadId: null,
+      content: "Steer follow-up",
+      delivery: "steer",
+    });
+    await coordinator.idle();
+
+    const second = store.snapshot().turns.find((turn) => turn.triggerId === steerMsgId)!;
+    expect(second.agentId).toBe(first.agentId);
+    expect(store.get("turns", first.id)).toMatchObject({
+      status: "cancelled",
+      error: "Superseded by a newer message.",
+    });
+    expect(store.get("turns", second.id)).toMatchObject({
+      status: "running",
+      accepted: true,
+      agentId: first.agentId,
+    });
+    // Dispatched immediately into the running execution without waiting for `first` to finish.
+    expect(execution.sent.map((item) => [item.agentId, item.messageId])).toEqual([
+      [first.agentId, first.id],
+      [first.agentId, second.id],
+    ]);
+    expect(execution.sent[1].text).toBe("You: Steer follow-up");
+
+    execution.say(second.agentId, "Steered final answer", "m2");
+    execution.finish(second.agentId);
+    ended(second.agentId);
+    await coordinator.idle();
+
+    expect(finals().map((message) => [message.id, message.content])).toEqual([
+      [`final:${second.id}`, "Steered final answer"],
+    ]);
+    expect(store.get("turns", second.id)).toMatchObject({
+      status: "completed",
+      finalMessageId: `final:${second.id}`,
+    });
+  });
+
+  it("cancels an in-flight turn via cancelTurn and preserves the session agentId for the next message", async () => {
+    const { store, execution, coordinator, say, ended, finals } = fixture();
+    const first = await say("Long question");
+    execution.say(first.agentId, "Partial output", "m1");
+
+    const cancelled = await coordinator.cancelTurn({ id: first.id });
+    expect(cancelled).toMatchObject({
+      id: first.id,
+      status: "cancelled",
+      error: null,
+    });
+    expect(execution.cancelled).toEqual([first.agentId]);
+    expect(store.get("turns", first.id)).toMatchObject({
+      status: "cancelled",
+      error: null,
+    });
+
+    // A late turn_ended hook after cancellation does not commit partial output.
+    execution.finish(first.agentId);
+    ended(first.agentId);
+    await coordinator.idle();
+    expect(finals()).toHaveLength(0);
+
+    const next = await say("Next question");
+    expect(next.agentId).toBe(first.agentId);
+    execution.say(next.agentId, "Next answer", "m2");
+    execution.finish(next.agentId);
+    ended(next.agentId);
+    await coordinator.idle();
+    expect(finals().map((message) => message.content)).toEqual(["Next answer"]);
+  });
+
   it("treats an accepted dispatch with a lost response as accepted, without resending", async () => {
     const { store, execution, coordinator, say } = fixture();
     execution.failNextDispatch = Object.assign(new Error("connection lost"), {

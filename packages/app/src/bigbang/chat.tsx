@@ -26,6 +26,7 @@ import { useShallow } from "zustand/shallow";
 import {
   sendMessage,
   cancelTask,
+  cancelTurn,
   respondTaskPermission,
   type Assistant,
   type Message,
@@ -44,6 +45,7 @@ import type { Palette } from "./palette";
 import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane } from "./ui/ChatPane";
+import type { PendingQueueItem } from "./ui/PendingQueueBar";
 import { ColResizeHandle } from "./ui/ColResizeHandle";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
 import { LiveTurnItem } from "./live-turn-item";
@@ -106,7 +108,19 @@ const TASKS = { padding: 20, gap: 12 } as const;
 const THREAD_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const HINT_DEBOUNCE_MS = 150;
+const EMPTY_QUEUE: readonly PendingQueueItem[] = [];
 function noMention() {}
+function resolveMessageTurn(
+  message: Message,
+  turnsByFinalMessageId: ReadonlyMap<string, Turn>,
+  turnsById: ReadonlyMap<string, Turn>,
+): Turn | undefined {
+  if (message.senderId === "user" || message.senderId === "system") return undefined;
+  return (
+    turnsByFinalMessageId.get(message.id) ??
+    (message.turnId ? turnsById.get(message.turnId) : undefined)
+  );
+}
 function machineLabel(
   serverId: string | undefined,
   coordinatorId: string,
@@ -600,13 +614,55 @@ function ConversationPane({
     () => new Map(data.state.tasks.map((task) => [task.id, task])),
     [data.state.tasks],
   );
+  const turnsById = useMemo(
+    () => new Map(data.state.turns.map((turn) => [turn.id, turn])),
+    [data.state.turns],
+  );
+  const turnsByFinalMessageId = useMemo(() => {
+    const map = new Map<string, Turn>();
+    for (const turn of data.state.turns) {
+      if (turn.finalMessageId) map.set(turn.finalMessageId, turn);
+    }
+    return map;
+  }, [data.state.turns]);
+  const turns = useMemo(
+    () =>
+      data.state.turns
+        .filter(
+          (turn) =>
+            turn.conversationId === chatId &&
+            turn.threadId === threadId &&
+            LIVE.has(turn.status) &&
+            !turn.finalMessageId,
+        )
+        .map((turn) => {
+          const assistant = assistantsById.get(turn.assistantId);
+          return {
+            turn,
+            node: (
+              <LiveTurnItem
+                serverId={turn.serverId ?? coordinatorId}
+                turn={turn}
+                name={assistant?.name ?? "Assistant"}
+                seed={`${assistant?.id}:${assistant?.name}`}
+                onOpenTurn={onOpenTurn}
+              />
+            ),
+          };
+        }),
+    [assistantsById, chatId, coordinatorId, data.state.turns, onOpenTurn, threadId],
+  );
   const pendingMessage = useRef<{
     id: string;
     content: string;
     quoteOf?: string;
     responseMode?: "roundtable";
   } | null>(null);
+  const autoFlushedId = useRef<string | null>(null);
+  const [queuesByLane, setQueuesByLane] = useState<Record<string, PendingQueueItem[]>>({});
+  const queue = queuesByLane[draftKey] ?? EMPTY_QUEUE;
   const [pending, setPending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quoteId, setQuoteId] = useState<string | null>(null);
   // The toggle starts from the group's default; the user's own choice wins until the next send.
@@ -615,17 +671,121 @@ function ConversationPane({
     (value: string) => setDraft(draftKey, value),
     [draftKey, setDraft],
   );
+  const removeQueuedItem = useCallback(
+    (id: string) => {
+      setQueuesByLane((current) => {
+        const existing = current[draftKey];
+        if (!existing?.some((item) => item.id === id)) return current;
+        return {
+          ...current,
+          [draftKey]: existing.filter((item) => item.id !== id),
+        };
+      });
+    },
+    [draftKey],
+  );
+  const dispatchQueued = useCallback(
+    async (item: PendingQueueItem, delivery?: "steer") => {
+      if (pending) return;
+      removeQueuedItem(item.id);
+      setPending(true);
+      setError(null);
+      try {
+        await data.call(sendMessage, {
+          id: item.id,
+          conversationId: chatId,
+          threadId,
+          content: item.content,
+          ...(item.quoteOf ? { quoteOf: item.quoteOf } : {}),
+          ...(item.responseMode ? { responseMode: item.responseMode } : {}),
+          ...(delivery ? { delivery } : {}),
+        });
+        if (item.responseMode) setThread(item.id);
+      } catch (failure) {
+        setQueuesByLane((current) => {
+          const existing = current[draftKey] ?? [];
+          if (existing.some((entry) => entry.id === item.id)) return current;
+          return { ...current, [draftKey]: [item, ...existing] };
+        });
+        setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setPending(false);
+      }
+    },
+    [chatId, data, draftKey, pending, removeQueuedItem, setThread, threadId],
+  );
+  useEffect(() => {
+    if (turns.length > 0) {
+      autoFlushedId.current = null;
+      return;
+    }
+    if (pending || !data.connected || queue.length === 0) return;
+    const next = queue[0]!;
+    if (autoFlushedId.current === next.id) return;
+    autoFlushedId.current = next.id;
+    void dispatchQueued(next);
+  }, [data.connected, dispatchQueued, pending, queue, turns.length]);
+  const handleSteerQueued = useCallback(
+    (id: string) => {
+      const item = queue.find((entry) => entry.id === id);
+      if (!item || pending) return;
+      autoFlushedId.current = null;
+      void dispatchQueued(item, "steer");
+    },
+    [dispatchQueued, pending, queue],
+  );
+  const handleRemoveQueued = useCallback(
+    (id: string) => {
+      const item = queue.find((entry) => entry.id === id);
+      if (!item) return;
+      removeQueuedItem(id);
+      const currentDraft = useBigbangView.getState().drafts[draftKey] ?? "";
+      if (!currentDraft.trim()) {
+        setDraft(draftKey, item.content);
+        if (item.quoteOf) setQuoteId(item.quoteOf);
+      }
+    },
+    [draftKey, queue, removeQueuedItem, setDraft],
+  );
+  const stopTurn = useCallback(async () => {
+    if (cancelling || turns.length === 0) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      await Promise.all(turns.map((item) => data.call(cancelTurn, { id: item.turn.id })));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setCancelling(false);
+    }
+  }, [cancelling, data, turns]);
+  const stopPress = useCallback(() => {
+    void stopTurn();
+  }, [stopTurn]);
   const eligibility = roundtableEligibility({ conversation, threadId, draft, members });
   const roundtableOn =
     eligibility.eligible && (roundtableChoice ?? conversation?.roundtable ?? false);
   const quoted = quoteId ? messagesById.get(quoteId) : undefined;
   const send = useCallback(async () => {
-    if (!draft.trim() || pending) return;
+    if (!draft.trim()) return;
     const request = {
       content: draft,
       ...(quoted ? { quoteOf: quoted.id } : {}),
       ...(roundtableOn ? { responseMode: "roundtable" as const } : {}),
     };
+    if (turns.length > 0 || pending) {
+      const queuedItem: PendingQueueItem = { id: randomUUID(), ...request };
+      setQueuesByLane((current) => ({
+        ...current,
+        [draftKey]: [...(current[draftKey] ?? []), queuedItem],
+      }));
+      setDraft(draftKey, "");
+      pendingMessage.current = null;
+      setQuoteId(null);
+      setRoundtableChoice(null);
+      setError(null);
+      return;
+    }
     // A retry of the same message keeps its id, so the coordinator never stores it twice.
     const previous = pendingMessage.current;
     const message =
@@ -651,7 +811,19 @@ function ConversationPane({
     } finally {
       setPending(false);
     }
-  }, [chatId, data, draft, draftKey, pending, quoted, roundtableOn, setDraft, setThread, threadId]);
+  }, [
+    chatId,
+    data,
+    draft,
+    draftKey,
+    pending,
+    quoted,
+    roundtableOn,
+    setDraft,
+    setThread,
+    threadId,
+    turns.length,
+  ]);
   const sendPress = useCallback(() => {
     void send();
   }, [send]);
@@ -678,6 +850,7 @@ function ConversationPane({
       const original = message.quoteOf ? messagesById.get(message.quoteOf) : undefined;
       const taskId = message.taskId;
       const inTaskThread = threadId !== null && message.id === threadId;
+      const turn = resolveMessageTurn(message, turnsByFinalMessageId, turnsById);
       return {
         message,
         sender: nameOf(message.senderId),
@@ -685,6 +858,7 @@ function ConversationPane({
         replyCount: replyCounts.get(message.id) ?? 0,
         reply: threadId ? undefined : () => setThread(message.id),
         onQuote: canQuote(message, conversation) ? () => setQuoteId(message.id) : undefined,
+        onOpenProcess: turn ? () => onOpenTurn(turn) : undefined,
         quote: message.quoteOf
           ? {
               sender: original ? nameOf(original.senderId) : "Quoted message",
@@ -719,38 +893,14 @@ function ConversationPane({
     conversation,
     data.state.messages,
     messagesById,
+    onOpenTurn,
     setThread,
     tasksById,
     threadId,
+    turnsByFinalMessageId,
+    turnsById,
     wiring,
   ]);
-  const turns = useMemo(
-    () =>
-      data.state.turns
-        .filter(
-          (turn) =>
-            turn.conversationId === chatId &&
-            turn.threadId === threadId &&
-            LIVE.has(turn.status) &&
-            !turn.finalMessageId,
-        )
-        .map((turn) => {
-          const assistant = assistantsById.get(turn.assistantId);
-          return {
-            turn,
-            node: (
-              <LiveTurnItem
-                serverId={turn.serverId ?? coordinatorId}
-                turn={turn}
-                name={assistant?.name ?? "Assistant"}
-                seed={`${assistant?.id}:${assistant?.name}`}
-                onOpenTurn={onOpenTurn}
-              />
-            ),
-          };
-        }),
-    [assistantsById, chatId, coordinatorId, data.state.turns, onOpenTurn, threadId],
-  );
   useLiveTurnDemand(
     `bigbang:${draftKey}`,
     useMemo(
@@ -857,6 +1007,11 @@ function ConversationPane({
       group={group}
       locked={followUp ? !followUp.allowed : false}
       peers={peers}
+      queue={queue}
+      onSteerQueued={handleSteerQueued}
+      onRemoveQueued={handleRemoveQueued}
+      onStop={stopPress}
+      cancelling={cancelling}
     />
   );
 }

@@ -82,8 +82,14 @@ Spark 上自托管的 Paseo relay，部署方式见 [bigbang-development.md](big
 
 限制：客户端跑在 Spark 自己身上，流量出去再经 cpolar 回来，没有从别的网络或蜂窝网络测过，也没有测长连接的稳定性。还没有用 App 配对过；配对链接指向 `app.paseo.sh`，Bigbang 的 Android 包能否接住这个链接未验证。
 
+同日基于 `3b866d9ae` 在 Spark 协调器（`srv_tGAs1l4XHjbH`、`http://192.168.0.149:6778/`）与 Mac member（`srv_khQ9DQI8Ym0h`）双机实测完成“Chat 收尾”：
+
+- **气泡单行状态与查看过程抽屉**：进行中气泡只展示回复正文与单行状态（`activity`、最新单行 `commentary` 或状态名）；进行中和已完成的助手消息均提供 `View process`，点击在右侧打开 `TurnProcessDrawer`（复用 Paseo `AgentStreamView` 渲染该回合锚点后的 timeline，包裹 `PaneFocusProvider` 修复 Web 端 `ChatFind` 焦点上下文报错），点抽屉内 `Studio` 可直接打开对应执行工作区列（截图存 `.dev/bigbang/stage1-process-drawer.png`、`stage1-process-open-studio.png`）。
+- **待发排队条、中途插话（`steer`）与取消**：回合运行中发送消息默认进入输入框上方的 `PendingQueueBar`（截图存 `.dev/bigbang/stage1-pending-queue-bar.png`）；点 `Remove` 移出队列并在草稿为空时回填文本；等待当前回合结束会自动发出队首消息并完成回合（`35c9f867`）；点 `Steer` 或带 `delivery: "steer"` 发送会立即把原回合标为 `cancelled`（`Superseded by a newer message.`），并在同一执行 Agent（`3b572a13`）内直接插话完成新回合（RPC 实测 `9f829070`、Web 实测 `0d505885`）；调用 `bigbang.turn.cancel` 可中止运行中回合（`d59ffa75`），下一条消息继续复用同一执行 Agent（`bf16925a`）。
+- **并发、游标恢复、迟到结果 fence 与审批**：Sky（Spark，`grok/grok-4.7`，回合 `f8715bdb`）与 Max（Mac，`codex/gpt-6-luna`，回合 `faba34b4`）并发完成回复，新客户端凭断开前游标（`250` → `262`）重连拉回全部增量消息；Max 调用 `bigbang-peers` 与 `bigbang-send` 时触发 Codex MCP 内联审批，批准后向 Sky 发出 mailbox 请求（`d1201233`），随即取消发起回合（`50b2a15a`），mailbox 记录立即变为 `cancelled`，Sky 随后结束的迟到结果被 fence 拦截（未生成 wakeup 回合）。Spark 上 Grok（`~/.grok/config.toml`）配置为 `permission_mode = "always-approve"`，命令与 MCP 工具直接执行，不触发审批。
+
 ## 尚未验收
 
-并发与断线的实机行为、Grok 下的内联审批，以及原生端尚未验证。
+原生端尚未验证（Spark 上 Grok 配置为 `always-approve`，未单独测询问模式下的审批卡片）。
 
 附件上传、表情反应、提醒和旧 Core 专属斜杠命令尚未接通，界面不暴露无效控件。Android 真机、Mac 安装包、终端迁移前后延迟及完整视觉对照仍待验收。原始截图、测试输出和执行回执保存在忽略提交的 `.dev/bigbang/`；本路线图不把已有代码或单项测试通过视为整阶段完成。

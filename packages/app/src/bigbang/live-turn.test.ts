@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { StreamItem, ToolCallItem } from "@/types/stream";
-import { isPassPrefix, isSilentAwareness, selectLiveTurn } from "./live-turn";
+import {
+  formatLiveTurnStatus,
+  isPassPrefix,
+  isSilentAwareness,
+  selectLiveTurn,
+  selectTurnStream,
+  summarizeCommentary,
+} from "./live-turn";
 
 const at = new Date("2026-10-27T00:00:00Z");
 const user = (messageId: string | undefined, id = `u:${messageId}`): StreamItem => ({
@@ -138,5 +145,85 @@ describe("awareness turns that pass", () => {
     expect(silent("reply", "")).toBe(false);
     expect(silent("roundtable", "")).toBe(false);
     expect(silent(undefined, "")).toBe(false);
+  });
+});
+
+describe("single-line bubble status and process stream slicing", () => {
+  it("summarizes multi-line commentary to its latest single-line block", () => {
+    expect(summarizeCommentary("")).toBeNull();
+    expect(summarizeCommentary("   \n\n  ")).toBeNull();
+    expect(summarizeCommentary("Checking files.")).toBe("Checking files.");
+    expect(summarizeCommentary("First step.\n\nSecond step\nwith extra   whitespace.")).toBe(
+      "Second step with extra whitespace.",
+    );
+  });
+
+  it("formats live turn status preferring activity, then commentary summary, then statusLabel", () => {
+    expect(
+      formatLiveTurnStatus({
+        sender: "Atlas",
+        activity: "read_file",
+        commentary: "Checking files.",
+        statusLabel: "Thinking…",
+      }),
+    ).toBe("Atlas · read_file…");
+
+    expect(
+      formatLiveTurnStatus({
+        sender: "Atlas",
+        activity: null,
+        commentary: "Step one.\n\nInspecting config\nnow.",
+        statusLabel: "Thinking…",
+      }),
+    ).toBe("Atlas · Inspecting config now.");
+
+    expect(
+      formatLiveTurnStatus({
+        sender: "Atlas",
+        activity: null,
+        commentary: "",
+        statusLabel: "Starting…",
+      }),
+    ).toBe("Atlas · Starting…");
+  });
+
+  it("slices tail and head to the anchored turn for the process drawer", () => {
+    const tail = [
+      user("turn-1"),
+      thought("ready"),
+      tool("read_file", "completed"),
+      assistant("First turn answer", "m1"),
+      user("turn-2"),
+      tool("shell", "running"),
+    ];
+    const head = [assistant("Streaming second answer", "m2")];
+
+    const firstSlice = selectTurnStream(tail, head, "turn-1");
+    expect(firstSlice.found).toBe(true);
+    expect(firstSlice.tail).toEqual([
+      thought("ready"),
+      tool("read_file", "completed"),
+      assistant("First turn answer", "m1"),
+    ]);
+    expect(firstSlice.head).toEqual([]);
+
+    const secondSlice = selectTurnStream(tail, head, "turn-2");
+    expect(secondSlice.found).toBe(true);
+    expect(secondSlice.tail).toEqual([tool("shell", "running")]);
+    expect(secondSlice.head).toEqual(head);
+  });
+
+  it("falls back to the latest turn segment when provider history has no messageId anchors", () => {
+    const tail = [
+      user(undefined, "u-old"),
+      assistant("Old reply"),
+      user(undefined, "u-latest"),
+      tool("grep", "completed"),
+      assistant("Latest reply"),
+    ];
+    const slice = selectTurnStream(tail, [], "missing-anchor");
+    expect(slice.found).toBe(false);
+    expect(slice.tail).toEqual([tool("grep", "completed"), assistant("Latest reply")]);
+    expect(slice.head).toEqual([]);
   });
 });

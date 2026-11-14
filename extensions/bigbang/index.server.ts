@@ -7,6 +7,7 @@ import {
   saveAssistant,
   createConversation,
   sendMessage,
+  cancelTurn,
   startTask,
   cancelTask,
   respondTaskPermission,
@@ -91,6 +92,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(writeAssistantMemory, (input) => chat().writeAssistantMemory(input));
   server.handle(createConversation, (input) => chat().createConversation(input));
   server.handle(sendMessage, (input) => chat().send(input));
+  server.handle(cancelTurn, (input) => chat().cancelTurn(input));
   server.handle(startTask, (input) => chat().task(input));
   server.handle(cancelTask, (input) => chat().cancel(input.id));
   server.handle(respondTaskPermission, (input) => chat().respondPermission(input));
