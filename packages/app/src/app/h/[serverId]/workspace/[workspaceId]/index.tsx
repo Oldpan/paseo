@@ -37,8 +37,8 @@ import {
 import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
 import { isNative, isWeb } from "@/constants/platform";
 import { RenderProfile } from "@/utils/render-profiler";
-import { IS_BIGBANG } from "@/bigbang/build";
-import { openStudioWorkspace, returnToBigbang } from "@/bigbang/navigation";
+import { IS_PAVRA } from "@/pavra/build";
+import { openStudioWorkspace, returnToPavra } from "@/pavra/navigation";
 
 function getParamValue(value: string | string[] | undefined): string {
   if (typeof value === "string") {
@@ -145,11 +145,11 @@ function HostWorkspaceRouteContent() {
     });
   }, [navigation, openValue, serverId, workspaceId]);
 
-  if (IS_BIGBANG) return <StudioWorkspaceHandoff serverId={serverId} workspaceId={workspaceId} />;
+  if (IS_PAVRA) return <StudioWorkspaceHandoff serverId={serverId} workspaceId={workspaceId} />;
   return <WorkspaceDeck />;
 }
 
-/** Bigbang's Studio owns workspaces: open this one as a column, then leave for /bigbang. */
+/** Pavra's Studio owns workspaces: open this one as a column, then leave for /pavra. */
 function StudioWorkspaceHandoff({
   serverId,
   workspaceId,
@@ -159,7 +159,7 @@ function StudioWorkspaceHandoff({
 }) {
   useEffect(() => {
     if (serverId && workspaceId) openStudioWorkspace({ serverId, workspaceId });
-    returnToBigbang("studio");
+    returnToPavra("studio");
   }, [serverId, workspaceId]);
   return null;
 }

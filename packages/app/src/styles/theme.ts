@@ -1,11 +1,11 @@
 import { Platform } from "react-native";
 import { darkHighlightColors, lightHighlightColors } from "@getpaseo/highlight";
-import { IS_BIGBANG } from "@/bigbang/build";
+import { IS_PAVRA } from "@/pavra/build";
 import {
   offsetShadow,
-  palettes as bigbangPalettes,
-  type Palette as BigbangPalette,
-} from "@/bigbang/ui/theme";
+  palettes as pavraPalettes,
+  type Palette as PavraPalette,
+} from "@/pavra/ui/theme";
 
 export const baseColors = {
   // Base colors
@@ -708,8 +708,8 @@ const darkShadow = {
 
 /**
  * Outline and emphasis a fork can restyle without forking components. Paseo's defaults reproduce
- * its own look: no control outlines, no offset shadows, a surface-coloured user bubble. The Bigbang
- * build swaps in Bigbang's retro outlines, offset shadows and yellow user bubble.
+ * its own look: no control outlines, no offset shadows, a surface-coloured user bubble. The Pavra
+ * build swaps in Pavra's retro outlines, offset shadows and yellow user bubble.
  */
 /** An offset shadow: `boxShadow` on web, the shadow props on native. Empty means none. */
 export interface ChromeShadow {
@@ -761,7 +761,7 @@ function paseoChrome(colors: {
   };
 }
 
-function bigbangChrome(palette: BigbangPalette, scheme: "light" | "dark"): ThemeChrome {
+function pavraChrome(palette: PavraPalette, scheme: "light" | "dark"): ThemeChrome {
   const dark = scheme === "dark";
   return {
     controlBorderWidth: BORDER_WIDTH[1],
@@ -802,7 +802,7 @@ export function buildDarkTheme(
   } as const;
 }
 
-// The Bigbang build draws its light and dark themes from Bigbang's palette; the theme names, the
+// The Pavra build draws its light and dark themes from Pavra's palette; the theme names, the
 // auto preference and the Unistyles registry stay Paseo's.
 export const paseoDarkTheme = buildDarkTheme(paseoDarkColors);
 export const darkZincTheme = buildDarkTheme(zincDarkColors);
@@ -870,69 +870,63 @@ export function buildLightTheme(
   } as const;
 }
 
-// Bigbang — the fork's warm surfaces, yellow accent and retro outlines, from the palette its Chat
-// draws with (bigbang/ui/theme.ts), so the Paseo screens it hosts match the Chat beside them.
-const bigbangLight = bigbangPalettes.light;
-const bigbangDark = bigbangPalettes.dark;
+// Pavra — the fork's warm surfaces, yellow accent and retro outlines, from the palette its Chat
+// draws with (pavra/ui/theme.ts), so the Paseo screens it hosts match the Chat beside them.
+const pavraLight = pavraPalettes.light;
+const pavraDark = pavraPalettes.dark;
 
-export const bigbangLightColors = buildLightSemanticColors({
-  surface0: bigbangLight.surfacePrimary,
-  surface1: bigbangLight.surfaceActive,
-  surface2: bigbangLight.surfaceSecondary,
-  surface3: bigbangLight.surfaceTertiary,
-  surface4: bigbangLight.retroBorderLight,
-  surfaceDiffEmpty: bigbangLight.surfaceSecondary,
-  surfaceSidebar: bigbangLight.surfaceSecondary,
-  foreground: bigbangLight.textPrimary,
-  foregroundMuted: bigbangLight.textMuted,
-  foregroundExtraMuted: bigbangLight.textSubtle,
-  border: bigbangLight.retroBorderLight,
-  borderAccent: bigbangLight.retroBorder,
-  accent: bigbangLight.brandAccent,
-  accentBright: bigbangLight.link,
-  accentForeground: bigbangLight.onAccent,
-  primary: bigbangLight.textPrimary,
-  primaryForeground: bigbangLight.surfacePrimary,
-  destructive: bigbangLight.destructive,
+export const pavraLightColors = buildLightSemanticColors({
+  surface0: pavraLight.surfacePrimary,
+  surface1: pavraLight.surfaceActive,
+  surface2: pavraLight.surfaceSecondary,
+  surface3: pavraLight.surfaceTertiary,
+  surface4: pavraLight.retroBorderLight,
+  surfaceDiffEmpty: pavraLight.surfaceSecondary,
+  surfaceSidebar: pavraLight.surfaceSecondary,
+  foreground: pavraLight.textPrimary,
+  foregroundMuted: pavraLight.textMuted,
+  foregroundExtraMuted: pavraLight.textSubtle,
+  border: pavraLight.retroBorderLight,
+  borderAccent: pavraLight.retroBorder,
+  accent: pavraLight.brandAccent,
+  accentBright: pavraLight.link,
+  accentForeground: pavraLight.onAccent,
+  primary: pavraLight.textPrimary,
+  primaryForeground: pavraLight.surfacePrimary,
+  destructive: pavraLight.destructive,
   terminalBlack: "#1a1a1e",
   terminalBrightBlack: "#3f3f46",
-  ring: bigbangLight.textPrimary,
+  ring: pavraLight.textPrimary,
 });
 
-export const bigbangDarkColors = buildDarkSemanticColors({
-  surface0: bigbangDark.surfacePrimary,
-  surface1: bigbangDark.chatSurface,
-  surface2: bigbangDark.surfaceElevated,
-  surface3: bigbangDark.surfaceHover,
-  surface4: bigbangDark.retroBorderLight,
-  surfaceDiffEmpty: bigbangDark.surfaceSecondary,
-  surfaceSidebar: bigbangDark.sidebarSurface,
-  foreground: bigbangDark.textPrimary,
-  foregroundMuted: bigbangDark.textMuted,
-  foregroundExtraMuted: bigbangDark.textSubtle,
-  border: bigbangDark.retroBorderLight,
-  borderAccent: bigbangDark.retroBorder,
-  accent: bigbangDark.brandAccent,
-  accentBright: bigbangDark.link,
-  accentForeground: bigbangDark.onAccent,
-  destructive: bigbangDark.destructive,
-  terminalBlack: bigbangDark.retroBorder,
-  terminalBrightBlack: bigbangDark.textSubtle,
-  ring: bigbangDark.textSecondary,
+export const pavraDarkColors = buildDarkSemanticColors({
+  surface0: pavraDark.surfacePrimary,
+  surface1: pavraDark.chatSurface,
+  surface2: pavraDark.surfaceElevated,
+  surface3: pavraDark.surfaceHover,
+  surface4: pavraDark.retroBorderLight,
+  surfaceDiffEmpty: pavraDark.surfaceSecondary,
+  surfaceSidebar: pavraDark.sidebarSurface,
+  foreground: pavraDark.textPrimary,
+  foregroundMuted: pavraDark.textMuted,
+  foregroundExtraMuted: pavraDark.textSubtle,
+  border: pavraDark.retroBorderLight,
+  borderAccent: pavraDark.retroBorder,
+  accent: pavraDark.brandAccent,
+  accentBright: pavraDark.link,
+  accentForeground: pavraDark.onAccent,
+  destructive: pavraDark.destructive,
+  terminalBlack: pavraDark.retroBorder,
+  terminalBrightBlack: pavraDark.textSubtle,
+  ring: pavraDark.textSecondary,
 });
 
-export const bigbangLightTheme = buildLightTheme(
-  bigbangLightColors,
-  bigbangChrome(bigbangLight, "light"),
-);
-export const bigbangDarkTheme = buildDarkTheme(
-  bigbangDarkColors,
-  bigbangChrome(bigbangDark, "dark"),
-);
+export const pavraLightTheme = buildLightTheme(pavraLightColors, pavraChrome(pavraLight, "light"));
+export const pavraDarkTheme = buildDarkTheme(pavraDarkColors, pavraChrome(pavraDark, "dark"));
 
 export const paseoLightTheme = buildLightTheme(lightSemanticColors);
-export const lightTheme = IS_BIGBANG ? bigbangLightTheme : paseoLightTheme;
-export const darkTheme = IS_BIGBANG ? bigbangDarkTheme : paseoDarkTheme;
+export const lightTheme = IS_PAVRA ? pavraLightTheme : paseoLightTheme;
+export const darkTheme = IS_PAVRA ? pavraDarkTheme : paseoDarkTheme;
 
 // Keep compatibility with existing code
 export const theme = darkTheme;
@@ -1038,17 +1032,17 @@ export const REGISTERED_THEMES = {
   [PLUGIN_THEME_NAMES.dark]: darkTheme,
 } as RegisteredThemes;
 
-/** The themes this build offers. The Bigbang build keeps light, dark and auto, all Bigbang's. */
-export const BUILD_THEME_OPTIONS: readonly (typeof THEME_OPTIONS)[number][] = IS_BIGBANG
+/** The themes this build offers. The Pavra build keeps light, dark and auto, all Pavra's. */
+export const BUILD_THEME_OPTIONS: readonly (typeof THEME_OPTIONS)[number][] = IS_PAVRA
   ? THEME_OPTIONS.filter((option) => option.group === "primary")
   : THEME_OPTIONS;
 
 /** A saved preference this build does not offer (a variant or a plugin theme) follows the system. */
 export function resolveBuildThemePreference(
   preference: ThemePreference,
-  bigbang: boolean = IS_BIGBANG,
+  pavra: boolean = IS_PAVRA,
 ): ThemePreference {
-  if (!bigbang) return preference;
+  if (!pavra) return preference;
   const offered = preference === "light" || preference === "dark" || preference === "auto";
   return offered ? preference : "auto";
 }

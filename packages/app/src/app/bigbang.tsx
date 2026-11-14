@@ -1,1 +1,5 @@
-export { BigbangScreen as default } from "@/bigbang/screen";
+import { Redirect } from "expo-router";
+
+export default function BigbangRedirectRoute() {
+  return <Redirect href="/pavra" />;
+}

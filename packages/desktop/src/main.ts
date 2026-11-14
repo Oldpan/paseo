@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isBigbangDesktopName } from "./branding.js";
+import { isPavraDesktopName } from "./branding.js";
 import { protectConsoleStreams } from "./diagnostics/console-streams.js";
 protectConsoleStreams();
 
@@ -117,13 +117,16 @@ import {
 } from "./agent-navigation.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
-const IS_BIGBANG = isBigbangDesktopName(app.getName()) || process.env.PASEO_BIGBANG_BUILD === "1";
-const APP_SCHEME = IS_BIGBANG ? "bigbang-studio" : "paseo";
+const IS_PAVRA =
+  isPavraDesktopName(app.getName()) ||
+  process.env.PASEO_PAVRA_BUILD === "1" ||
+  process.env.PASEO_BIGBANG_BUILD === "1";
+const APP_SCHEME = IS_PAVRA ? "pavra" : "paseo";
 const PASEO_DEBUG = process.env.PASEO_DEBUG === "1";
 const DISABLE_SINGLE_INSTANCE_LOCK = process.env.PASEO_DISABLE_SINGLE_INSTANCE_LOCK === "1";
-const APP_NAME = IS_BIGBANG ? "Bigbang Studio" : process.env.PASEO_TEST_APP_NAME?.trim() || "Paseo";
-if (IS_BIGBANG) {
-  const packagedHome = path.join(homedir(), ".bigbang-paseo");
+const APP_NAME = IS_PAVRA ? "Pavra" : process.env.PASEO_TEST_APP_NAME?.trim() || "Paseo";
+if (IS_PAVRA) {
+  const packagedHome = path.join(homedir(), ".pavra-paseo");
   if (app.isPackaged || !process.env.PASEO_HOME) process.env.PASEO_HOME = packagedHome;
   if (app.isPackaged || !process.env.PASEO_LISTEN) process.env.PASEO_LISTEN = "127.0.0.1:6777";
 }

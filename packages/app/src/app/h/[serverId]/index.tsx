@@ -10,6 +10,7 @@ import {
   useIsLastWorkspaceSelectionHydrated,
   useLastWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
+import { IS_PAVRA } from "@/pavra/build";
 
 export default function HostIndexRoute() {
   const serverId = useHostRouteServerId();
@@ -24,7 +25,7 @@ export default function HostIndexRoute() {
     return <StartupSplashScreen />;
   }
 
-  if (process.env.EXPO_PUBLIC_BIGBANG === "true") return <Redirect href="/bigbang" />;
+  if (IS_PAVRA) return <Redirect href="/pavra" />;
 
   return (
     <Redirect

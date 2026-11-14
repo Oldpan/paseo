@@ -19,7 +19,7 @@ import { resolveAppVersion } from "@/utils/app-version";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
 import { PaseoLogo } from "@/components/icons/paseo-logo";
-import { IS_BIGBANG } from "@/bigbang/build";
+import { IS_PAVRA } from "@/pavra/build";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { isFdroidBuild } from "@/constants/build-profile";
 import { isWeb, isNative } from "@/constants/platform";
@@ -264,13 +264,13 @@ export function WelcomeScreen() {
         testID="welcome-screen"
       >
         <View style={styles.content}>
-          {IS_BIGBANG ? <BigbangLogo /> : <PaseoLogo size={96} />}
+          {IS_PAVRA ? <PavraLogo /> : <PaseoLogo size={96} />}
           <View style={styles.copyBlock}>
             <Text style={styles.title}>
-              {IS_BIGBANG ? "Welcome to Bigbang" : t("onboarding.title")}
+              {IS_PAVRA ? "Welcome to Pavra" : t("onboarding.title")}
             </Text>
             <Text style={styles.subtitle}>{t("onboarding.subtitle")}</Text>
-            {isNative && !IS_BIGBANG ? (
+            {isNative && !IS_PAVRA ? (
               <Pressable style={styles.setupLink} onPress={handleOpenPaseoSite}>
                 <Text style={styles.setupLinkText}>paseo.sh</Text>
                 <ExternalLink size={14} color={theme.colors.accent} />
@@ -326,7 +326,7 @@ function WelcomeActionButton({ action }: WelcomeActionButtonProps) {
   );
 }
 
-const BIGBANG_LOGO = { width: 96, height: 96, borderRadius: 22 };
-function BigbangLogo() {
-  return <Image source={require("../../assets/images/bigbang-icon.png")} style={BIGBANG_LOGO} />;
+const PAVRA_LOGO = { width: 96, height: 96, borderRadius: 22 };
+function PavraLogo() {
+  return <Image source={require("../../assets/images/pavra-icon.png")} style={PAVRA_LOGO} />;
 }

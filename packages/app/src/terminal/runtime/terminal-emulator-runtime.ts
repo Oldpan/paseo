@@ -1,5 +1,5 @@
-import { encodeMobileTerminalDomKey } from "@/bigbang/terminal/mobile-keys";
-import { copyShortcutShouldSuppressPty } from "@/bigbang/terminal/copy-keys";
+import { encodeMobileTerminalDomKey } from "@/pavra/terminal/mobile-keys";
+import { copyShortcutShouldSuppressPty } from "@/pavra/terminal/copy-keys";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { ImageAddon } from "@xterm/addon-image";
@@ -373,12 +373,12 @@ export class TerminalEmulatorRuntime {
     );
   }
 
-  private copyBigbangSelection(
+  private copyPavraSelection(
     terminal: Pick<Terminal, "hasSelection" | "getSelection">,
     event: KeyboardEvent,
   ): boolean {
     const shouldCopy =
-      process.env.EXPO_PUBLIC_BIGBANG === "true" &&
+      (process.env.EXPO_PUBLIC_PAVRA === "true" || process.env.EXPO_PUBLIC_BIGBANG === "true") &&
       copyShortcutShouldSuppressPty(event, terminal.hasSelection());
     if (!shouldCopy) return false;
     void this.clipboard.writeText(terminal.getSelection());
@@ -389,11 +389,11 @@ export class TerminalEmulatorRuntime {
     key: string,
     modifiers: { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean },
   ): void {
-    const useBigbangModifiers =
-      process.env.EXPO_PUBLIC_BIGBANG === "true" &&
+    const usePavraModifiers =
+      (process.env.EXPO_PUBLIC_PAVRA === "true" || process.env.EXPO_PUBLIC_BIGBANG === "true") &&
       hasPendingTerminalModifiers(this.pendingModifiers) &&
       !this.inputModeTracker.supportsModifiedEnter();
-    const encoded = useBigbangModifiers ? encodeMobileTerminalDomKey(key, modifiers) : null;
+    const encoded = usePavraModifiers ? encodeMobileTerminalDomKey(key, modifiers) : null;
     if (encoded !== null) this.callbacks.onInput?.(encoded);
     else
       this.callbacks.onTerminalKey?.({
@@ -419,7 +419,7 @@ export class TerminalEmulatorRuntime {
       }
 
       if (this.handleFindShortcut(event)) return false;
-      if (this.copyBigbangSelection(terminal, event)) return false;
+      if (this.copyPavraSelection(terminal, event)) return false;
 
       if (
         !this.options.isMac &&

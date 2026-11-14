@@ -29,9 +29,9 @@ the titlebar row. Production builds leave the variable unset and show no label.
 
 `npm run dev` is only a shorthand for `npm run dev:server`. Keep `127.0.0.1:6767` for the packaged app and production-style `~/.paseo` state.
 
-## Bigbang fork isolation
+## Pavra fork isolation
 
-Fork isolation, the Mac + Spark two-machine topology, `npm run bigbang:sync-spark`, and the `upstream/main` merge cadence live in [Bigbang development](bigbang-development.md). Product scope lives in the [Bigbang roadmap](bigbang-roadmap.md); Chat coordination lives in [Bigbang Chat](bigbang-chat.md).
+Fork isolation, the Mac + Spark two-machine topology, `npm run pavra:sync-spark`, and the `upstream/main` merge cadence live in [Pavra development](pavra-development.md). Product scope lives in the [Pavra roadmap](pavra-roadmap.md); Chat coordination lives in [Pavra Chat](pavra-chat.md).
 
 ## Nix desktop package
 

@@ -1,6 +1,6 @@
 import { useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
-import { BigbangPage } from "@/bigbang/page-frame";
+import { PavraPage } from "@/pavra/page-frame";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import {
   ComposerEditingScope,
@@ -40,7 +40,7 @@ export default function NewWorkspaceRoute() {
 
   return (
     <HostRouteBootstrapBoundary>
-      <BigbangPage>
+      <PavraPage>
         <WorkspaceComposerEditingSessionsProvider
           workspaceKey={NEW_WORKSPACE_SESSIONS_KEY}
           tabIds={sessionTabIds}
@@ -56,7 +56,7 @@ export default function NewWorkspaceRoute() {
             />
           </ComposerEditingScope>
         </WorkspaceComposerEditingSessionsProvider>
-      </BigbangPage>
+      </PavraPage>
     </HostRouteBootstrapBoundary>
   );
 }

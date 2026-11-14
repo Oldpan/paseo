@@ -67,9 +67,10 @@ function resolveSecretFile(params) {
   return undefined;
 }
 
-const isBigbang = appVariant === "bigbang";
+const isPavra = appVariant === "pavra" || appVariant === "bigbang";
 const variants = {
-  bigbang: { name: "Bigbang Studio", packageId: "com.oldpan.bigbang.studio" },
+  pavra: { name: "Pavra", packageId: "com.oldpan.pavra" },
+  bigbang: { name: "Pavra", packageId: "com.oldpan.pavra" },
   production: {
     name: "Paseo",
     packageId: "sh.paseo",
@@ -99,8 +100,8 @@ const variants = {
 const variant = variants[appVariant] ?? variants.production;
 const nativeReleaseVersion = getNativeReleaseVersion(pkg.version);
 
-const easProjectId = isBigbang
-  ? process.env.BIGBANG_EAS_PROJECT_ID
+const easProjectId = isPavra
+  ? (process.env.PAVRA_EAS_PROJECT_ID ?? process.env.BIGBANG_EAS_PROJECT_ID)
   : "0e7f65ce-0367-46c8-a238-2b65963d235a";
 export default {
   expo: {
@@ -108,8 +109,8 @@ export default {
     slug: "voice-mobile",
     version: nativeReleaseVersion.appVersion,
     orientation: "default",
-    icon: isBigbang ? "./assets/images/bigbang-icon.png" : "./assets/images/icon.png",
-    scheme: isBigbang ? "bigbang-studio" : "paseo",
+    icon: isPavra ? "./assets/images/pavra-icon.png" : "./assets/images/icon.png",
+    scheme: isPavra ? "pavra" : "paseo",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
     ios: {
@@ -127,8 +128,8 @@ export default {
     android: {
       adaptiveIcon: {
         backgroundColor: "#000000",
-        foregroundImage: isBigbang
-          ? "./assets/images/bigbang-icon.png"
+        foregroundImage: isPavra
+          ? "./assets/images/pavra-icon.png"
           : "./assets/images/android-icon-foreground.png",
       },
       edgeToEdgeEnabled: true,
@@ -206,6 +207,6 @@ export default {
       router: {},
       ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
     },
-    ...(isBigbang ? {} : { owner: "getpaseo" }),
+    ...(isPavra ? {} : { owner: "getpaseo" }),
   },
 };

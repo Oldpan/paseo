@@ -1,0 +1,23 @@
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { useColorScheme } from "react-native";
+import { useAppSettings } from "@/hooks/use-settings";
+import { resolveBuildThemePreference } from "@/styles/theme";
+import { palettes, type ThemeName } from "./theme";
+
+// Presentation context keeps Bigbang's original component API. Paseo owns the theme preference.
+const ThemeContext = createContext({ name: "light" as ThemeName, palette: palettes.light });
+export function PavraTheme({ name, children }: { name: ThemeName; children: ReactNode }) {
+  const value = useMemo(() => ({ name, palette: palettes[name] }), [name]);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+export function useTheme() {
+  return useContext(ThemeContext);
+}
+
+/** Pavra follows the app's theme preference, resolving "auto" from the system scheme. */
+export function usePavraDark(): boolean {
+  const scheme = useColorScheme();
+  const { settings } = useAppSettings();
+  const preference = resolveBuildThemePreference(settings.theme);
+  return preference === "dark" || (preference === "auto" && scheme === "dark");
+}

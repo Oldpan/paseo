@@ -83,8 +83,8 @@ test("every executable daemon entrypoint enters the supervisor", async () => {
   assert.doesNotMatch(nixModule, /\bPASEO_NODE_ENV\b/);
 });
 
-test("Bigbang development ignores inherited production connection settings", async () => {
-  const { createDevProfile } = await import("./bigbang/dev.mjs");
+test("Pavra development ignores inherited production connection settings", async () => {
+  const { createDevProfile } = await import("./pavra/dev.mjs");
   const root = "/tmp/paseo-fork";
   const profile = createDevProfile(root, {
     PATH: "/usr/bin",
@@ -97,19 +97,19 @@ test("Bigbang development ignores inherited production connection settings", asy
     APP_VARIANT: "production",
   });
   assert.equal(profile.env.PATH, "/usr/bin");
-  assert.equal(profile.env.PASEO_HOME, join(root, ".dev/bigbang/paseo-home"));
+  assert.equal(profile.env.PASEO_HOME, join(root, ".dev/pavra/paseo-home"));
   assert.equal(profile.env.PASEO_HOST, undefined);
   assert.equal(profile.env.PASEO_RELAY_ENABLED, "false");
   assert.equal(profile.env.PASEO_DEV_SEED_HOME, undefined);
   assert.equal(profile.env.PASEO_AGENT_ID, undefined);
   assert.equal(profile.env.EXPO_PUBLIC_LOCAL_DAEMON, undefined);
-  assert.equal(profile.env.APP_VARIANT, "bigbang");
-  assert.equal(profile.env.EXPO_PUBLIC_BIGBANG, "true");
-  assert.equal(profile.env.PASEO_ELECTRON_USER_DATA_DIR, join(root, ".dev/bigbang/.dev/user-data"));
+  assert.equal(profile.env.APP_VARIANT, "pavra");
+  assert.equal(profile.env.EXPO_PUBLIC_PAVRA, "true");
+  assert.equal(profile.env.PASEO_ELECTRON_USER_DATA_DIR, join(root, ".dev/pavra/.dev/user-data"));
 });
 
-test("Bigbang development enables agent tools on a fresh home and preserves later settings", async () => {
-  const { createDevProfile, prepareProfile } = await import("./bigbang/dev.mjs");
+test("Pavra development enables agent tools on a fresh home and preserves later settings", async () => {
+  const { createDevProfile, prepareProfile } = await import("./pavra/dev.mjs");
   const root = await mkdtemp(join(tmpdir(), "paseo-isolation-"));
   try {
     const profile = createDevProfile(root, {});
@@ -127,8 +127,8 @@ test("Bigbang development enables agent tools on a fresh home and preserves late
   }
 });
 
-test("Bigbang development rejects a config pointing at the official port without changing it", async () => {
-  const { createDevProfile, prepareProfile } = await import("./bigbang/dev.mjs");
+test("Pavra development rejects a config pointing at the official port without changing it", async () => {
+  const { createDevProfile, prepareProfile } = await import("./pavra/dev.mjs");
   const root = await mkdtemp(join(tmpdir(), "paseo-isolation-"));
   try {
     const profile = createDevProfile(root, {});
@@ -143,8 +143,8 @@ test("Bigbang development rejects a config pointing at the official port without
   }
 });
 
-test("Bigbang development refuses a symlink to another instance home", async () => {
-  const { createDevProfile, prepareProfile } = await import("./bigbang/dev.mjs");
+test("Pavra development refuses a symlink to another instance home", async () => {
+  const { createDevProfile, prepareProfile } = await import("./pavra/dev.mjs");
   const root = await mkdtemp(join(tmpdir(), "paseo-isolation-"));
   try {
     const profile = createDevProfile(root, {});
@@ -159,8 +159,8 @@ test("Bigbang development refuses a symlink to another instance home", async () 
   }
 });
 
-test("Bigbang development fails on an occupied port without stopping its listener", async () => {
-  const { assertPortAvailable } = await import("./bigbang/dev.mjs");
+test("Pavra development fails on an occupied port without stopping its listener", async () => {
+  const { assertPortAvailable } = await import("./pavra/dev.mjs");
   const listener = net.createServer();
   await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
   try {

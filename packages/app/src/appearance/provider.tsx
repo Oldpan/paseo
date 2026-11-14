@@ -19,7 +19,7 @@ import {
   usePluginThemeCatalog,
   type PluginThemeOption,
 } from "@/plugins/themes";
-import { IS_BIGBANG } from "@/bigbang/build";
+import { IS_PAVRA } from "@/pavra/build";
 import {
   PLUGIN_THEME_NAMES,
   PLUGIN_THEME_PREFERENCE,
@@ -43,7 +43,7 @@ interface ApplyThemeInput {
 const ContributedThemesContext = createContext<ContributedThemes | null>(null);
 
 function applyTheme({ preference, contributedTheme }: ApplyThemeInput): void {
-  if (contributedTheme && !IS_BIGBANG) {
+  if (contributedTheme && !IS_PAVRA) {
     const themeName = PLUGIN_THEME_NAMES[contributedTheme.theme.colorScheme];
     UnistylesRuntime.updateTheme(themeName, () => contributedTheme.theme);
     UnistylesRuntime.setAdaptiveThemes(false);

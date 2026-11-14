@@ -1,7 +1,7 @@
 import { router, type Href } from "expo-router";
 import { navigateToLastWorkspace } from "@/stores/navigation-active-workspace-store";
-import { IS_BIGBANG } from "@/bigbang/build";
-import { returnToBigbang } from "@/bigbang/navigation";
+import { IS_PAVRA } from "@/pavra/build";
+import { returnToPavra } from "@/pavra/navigation";
 import {
   buildOpenProjectRoute,
   buildProjectSettingsRoute,
@@ -29,8 +29,8 @@ export function openProjectSettings(serverId: string, projectId: string): void {
 
 export function returnFromSettings(view: SettingsView): void {
   if (view.kind === "root") {
-    if (IS_BIGBANG) {
-      returnToBigbang();
+    if (IS_PAVRA) {
+      returnToPavra();
       return;
     }
     if (!navigateToLastWorkspace()) {

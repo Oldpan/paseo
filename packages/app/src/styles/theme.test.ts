@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  bigbangDarkTheme,
-  bigbangLightTheme,
+  pavraDarkTheme,
+  pavraLightTheme,
   darkPureBlackTheme,
   darkTheme,
   FONT_SIZE,
@@ -120,20 +120,20 @@ describe("Theme chrome", () => {
     }
   });
 
-  it("draws the Bigbang themes from the Bigbang palette with retro outlines", () => {
-    expect(bigbangDarkTheme.colors).toMatchObject({
+  it("draws the Pavra themes from the Pavra palette with retro outlines", () => {
+    expect(pavraDarkTheme.colors).toMatchObject({
       surface0: "#0f0e0d",
       foreground: "#f2ecdb",
       accent: "#eec95f",
       accentForeground: "#131007",
     });
-    expect(bigbangDarkTheme.chrome).toMatchObject({
+    expect(pavraDarkTheme.chrome).toMatchObject({
       controlBorderWidth: 1,
       userBubble: { background: "#eec95f", foreground: "#000000", borderWidth: 1 },
       headerRule: { width: 2, color: "#000000" },
       activeTab: { background: "#eec95f", foreground: "#131007" },
     });
-    expect(bigbangLightTheme.colors).toMatchObject({
+    expect(pavraLightTheme.colors).toMatchObject({
       surface0: "#fffdf5",
       accent: "#ffd400",
       accentBright: "#1d4ed8",
@@ -147,7 +147,7 @@ describe("resolveBuildThemePreference", () => {
     expect(resolveBuildThemePreference("plugin", false)).toBe("plugin");
   });
 
-  it("follows the system for a variant or plugin theme the Bigbang build does not offer", () => {
+  it("follows the system for a variant or plugin theme the Pavra build does not offer", () => {
     expect(resolveBuildThemePreference("light", true)).toBe("light");
     expect(resolveBuildThemePreference("dark", true)).toBe("dark");
     expect(resolveBuildThemePreference("auto", true)).toBe("auto");

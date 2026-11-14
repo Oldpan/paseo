@@ -1,4 +1,5 @@
-import { BigbangTerminalEmulator } from "@/bigbang/terminal/emulator.native";
+import { IS_PAVRA } from "@/pavra/build";
+import { PavraTerminalEmulator } from "@/pavra/terminal/emulator.native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -24,7 +25,7 @@ function UnsupportedNativeTerminal({ streamKey, onRendererReadyChange }: Termina
 }
 
 export default function TerminalEmulator(props: TerminalEmulatorProps) {
-  if (process.env.EXPO_PUBLIC_BIGBANG === "true") return <BigbangTerminalEmulator {...props} />;
+  if (IS_PAVRA) return <PavraTerminalEmulator {...props} />;
 
   const rendererSelection = resolveTerminalRendererSelection({
     supportsTerminalInputModeReplay: props.supportsTerminalInputModeReplay,

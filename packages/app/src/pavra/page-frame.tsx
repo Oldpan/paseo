@@ -1,0 +1,80 @@
+// The Pavra shell around a Paseo page (History, Schedules, a new workspace). The page keeps its
+// own content; Pavra's rail replaces Paseo's left sidebar, and a phone opens the rail as a drawer.
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { View } from "react-native";
+import { SidebarMenuHostContext } from "@/components/headers/sidebar-menu-host";
+import { useIsCompactFormFactor } from "@/constants/layout";
+import { UsageSidebarRoot, useOpenSidebarUsage } from "@/usage/sidebar-item";
+import { IS_PAVRA } from "./build";
+import type { RailItem } from "./rail";
+import { useRailNavigation } from "./use-rail";
+import { AnimatedDrawer } from "./ui/AnimatedDrawer";
+import { Rail } from "./ui/Rail";
+import { PavraTheme, usePavraDark, useTheme } from "./ui/ThemeProvider";
+
+const ROW = { flex: 1, minHeight: 0, flexDirection: "row" } as const;
+const FILL = { flex: 1, minWidth: 0, minHeight: 0 } as const;
+
+/** Hosts a Paseo page in the Pavra shell in the Pavra build, and leaves it alone otherwise. */
+export function PavraPage({ children }: { children: ReactNode }) {
+  if (!IS_PAVRA) return children;
+  return <PavraPageFrame>{children}</PavraPageFrame>;
+}
+
+function PavraPageFrame({ children }: { children: ReactNode }) {
+  const dark = usePavraDark();
+  return (
+    <PavraTheme name={dark ? "dark" : "light"}>
+      <UsageSidebarRoot>
+        <PageShell>{children}</PageShell>
+      </UsageSidebarRoot>
+    </PavraTheme>
+  );
+}
+
+function PageShell({ children }: { children: ReactNode }) {
+  const compact = useIsCompactFormFactor();
+  const { palette: t } = useTheme();
+  const [drawer, setDrawer] = useState(false);
+  const host = useMemo(() => ({ onMenu: () => setDrawer(true) }), []);
+  const closeDrawer = useCallback(() => setDrawer(false), []);
+  const frame = useMemo(() => [ROW, { backgroundColor: t.surfacePrimary }], [t.surfacePrimary]);
+  return (
+    <SidebarMenuHostContext.Provider value={host}>
+      <View style={frame} testID="pavra-page">
+        {!compact ? <PageRail onDone={closeDrawer} /> : null}
+        <View style={FILL}>{children}</View>
+        <AnimatedDrawer
+          open={compact && drawer}
+          side="left"
+          drawerWidth={56}
+          closeLabel="Close navigation"
+          onClose={closeDrawer}
+        >
+          <PageRail onDone={closeDrawer} />
+        </AnimatedDrawer>
+      </View>
+    </SidebarMenuHostContext.Provider>
+  );
+}
+
+function PageRail({ onDone }: { onDone(): void }) {
+  const { active, select: go, settings: openSettings } = useRailNavigation();
+  const openUsage = useOpenSidebarUsage();
+  const select = useCallback(
+    (item: RailItem) => {
+      onDone();
+      go(item);
+    },
+    [go, onDone],
+  );
+  const usage = useCallback(() => {
+    onDone();
+    openUsage();
+  }, [onDone, openUsage]);
+  const settings = useCallback(() => {
+    onDone();
+    openSettings();
+  }, [onDone, openSettings]);
+  return <Rail active={active} onSelect={select} onUsage={usage} onSettings={settings} />;
+}

@@ -1,12 +1,12 @@
 "use dom";
 
-import { encodeTerminalBytes, type EncodedTerminalFile } from "@/bigbang/terminal/bridge";
+import { encodeTerminalBytes, type EncodedTerminalFile } from "@/pavra/terminal/bridge";
 
 import {
   createMobileTerminalTapController,
   lockMobileTerminalKeyboard,
   unlockMobileTerminalKeyboard,
-} from "@/bigbang/terminal/mobile-tap.web";
+} from "@/pavra/terminal/mobile-tap.web";
 
 import type {
   TerminalFindHandle,
@@ -546,7 +546,7 @@ export default function TerminalEmulator({
       fontFamily: fontFamilyRef.current,
       fontSize: fontSizeRef.current,
     });
-    const removeMobileKeyboard = installBigbangMobileKeyboard(host, () => runtime.focus());
+    const removeMobileKeyboard = installPavraMobileKeyboard(host, () => runtime.focus());
     onRendererReadyChangeRef.current?.({ streamKey, isReady: true });
 
     return () => {
@@ -679,8 +679,12 @@ export default function TerminalEmulator({
   );
 }
 
-function installBigbangMobileKeyboard(host: HTMLElement, focus: () => void): () => void {
-  if (process.env.EXPO_PUBLIC_BIGBANG !== "true" || !window.ReactNativeWebView) return () => {};
+function installPavraMobileKeyboard(host: HTMLElement, focus: () => void): () => void {
+  if (
+    (process.env.EXPO_PUBLIC_PAVRA !== "true" && process.env.EXPO_PUBLIC_BIGBANG !== "true") ||
+    !window.ReactNativeWebView
+  )
+    return () => {};
   const taps = createMobileTerminalTapController();
   let origin: { x: number; y: number } | null = null;
   lockMobileTerminalKeyboard(host);

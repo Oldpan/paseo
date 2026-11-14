@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { IS_BIGBANG } from "@/bigbang/build";
+import { IS_PAVRA } from "@/pavra/build";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { DEFAULT_THEME_PREFERENCE, useAppSettings, type AppSettings } from "@/hooks/use-settings";
 import type { PluginThemeOption } from "@/plugins/themes";
@@ -35,9 +35,9 @@ export function ThemePicker() {
   const { t } = useTranslation();
   const { settings, updateSettings } = useAppSettings();
   const { options: pluginThemes, selected: selectedContribution, select } = useContributedThemes();
-  // The Bigbang build offers no plugin themes; a saved one or a variant shows as auto, as rendered.
-  const offeredPluginThemes = IS_BIGBANG ? [] : pluginThemes;
-  const selectedPluginTheme = IS_BIGBANG ? null : selectedContribution;
+  // The Pavra build offers no plugin themes; a saved one or a variant shows as auto, as rendered.
+  const offeredPluginThemes = IS_PAVRA ? [] : pluginThemes;
+  const selectedPluginTheme = IS_PAVRA ? null : selectedContribution;
   const offeredValue = resolveBuildThemePreference(settings.theme);
   // A selected contribution that is no longer installed shows the fallback the app renders.
   const builtInValue =

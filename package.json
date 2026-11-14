@@ -33,7 +33,7 @@
     "packages/website",
     "packages/desktop",
     "packages/cli",
-    "extensions/bigbang"
+    "extensions/pavra"
   ],
   "scripts": {
     "dev": "npm run dev:server",
@@ -124,17 +124,17 @@
     "release:patch": "npm run release:check && npm run version:all:patch && npm run release:publish && npm run release:push",
     "release:minor": "npm run release:check && npm run version:all:minor && npm run release:publish && npm run release:push",
     "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push",
-    "bigbang:profile": "node scripts/bigbang/dev.mjs profile",
-    "bigbang:server": "node scripts/bigbang/dev.mjs server",
-    "bigbang:app": "node scripts/bigbang/dev.mjs app",
-    "bigbang:desktop": "node scripts/bigbang/dev.mjs desktop",
-    "bigbang:cli": "node scripts/bigbang/dev.mjs cli",
-    "bigbang:smoke": "node scripts/bigbang/smoke.mjs",
-    "bigbang:sync-spark": "node scripts/bigbang/sync-spark.mjs",
-    "bigbang:apk:arm64": "cross-env PASEO_BIGBANG_BUILD=1 node scripts/build-apk.mjs arm64",
-    "bigbang:build:web": "cross-env EXPO_PUBLIC_BIGBANG=true APP_VARIANT=bigbang npm run build:web --workspace=@getpaseo/app",
-    "bigbang:build:daemon-web-ui": "cross-env EXPO_PUBLIC_BIGBANG=true APP_VARIANT=bigbang node scripts/build-daemon-web-ui.mjs",
-    "bigbang:build:desktop": "cross-env PASEO_WEB_PLATFORM=electron npm run bigbang:build:web && cross-env PASEO_BIGBANG_BUILD=1 npm run build:bigbang --workspace=@getpaseo/desktop"
+    "pavra:profile": "node scripts/pavra/dev.mjs profile",
+    "pavra:server": "node scripts/pavra/dev.mjs server",
+    "pavra:app": "node scripts/pavra/dev.mjs app",
+    "pavra:desktop": "node scripts/pavra/dev.mjs desktop",
+    "pavra:cli": "node scripts/pavra/dev.mjs cli",
+    "pavra:smoke": "node scripts/pavra/smoke.mjs",
+    "pavra:sync-spark": "node scripts/pavra/sync-spark.mjs",
+    "pavra:apk:arm64": "cross-env PASEO_PAVRA_BUILD=1 node scripts/build-apk.mjs arm64",
+    "pavra:build:web": "cross-env EXPO_PUBLIC_PAVRA=true APP_VARIANT=pavra npm run build:web --workspace=@getpaseo/app",
+    "pavra:build:daemon-web-ui": "cross-env EXPO_PUBLIC_PAVRA=true APP_VARIANT=pavra node scripts/build-daemon-web-ui.mjs",
+    "pavra:build:desktop": "cross-env PASEO_WEB_PLATFORM=electron npm run pavra:build:web && cross-env PASEO_PAVRA_BUILD=1 npm run build:pavra --workspace=@getpaseo/desktop"
   },
   "devDependencies": {
     "@types/ws": "^8.5.14",

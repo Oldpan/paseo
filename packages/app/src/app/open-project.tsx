@@ -1,11 +1,11 @@
 import { useEffect } from "react";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import { OpenProjectScreen } from "@/screens/open-project-screen";
-import { IS_BIGBANG } from "@/bigbang/build";
-import { returnToBigbang } from "@/bigbang/navigation";
+import { IS_PAVRA } from "@/pavra/build";
+import { returnToPavra } from "@/pavra/navigation";
 
 export default function OpenProjectRoute() {
-  if (IS_BIGBANG) return <StudioHomeHandoff />;
+  if (IS_PAVRA) return <StudioHomeHandoff />;
   return (
     <HostRouteBootstrapBoundary>
       <OpenProjectScreen />
@@ -13,8 +13,8 @@ export default function OpenProjectRoute() {
   );
 }
 
-/** Bigbang's Studio home replaces this page; every fallback that lands here goes there. */
+/** Pavra's Studio home replaces this page; every fallback that lands here goes there. */
 function StudioHomeHandoff() {
-  useEffect(() => returnToBigbang("studio"), []);
+  useEffect(() => returnToPavra("studio"), []);
   return null;
 }

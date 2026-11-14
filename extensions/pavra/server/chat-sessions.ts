@@ -1,0 +1,374 @@
+import { randomUUID } from "node:crypto";
+import type { Assistant, Conversation, Message, Turn } from "../shared/contracts";
+import type { ChatStore } from "./store";
+import { receiptText } from "./task-events";
+import { PAVRA_TOOLS_NOTE } from "./tools-note";
+
+export interface ChatSession {
+  id: string;
+  conversationId: string;
+  threadId: string | null;
+  assistantId: string;
+  agentId: string;
+  /** The machine the execution runs on; absent means the coordinator's own daemon. */
+  serverId?: string;
+  provider: string;
+  systemPrompt: string;
+  lastInstructions: string;
+  created: boolean;
+  lastMessageId?: string;
+}
+/** The private lane where an assistant handles mailbox requests; it has no visible chat. */
+export function mailboxLaneId(assistantId: string): string {
+  return `mailbox:${assistantId}`;
+}
+export function isMailboxLane(conversationId: string): boolean {
+  return conversationId.startsWith("mailbox:");
+}
+export function chatAgentTitle(input: {
+  assistantName: string;
+  conversationId?: string;
+  conversation?: Pick<Conversation, "kind" | "name"> | null;
+  threadId: string | null;
+  rootMessage?: Pick<Message, "content"> | null;
+}): string {
+  const { assistantName, conversationId, conversation, threadId, rootMessage } = input;
+  if (conversationId && isMailboxLane(conversationId)) return `${assistantName} · Mailbox`;
+  const excerpt = rootMessage?.content.replace(/\s+/g, " ").trim().slice(0, 20) ?? "";
+  if (conversation?.kind === "group") {
+    const channel = conversation.name.startsWith("#")
+      ? conversation.name.slice(1)
+      : conversation.name;
+    if (threadId !== null) return `${assistantName} · #${channel} › ${excerpt || "Thread"}`;
+    return `${assistantName} · #${channel}`;
+  }
+  if (threadId !== null) {
+    return excerpt ? `${assistantName} · Thread: ${excerpt}` : `${assistantName} · Thread`;
+  }
+  if (conversation?.kind === "dm") return `${assistantName} · DM`;
+  return `${assistantName} · Chat`;
+}
+export function threadRootHeader(
+  rootMessage: Message | undefined,
+  assistant: Assistant,
+  assistants: Assistant[],
+): string | null {
+  if (!rootMessage) return null;
+  const sender =
+    rootMessage.senderId === "user"
+      ? "You"
+      : (assistants.find((item) => item.id === rootMessage.senderId)?.name ??
+        (rootMessage.senderId === assistant.id ? assistant.name : "Assistant"));
+  const compact = rootMessage.content.replace(/\s+/g, " ").trim();
+  const snippet = compact.length > 160 ? `${compact.slice(0, 159)}…` : compact;
+  return `[Thread started from message by ${sender}: "${snippet}"]`;
+}
+export function chatSessionKey(
+  conversationId: string,
+  threadId: string | null,
+  assistantId: string,
+): string {
+  return JSON.stringify([conversationId, threadId, assistantId]);
+}
+export function restoreChatSessions(store: ChatStore): void {
+  const state = store.snapshot();
+  store.transaction(() => {
+    for (const turn of state.turns) {
+      if (turn.taskId) continue;
+      const assistant = state.assistants.find((item) => item.id === turn.assistantId);
+      if (assistant) bindChatSession(store, turn.conversationId, turn.threadId, assistant);
+    }
+  });
+}
+export function assistantInstructions(assistant: Assistant): string {
+  return `${assistant.persona}
+You are a personal assistant. Your long-term memory is personal to you and lives in MEMORY.md and the notes/ directory of your working directory. Read them when earlier context matters and keep them current with your file tools. Other assistants have separate memory; share something with them only by saying it in the chat. Project changes belong in separate Studio tasks, not in your memory.
+
+Structured memory hierarchy:
+- MEMORY.md (concise index <=200 lines, never a raw dump)
+- notes/user-preferences.md
+- notes/channels/<slug>.md
+- notes/tasks.md
+- notes/work-log/<ISO-week>.md
+- notes/archive/
+
+In a group chat, reply with exactly (pass) when you have nothing useful to add.
+To ask another assistant privately (it may run on another machine), use pavra-send; pavra-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.
+${PAVRA_TOOLS_NOTE}${autonomyInstructions(assistant)}`;
+}
+/** Authorized task targets as the assistant sees them: machine name, serverId, directory. */
+export function describeTargets(assistant: Assistant): string {
+  const targets = assistant.autonomy?.targets ?? [];
+  if (targets.length === 0) return "none";
+  return targets
+    .map(({ serverId, directory, isolation, label }) => {
+      const host = label ? `${label} (serverId ${serverId})` : `serverId ${serverId}`;
+      return `${directory} on ${host}, ${isolation === "worktree" ? "new Git worktree" : "existing directory"}`;
+    })
+    .join("; ");
+}
+function autonomyInstructions(assistant: Assistant): string {
+  if (!assistant.autonomy?.enabled) return "";
+  return `
+You may start project work yourself with the pavra-start_task tool. Your authorized projects: ${describeTargets(assistant)}. Pass the chosen one as target {serverId, directory}. Put the whole brief in the prompt (goal, context, constraints, what done looks like): the task agent cannot see this chat. Ask the user first when the project or the key requirements are unclear. After starting a task, tell the user briefly what you started. Its result is posted in the task thread, and you are told when it finishes so you can report back.`;
+}
+/** Completed turns an execution agent handles before the lane rolls over to a fresh execution. */
+export const CHAT_SESSION_MAX_TURNS = 60;
+const SESSION_LIVE_STATUS = new Set(["queued", "creating", "running", "attention", "unknown"]);
+
+function legacySessionTurn(turns: Turn[]): Turn | undefined {
+  const reverse = turns.toReversed();
+  return (
+    reverse.find((turn) => ["running", "attention", "unknown", "creating"].includes(turn.status)) ??
+    reverse.find((turn) => turn.status === "completed") ??
+    reverse.find((turn) => turn.accepted) ??
+    reverse[0]
+  );
+}
+function rolloverIfDue(
+  store: ChatStore,
+  existing: ChatSession,
+  assistant: Assistant,
+  maxTurns: number,
+): ChatSession {
+  const allTurns = store.snapshot().turns;
+  if (allTurns.length < maxTurns) return existing;
+  const agentTurns = allTurns.filter(
+    (turn) =>
+      turn.agentId === existing.agentId &&
+      turn.conversationId === existing.conversationId &&
+      turn.threadId === existing.threadId &&
+      turn.assistantId === assistant.id &&
+      !turn.taskId,
+  );
+  if (agentTurns.some((turn) => SESSION_LIVE_STATUS.has(turn.status))) return existing;
+  if (agentTurns.filter((turn) => turn.status === "completed").length < maxTurns) return existing;
+  const instructions = assistantInstructions(assistant);
+  const rolled: ChatSession = {
+    ...existing,
+    agentId: randomUUID(),
+    provider: assistant.provider,
+    systemPrompt: instructions,
+    lastInstructions: instructions,
+    created: false,
+    lastMessageId: undefined,
+  };
+  store.putChatSession(rolled);
+  return rolled;
+}
+export function bindChatSession(
+  store: ChatStore,
+  conversationId: string,
+  threadId: string | null,
+  assistant: Assistant,
+  options?: { maxTurns?: number },
+): ChatSession {
+  const id = chatSessionKey(conversationId, threadId, assistant.id);
+  const existing = store.getChatSession(id);
+  if (existing)
+    return rolloverIfDue(store, existing, assistant, options?.maxTurns ?? CHAT_SESSION_MAX_TURNS);
+  const state = store.snapshot();
+  const previous = legacySessionTurn(
+    state.turns.filter(
+      (turn) =>
+        turn.conversationId === conversationId &&
+        turn.threadId === threadId &&
+        turn.assistantId === assistant.id &&
+        !turn.taskId,
+    ),
+  );
+  // COMPAT(bigbangReplyIds): added in bigbang chat v2, remove after 2027-03-01
+  const reply =
+    previous &&
+    state.messages.find(
+      (message) => message.id === `final:${previous.id}` || message.id === `reply:${previous.id}`,
+    );
+  const session: ChatSession = {
+    id,
+    conversationId,
+    threadId,
+    assistantId: assistant.id,
+    agentId: previous?.agentId ?? randomUUID(),
+    ...(assistant.serverId ? { serverId: assistant.serverId } : {}),
+    provider: previous?.provider ?? assistant.provider,
+    systemPrompt: previous?.systemPrompt ?? assistantInstructions(assistant),
+    lastInstructions: previous?.systemPrompt ?? assistantInstructions(assistant),
+    created: Boolean(
+      previous &&
+      (previous.accepted || ["running", "attention", "completed"].includes(previous.status)),
+    ),
+    lastMessageId: reply?.id ?? previous?.seenUserId,
+  };
+  store.putChatSession(session);
+  return session;
+}
+/** Turns a new user message in `(conversationId, threadId)` supersedes. `steer` also supersedes in-flight turns. */
+export function supersededLaneTurns(
+  turns: readonly Turn[],
+  conversationId: string,
+  threadId: string | null,
+  delivery?: "steer",
+): Turn[] {
+  return turns.filter(
+    (turn) =>
+      turn.conversationId === conversationId &&
+      turn.threadId === threadId &&
+      (delivery === "steer" ? SESSION_LIVE_STATUS.has(turn.status) : turn.status === "queued") &&
+      // A task outcome is not answered by a newer message; the assistant still reports it.
+      turn.kind !== "task_receipt",
+  );
+}
+const OUTCOME_EVENTS = new Set(["task_completed", "task_failed", "task_cancelled"]);
+function isOutcome(message: Message): boolean {
+  return OUTCOME_EVENTS.has(message.event?.type ?? "");
+}
+/** The messages of one lane, plus the thread's root message when `rootId` names it (roundtable). */
+export function laneMessages(
+  messages: Message[],
+  conversationId: string,
+  threadId: string | null,
+  rootId?: string | null,
+): Message[] {
+  return messages.filter(
+    (message) =>
+      message.conversationId === conversationId &&
+      message.kind !== "system" &&
+      (message.threadId === threadId || (rootId != null && message.id === rootId)),
+  );
+}
+export function boundHistoryThrough(
+  history: Message[],
+  throughId?: string,
+  lastMessageId?: string,
+): Message[] {
+  if (!throughId) return history;
+  const throughIndex = history.findIndex((message) => message.id === throughId);
+  if (throughIndex < 0) return history;
+  const lastIndex = lastMessageId
+    ? history.findIndex((message) => message.id === lastMessageId)
+    : -1;
+  const boundIndex = Math.max(throughIndex, lastIndex);
+  return history.slice(0, boundIndex + 1);
+}
+
+export function unseenMessages(
+  messages: Message[],
+  session: ChatSession,
+  turns: Turn[] = [],
+  rootId?: string | null,
+  throughId?: string,
+): Message[] {
+  const history = boundHistoryThrough(
+    laneMessages(messages, session.conversationId, session.threadId, rootId),
+    throughId,
+    session.lastMessageId,
+  );
+  // Lifecycle rows are interface chrome, except an outcome the assistant has yet to report. A task
+  // the assistant started is already in its own history, so it is not told about it again.
+  const visible = (message: Message) =>
+    message.kind === "task_event"
+      ? message.event?.notifyAssistantId === session.assistantId && isOutcome(message)
+      : !(
+          message.taskId &&
+          message.id.startsWith("task:") &&
+          message.senderId === session.assistantId
+        );
+  // The execution already holds its own replies in its native history.
+  const nativeReplies = new Set(
+    turns
+      .filter((turn) => turn.agentId === session.agentId)
+      .flatMap((turn) => [
+        `final:${turn.id}`,
+        // COMPAT(bigbangReplyIds): added in bigbang chat v2, remove after 2027-03-01
+        `reply:${turn.id}`,
+      ]),
+  );
+  if (!session.lastMessageId)
+    return history
+      .filter(visible)
+      .slice(-24)
+      .filter((message) => !nativeReplies.has(message.id));
+  const index = history.findIndex((message) => message.id === session.lastMessageId);
+  if (index < 0)
+    throw new Error(
+      "The chat execution cursor is missing. Open the existing execution in Studio to inspect it.",
+    );
+  return history
+    .slice(index + 1)
+    .filter((message) => visible(message) && !nativeReplies.has(message.id));
+}
+// Updating a turn moves its SQLite snapshot row behind newer queued turns. Keep
+// the current execution owner ahead of those turns until its result is settled.
+export function runnableChatTurns(turns: Turn[]): Turn[] {
+  const selected = new Map<string, Turn>();
+  for (const turn of turns) {
+    if (!["queued", "creating", "running", "attention", "unknown"].includes(turn.status)) continue;
+    const key = JSON.stringify([turn.conversationId, turn.threadId]);
+    const previous = selected.get(key);
+    if (!previous || (previous.status === "queued" && turn.status !== "queued"))
+      selected.set(key, turn);
+  }
+  return [...selected.values()];
+}
+export interface QueuedTurn {
+  /** Defaults to a fresh id; the id is the anchor the execution records. */
+  id?: string;
+  conversationId: string;
+  threadId: string | null;
+  assistant: Assistant;
+  kind: NonNullable<Turn["kind"]>;
+  triggerId: string;
+  /** Replaced by the composed prompt when the dispatcher prepares the turn. */
+  prompt: string;
+  rootTriggerId: string;
+  wokenBy?: string;
+  inboxMessageIds?: string[];
+  epochId?: string;
+  round?: number;
+  mailboxId?: string;
+  mailboxWakeupIds?: string[];
+}
+/** Persists a queued turn for an assistant in a lane, binding its chat execution. */
+export function queueTurn(store: ChatStore, input: QueuedTurn): Turn {
+  const session = bindChatSession(store, input.conversationId, input.threadId, input.assistant);
+  const turn: Turn = {
+    id: input.id ?? randomUUID(),
+    kind: input.kind,
+    conversationId: input.conversationId,
+    threadId: input.threadId,
+    assistantId: input.assistant.id,
+    prompt: input.prompt,
+    prepared: false,
+    accepted: false,
+    triggerId: input.triggerId,
+    rootTriggerId: input.rootTriggerId,
+    taskId: null,
+    status: "queued",
+    agentId: session.agentId,
+    chatSessionId: session.id,
+    ...(session.serverId ? { serverId: session.serverId } : {}),
+    error: null,
+    ...(input.wokenBy ? { wokenBy: input.wokenBy } : {}),
+    ...(input.inboxMessageIds ? { inboxMessageIds: input.inboxMessageIds } : {}),
+    ...(input.epochId ? { epochId: input.epochId } : {}),
+    ...(input.round !== undefined ? { round: input.round } : {}),
+    ...(input.mailboxId ? { mailboxId: input.mailboxId } : {}),
+    ...(input.mailboxWakeupIds ? { mailboxWakeupIds: input.mailboxWakeupIds } : {}),
+  };
+  store.put("turns", turn);
+  return turn;
+}
+export function chatPrompt(
+  messages: Message[],
+  assistant: Assistant,
+  assistants: Assistant[],
+): string {
+  return messages
+    .map((message) => {
+      if (message.kind === "task_event") return `[${receiptText(message)}]`;
+      if (message.senderId === "user") return `You: ${message.content}`;
+      const sender = assistants.find((item) => item.id === message.senderId);
+      return `${sender?.name ?? (message.senderId === assistant.id ? assistant.name : "Assistant")}: ${message.content}`;
+    })
+    .join("\n\n");
+}

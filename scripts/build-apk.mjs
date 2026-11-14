@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const isBigbang = process.env.PASEO_BIGBANG_BUILD === "1";
+const isPavra = process.env.PASEO_PAVRA_BUILD === "1" || process.env.PASEO_BIGBANG_BUILD === "1";
 const target = process.argv[2] ?? "universal";
 const architectures = {
   universal: "armeabi-v7a,arm64-v8a,x86,x86_64",
@@ -17,8 +17,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const app = path.join(root, "packages/app");
 const env = {
   ...process.env,
-  APP_VARIANT: isBigbang ? "bigbang" : "production",
-  ...(isBigbang ? { EXPO_PUBLIC_BIGBANG: "true" } : {}),
+  APP_VARIANT: isPavra ? "pavra" : "production",
+  ...(isPavra ? { EXPO_PUBLIC_PAVRA: "true" } : {}),
   PASEO_WATCHDOG_BUILD: "1",
   PASEO_DIAGNOSTIC_BUILD_TIME: new Date().toISOString(),
   PASEO_DIAGNOSTIC_REVISION:
@@ -50,7 +50,7 @@ run(
 );
 const destination = path.join(
   root,
-  `artifacts/${isBigbang ? "bigbang-studio" : "paseo-dogfood"}-${target}.apk`,
+  `artifacts/${isPavra ? "pavra" : "paseo-dogfood"}-${target}.apk`,
 );
 mkdirSync(path.dirname(destination), { recursive: true });
 copyFileSync(path.join(app, "android/app/build/outputs/apk/release/app-release.apk"), destination);
