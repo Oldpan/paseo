@@ -2,7 +2,7 @@
 // Bigbang shell hosts; the host supplies navigation through useRailNavigation.
 import type { ReactNode } from "react";
 import { Image, Pressable, View } from "react-native";
-import { CalendarClock, CircleGauge, History } from "lucide-react-native";
+import { CalendarClock, CircleGauge, History, Inbox } from "lucide-react-native";
 import type { RailItem } from "../rail";
 import { BoxesIcon, ChatIcon, SearchIcon, SettingsIcon, UsersIcon } from "./icons";
 import { RailNavButton } from "./SidebarControls";
@@ -15,6 +15,7 @@ interface RailEntry {
 }
 const ENTRIES: RailEntry[] = [
   { item: "chat", label: "Chat", icon: (color) => <ChatIcon color={color} size={20} /> },
+  { item: "inbox", label: "Inbox", icon: (color) => <Inbox color={color} size={20} /> },
   { item: "members", label: "Member", icon: (color) => <UsersIcon color={color} size={20} /> },
   {
     item: "search",
@@ -32,12 +33,14 @@ const ENTRIES: RailEntry[] = [
 
 export function Rail({
   active,
+  inboxBadge,
   onSelect,
   onUsage,
   onSettings,
   expand,
 }: {
   active: RailItem | null;
+  inboxBadge?: number;
   onSelect(item: RailItem): void;
   onUsage(): void;
   onSettings(): void;
@@ -45,7 +48,8 @@ export function Rail({
   expand?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
-  const ink = (on: boolean) => (on && name === "dark" ? t.onAccent : t.textSecondary);
+  const ink = (on: boolean, unread?: boolean) =>
+    unread ? t.onPink : on && name === "dark" ? t.onAccent : t.textSecondary;
   return (
     <View
       testID="sidebar-rail"
@@ -82,17 +86,21 @@ export function Rail({
       />
       <View style={{ gap: 6, alignItems: "center", paddingVertical: 4 }}>
         {expand}
-        {ENTRIES.map((entry) => (
-          <RailNavButton
-            key={entry.item}
-            label={entry.label}
-            active={active === entry.item}
-            onPress={() => onSelect(entry.item)}
-            t={t}
-            name={name}
-            icon={entry.icon(ink(active === entry.item))}
-          />
-        ))}
+        {ENTRIES.map((entry) => {
+          const badge = entry.item === "inbox" ? inboxBadge : undefined;
+          return (
+            <RailNavButton
+              key={entry.item}
+              label={entry.label}
+              active={active === entry.item}
+              badge={badge}
+              onPress={() => onSelect(entry.item)}
+              t={t}
+              name={name}
+              icon={entry.icon(ink(active === entry.item, (badge ?? 0) > 0))}
+            />
+          );
+        })}
       </View>
       <View style={{ flex: 1 }} />
       <View style={{ gap: 6, alignItems: "center" }}>

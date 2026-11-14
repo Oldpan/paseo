@@ -104,6 +104,19 @@ A reply reaches the original sender only while both bindings are the ones they h
 
 A Studio links assistants (`studio.assistants.set`). Its members see them as peers, and they see its members. A member's message to an assistant is a mailbox request in the assistant's lane, and the answer returns as a Studio reply while the member's binding is unchanged. An assistant's message to a member is a mailbox row (fan-out, fences, wakeup) carried by a Studio record (delivery, receipt); a delivery that fails answers the assistant with a failed reply.
 
+## Inbox
+
+The Inbox view (`packages/app/src/pavra/inbox.ts`, `InboxPane.tsx`) derives four sections directly from the `chat.state` ledger snapshot (`assistants`, `conversations`, `messages`, `tasks`, `turns`, `routines`) with zero model calls:
+
+| Section               | Ledger source                                                                                                                                                                                                                                              | Resolution                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Needs your action** | Live tasks with `pendingPermission` or `status === "attention"`, chat turns in `attention`, and tasks stopped with `stopReason === "budget"`                                                                                                               | Disappears on the next `chat.state` frame once approved, denied, continued, or cancelled |
+| **Recent activity**   | Finished routine runs (`replied`, `passed`, `skipped`, `failed`) across `state.routines` and task lifecycle receipts (`task_completed`, `task_failed`, `task_cancelled`, `task_budget`, `task_workers_capped`)                                             | Sorted by timestamp descending                                                           |
+| **Upcoming**          | Active routines (`status === "active" && nextRunAt !== null`), including one-time reminders (`maxRuns === 1`)                                                                                                                                              | Sorted by `nextRunAt` ascending; pausing or completing removes the routine               |
+| **Suggestions**       | Active tasks older than the stale threshold (2 hours), `failed`/`unknown` tasks with no newer user message in `task:<id>`, latest lane turns in `failed` with no newer user message, paused routines, and active routines whose latest finished run failed | Pure ledger scan; never invokes a model to propose suggestions                           |
+
+Selecting any conversation from the sidebar or clicking an item's navigation action switches out of the Inbox back to that conversation and thread (`/pavra?chatId=<id>&threadId=<id>` or `openPavraLocation`).
+
 ## Memory
 
-Each assistant keeps `MEMORY.md` and `notes/` in its home directory and maintains them with its own file tools. The form only seeds `MEMORY.md` for a new assistant; the Memory tab edits it through `chat.assistant.memory.*` with an mtime precondition. Group members share visible history, not memory.
+Each assistant keeps `MEMORY.md`, `notes/` and `playbooks/` in its home directory and maintains them with its own file tools. The form only seeds `MEMORY.md` for a new assistant; the Memory and Playbooks tabs edit them through `chat.assistant.memory.*` and `chat.assistant.playbook.*` with an mtime precondition. Group members share visible history, not memory.

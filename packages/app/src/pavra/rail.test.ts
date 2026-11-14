@@ -10,6 +10,7 @@ describe("railActive", () => {
   it("highlights Studios over the sidebar section while Studio is open", () => {
     expect(railActive("/pavra", "studio", "search")).toBe("studio");
     expect(railActive("/pavra", "chat", "search")).toBe("search");
+    expect(railActive("/pavra", "chat", "inbox")).toBe("inbox");
     expect(railActive("/pavra", "chat", "chat")).toBe("chat");
   });
 
@@ -23,6 +24,7 @@ describe("isPageItem", () => {
     expect(isPageItem("history")).toBe(true);
     expect(isPageItem("schedules")).toBe(true);
     expect(isPageItem("studio")).toBe(false);
+    expect(isPageItem("inbox")).toBe(false);
     expect(isPageItem("chat")).toBe(false);
   });
 });

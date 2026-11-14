@@ -88,8 +88,16 @@ Spark 上自托管的 Paseo relay，部署方式见 [pavra-development.md](pavra
 - **待发排队条、中途插话（`steer`）与取消**：回合运行中发送消息默认进入输入框上方的 `PendingQueueBar`（截图存 `.dev/pavra/stage1-pending-queue-bar.png`）；点 `Remove` 移出队列并在草稿为空时回填文本；等待当前回合结束会自动发出队首消息并完成回合（`35c9f867`）；点 `Steer` 或带 `delivery: "steer"` 发送会立即把原回合标为 `cancelled`（`Superseded by a newer message.`），并在同一执行 Agent（`3b572a13`）内直接插话完成新回合（RPC 实测 `9f829070`、Web 实测 `0d505885`）；调用 `pavra.turn.cancel` 可中止运行中回合（`d59ffa75`），下一条消息继续复用同一执行 Agent（`bf16925a`）。
 - **并发、游标恢复、迟到结果 fence 与审批**：Sky（Spark，`grok/grok-4.7`，回合 `f8715bdb`）与 Max（Mac，`codex/gpt-6-luna`，回合 `faba34b4`）并发完成回复，新客户端凭断开前游标（`250` → `262`）重连拉回全部增量消息；Max 调用 `pavra-peers` 与 `pavra-send` 时触发 Codex MCP 内联审批，批准后向 Sky 发出 mailbox 请求（`d1201233`），随即取消发起回合（`50b2a15a`），mailbox 记录立即变为 `cancelled`，Sky 随后结束的迟到结果被 fence 拦截（未生成 wakeup 回合）。Spark 上 Grok（`~/.grok/config.toml`）配置为 `permission_mode = "always-approve"`，命令与 MCP 工具直接执行，不触发审批。
 
+## 2026-11-15
+
+基于 `b1c6acbcb` 与 `5b8cbaa58` 在 Spark 协调器（`srv_tGAs1l4XHjbH`）与 Mac member（`srv_khQ9DQI8Ym0h`）双机实测通过操作手册（Playbooks）、例行与提醒（T0–T1）及收件箱（Inbox）：
+
+- **操作手册（Playbooks，`b1c6acbcb`）**：在 Sky（Spark 本机存储）与 Max（经 `member.playbook.*` 中继读写 Mac home）上分别验证 `chat.assistant.playbook.write`、`list`、`read`、`delete` 及 `expectedMtimeMs` 乐观锁冲突拦截；在 Max 私聊发送执行指令时，回合提示词注入 `[Playbooks]` 索引，Max 读取 `playbooks/daily-health.md` 并按手册返回结果。
+- **例行与一次性提醒（T0–T1，`5b8cbaa58`）**：在 Sky 上创建引用 `playbooks/daily-workspace-check.md` 的例行（`eb914949`）并执行 `chat.routine.run_once`，回合（`1d05452e`）回复 `(pass)` 后运行记录（`825ce72a`）记为 `outcome: "passed"`，私聊未新增消息气泡（`messagesBefore: 4`、`messagesAfter: 4`）；在 Max 上创建一次性提醒（`b9535f7c`，`maxRuns: 1`）并触发运行，回合（`5ec8d031`）跨机完成后提交带 `routineId`／`routineName` 标记的 `final` 消息，运行记录（`bc3d24cb`）记为 `outcome: "replied"`，提醒自动转为 `status: "completed"`、`nextRunAt: null`（回执存 `.dev/pavra/stage-a2-routines-acceptance.json`）。
+- **收件箱（Inbox）**：`deriveInboxState` 从 `chat.state` 纯函数派生 `needsAction`（任务工具审批、回合 `attention`、任务预算耗尽）、`recentActivity`（例行运行结果与任务回执）、`upcoming`（按 `nextRunAt` 升序的活动例行与提醒）和 `suggestions`（超时或失败未追问任务、最新失败回合、已暂停或最近失败例行），不调用模型；审批处理、预算续行或例行暂停后对应项立即从原分段移除或转入建议。
+
 ## 尚未验收
 
-原生端尚未验证（Spark 上 Grok 配置为 `always-approve`，未单独测询问模式下的审批卡片）。
+原生端尚未验证（Spark 上 Grok 配置为 `always-approve`，未单独测询问模式下的审批卡片）。例行 7 天连续运行验收进行中。
 
-附件上传、表情反应、提醒和旧 Core 专属斜杠命令尚未接通，界面不暴露无效控件。Android 真机、Mac 安装包、终端迁移前后延迟及完整视觉对照仍待验收。原始截图、测试输出和执行回执保存在忽略提交的 `.dev/pavra/`；本路线图不把已有代码或单项测试通过视为整阶段完成。
+附件上传、表情反应和旧 Core 专属斜杠命令尚未接通，界面不暴露无效控件。Android 真机、Mac 安装包、终端迁移前后延迟及完整视觉对照仍待验收。原始截图、测试输出和执行回执保存在忽略提交的 `.dev/pavra/`；本路线图不把已有代码或单项测试通过视为整阶段完成。

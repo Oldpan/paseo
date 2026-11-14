@@ -1,6 +1,6 @@
-# Pavra 例行（Routines）与 Playbook 方案
+# Pavra 例行（Routines）与 Playbook
 
-状态：方案，未实施。2026-11-14 改为复用 Paseo 的定时任务。建立在 [Chat 协调](pavra-chat.md) 的账本、持久聊天会话与助手机器归属之上；在路线图里的位置见 [交付顺序](pavra-roadmap.md#交付顺序)。
+状态：T0、T1、T2 已实现并在双机（Spark `srv_tGAs1l4XHjbH` + Mac `srv_khQ9DQI8Ym0h`）实测通过（`b1c6acbcb`、`5b8cbaa58`）；7 天连续运行验收进行中。建立在 [Chat 协调](pavra-chat.md) 的账本、持久聊天会话与助手机器归属之上；在路线图里的位置见 [交付顺序](pavra-roadmap.md#交付顺序)。
 
 ## 目标
 
@@ -85,10 +85,10 @@ Paseo 的 heartbeat 也不行：它以用户消息到达，会提前结束有锚
 
 ### 界面
 
-- **Schedules 页面**：例行和工作区定时在同一个列表里，例行的目标显示为“助手 · 会话”。暂停、恢复、立即运行沿用现有控件。
-- **助手面板**：Memory 标签页旁显示这位助手名下的例行和 Playbooks。
-- **收件箱**：“即将运行”一段读属于助手的定时。
-- **聊天消息标记**：例行产出的消息带简短标记（如 `Routine · 早间汇总`），和你提问触发的回复区分开。
+- **Schedules 页面**：`RoutinesSection` 与工作区定时同页展示，例行的目标显示为“助手 · 会话”，支持立即运行、暂停、恢复与删除。
+- **助手面板**：私聊头部标签栏提供 `Routines`、`Memory` 与 `Playbooks` 标签页，支持按预设创建例行或一次性提醒，以及跨机读写、新建与删除 `playbooks/<slug>.md`。
+- **收件箱**（`packages/app/src/pavra/inbox.ts`）：`即将运行` 按 `nextRunAt` 升序展示活动例行与提醒；`最近动态` 汇总已完成例行运行（`replied`、`passed`、`skipped`、`failed`）；`建议` 扫描已暂停或最近一次运行失败的例行。
+- **聊天消息标记**：例行产出的消息带 `routineId`／`routineName` 标记（如 `Routine · 早间汇总`），与普通提问触发的回复区分开。
 
 ## 分阶段
 

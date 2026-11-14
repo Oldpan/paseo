@@ -5,7 +5,11 @@ import { returnToPavra } from "./navigation";
 import { PAVRA_ROUTE, isPageItem, PAGE_ROUTES, railActive, type RailItem } from "./rail";
 import { usePavraView } from "./store";
 
-const MAIN_AREA: Partial<Record<RailItem, "chat" | "studio">> = { chat: "chat", studio: "studio" };
+const MAIN_AREA: Partial<Record<RailItem, "chat" | "studio">> = {
+  chat: "chat",
+  inbox: "chat",
+  studio: "studio",
+};
 
 /**
  * Rail navigation for every page of the Pavra shell. /pavra stays at the bottom of the stack

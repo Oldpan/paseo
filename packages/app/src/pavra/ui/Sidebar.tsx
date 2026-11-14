@@ -26,18 +26,25 @@ import type {
   MachineInfo,
   Message,
 } from "../../../../../extensions/pavra/shared/contracts";
+import type { InboxState } from "../inbox";
 import { MachinesSection } from "../machines";
 import { AgentAvatar, UserAvatar } from "./avatars";
 import { ColResizeHandle } from "./ColResizeHandle";
 import { SettingsIcon, PlusIcon, ChevronIcon } from "./icons";
 import { Rail } from "./Rail";
-import { SidebarChannelRow, SidebarPanelToggle, SectionHeader } from "./SidebarControls";
+import {
+  SidebarChannelRow,
+  SidebarPanelToggle,
+  SectionHeader,
+  UnreadBadge,
+} from "./SidebarControls";
 import { ctrlShadow, text as type, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
 const COMPACT_SIDEBAR_WIDTH = 290;
 const SIDEBAR_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 const SECTION_TITLES: Record<string, string> = {
+  inbox: "Inbox",
   members: "Member",
   search: "Search",
   chat: "Chat",
@@ -54,6 +61,8 @@ interface SidebarProps {
   machines: MachineInfo[];
   messages: Message[];
   hostLabels: Record<string, string>;
+  inboxBadge?: number;
+  inboxState?: InboxState;
   onSelect(id: string): void;
   onAssistant(): void;
   onEdit(id: string): void;
@@ -74,7 +83,9 @@ export function Sidebar(props: SidebarProps) {
 
   const select = (item: RailItem) => {
     rail.select(item);
-    if (item === "chat" || item === "members" || item === "search") setCollapsed(false);
+    if (item === "chat" || item === "inbox" || item === "members" || item === "search") {
+      setCollapsed(false);
+    }
   };
 
   const isCollapsed = !props.compact && collapsed;
@@ -126,6 +137,7 @@ export function Sidebar(props: SidebarProps) {
     >
       <Rail
         active={rail.active}
+        inboxBadge={props.inboxBadge}
         onSelect={select}
         onUsage={openUsage}
         onSettings={rail.settings}
@@ -286,7 +298,9 @@ function SidebarBody({ props, section }: { props: SidebarProps; section: string 
           }}
         />
       ) : null}
-      {section === "members" ? (
+      {section === "inbox" ? (
+        <InboxSidebarSummary props={props} />
+      ) : section === "members" ? (
         <MachinesSection
           machines={props.machines}
           assistants={props.assistants}
@@ -381,6 +395,142 @@ function SidebarBody({ props, section }: { props: SidebarProps; section: string 
         </>
       )}
     </ScrollView>
+  );
+}
+
+function InboxSidebarSummary({ props }: { props: SidebarProps }) {
+  const { palette: t, name } = useTheme();
+  const inbox = props.inboxState;
+  const needsActionCount = inbox?.needsAction.length ?? props.inboxBadge ?? 0;
+  const recentCount = inbox?.recentActivity.length ?? 0;
+  const upcomingCount = inbox?.upcoming.length ?? 0;
+  const suggestionsCount = inbox?.suggestions.length ?? 0;
+
+  const pendingByConversation = new Map<string, number>();
+  if (inbox) {
+    for (const item of inbox.needsAction) {
+      pendingByConversation.set(
+        item.conversationId,
+        (pendingByConversation.get(item.conversationId) ?? 0) + 1,
+      );
+    }
+    for (const item of inbox.suggestions) {
+      pendingByConversation.set(
+        item.conversationId,
+        (pendingByConversation.get(item.conversationId) ?? 0) + 1,
+      );
+    }
+  }
+  const activeConversations = props.conversations.filter((conv) =>
+    pendingByConversation.has(conv.id),
+  );
+
+  const summaryRows = [
+    { id: "needs-action", label: "Needs your action", count: needsActionCount, urgent: true },
+    { id: "recent-activity", label: "Recent activity", count: recentCount, urgent: false },
+    { id: "upcoming", label: "Upcoming routines", count: upcomingCount, urgent: false },
+    { id: "suggestions", label: "Suggestions", count: suggestionsCount, urgent: false },
+  ];
+
+  return (
+    <View style={{ gap: 10 }} testID="inbox-sidebar-summary">
+      <View
+        style={[
+          {
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: t.surfaceElevated,
+            padding: 10,
+            gap: 8,
+          },
+          ctrlShadow(t, name),
+        ]}
+      >
+        <Text
+          style={type(t.textPrimary, 11, {
+            fontWeight: "700",
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+          })}
+        >
+          Overview
+        </Text>
+        {summaryRows.map((row) => (
+          <View
+            key={row.id}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              paddingVertical: 2,
+            }}
+          >
+            <Text style={type(t.textSecondary, 12, { fontWeight: "600" })}>{row.label}</Text>
+            {row.urgent && row.count > 0 ? (
+              <UnreadBadge count={row.count} />
+            ) : (
+              <Text style={type(t.textMuted, 11, { fontWeight: "700" })}>{row.count}</Text>
+            )}
+          </View>
+        ))}
+      </View>
+
+      {activeConversations.length > 0 ? (
+        <View style={{ gap: 4 }}>
+          <Text
+            style={type(t.textPrimary, 11, {
+              fontWeight: "700",
+              letterSpacing: 0.8,
+              textTransform: "uppercase",
+              paddingHorizontal: 4,
+              marginTop: 4,
+            })}
+          >
+            Pending by chat
+          </Text>
+          {activeConversations.map((conv) => {
+            const count = pendingByConversation.get(conv.id) ?? 0;
+            return (
+              <SidebarChannelRow
+                key={conv.id}
+                channel={conv}
+                selected={false}
+                compact={false}
+                unreadCount={count}
+                onOpen={() => props.onSelect(conv.id)}
+              />
+            );
+          })}
+        </View>
+      ) : null}
+
+      {props.conversations.length > 0 ? (
+        <View style={{ gap: 4 }}>
+          <Text
+            style={type(t.textPrimary, 11, {
+              fontWeight: "700",
+              letterSpacing: 0.8,
+              textTransform: "uppercase",
+              paddingHorizontal: 4,
+              marginTop: 4,
+            })}
+          >
+            Jump to chat
+          </Text>
+          {props.conversations.map((conv) => (
+            <SidebarChannelRow
+              key={conv.id}
+              channel={conv}
+              selected={conv.id === props.chatId}
+              compact={false}
+              unreadCount={0}
+              onOpen={() => props.onSelect(conv.id)}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }
 function DmRow({

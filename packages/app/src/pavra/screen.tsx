@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Text, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { randomUUID } from "expo-crypto";
 import { RetainedPanel } from "@/components/retained-panel";
@@ -19,11 +20,12 @@ import {
 } from "../../../../extensions/pavra/shared/contracts";
 import { useAssistantMachines, usePavraData, useMachines, type PavraData } from "./data";
 import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
+import { deriveInboxState } from "./inbox";
 import { resolveDefaultChatId, resolveDefaultCoordinatorId } from "./model";
 import { taskIdOfThread, taskTitle } from "./task-view";
 import { usePavraTitle } from "./title";
 import { CoordinatorNotice } from "./coordinator-notice";
-import { usePavraView } from "./store";
+import { usePavraView, type SidebarSection } from "./store";
 import { palettes } from "./palette";
 import { PavraChat } from "./chat";
 import { PavraForm } from "./forms";
@@ -33,6 +35,7 @@ import { TurnProcessDrawer } from "./turn-process-drawer";
 import { PavraTheme, usePavraDark } from "./ui/ThemeProvider";
 import { AnimatedDrawer } from "./ui/AnimatedDrawer";
 import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
+import { InboxPane } from "./ui/InboxPane";
 import { Sidebar } from "./ui/Sidebar";
 
 const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
@@ -119,10 +122,41 @@ function assistantFormFields(input: {
 
 // Option value for "no default responder": a plain message then goes to the first member.
 const NO_DEFAULT_RESPONDER = "first";
+const VALID_SECTIONS = new Set<SidebarSection>(["chat", "inbox", "members", "search"]);
 
-export function PavraScreen() {
-  const hosts = useHosts();
-  const hostRegistryStatus = useHostRegistryStatus();
+function usePavraUrlLocationSync(viewHydrated: boolean) {
+  const searchParams = useLocalSearchParams<{
+    section?: string;
+    chatId?: string;
+    threadId?: string;
+  }>();
+  const appliedParamsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!viewHydrated) return;
+    const paramSection = typeof searchParams.section === "string" ? searchParams.section : "";
+    const paramChatId = typeof searchParams.chatId === "string" ? searchParams.chatId : "";
+    const paramThreadId = typeof searchParams.threadId === "string" ? searchParams.threadId : "";
+    if (!paramSection && !paramChatId && !paramThreadId) return;
+    const key = `${paramSection}\0${paramChatId}\0${paramThreadId}`;
+    if (appliedParamsRef.current === key) return;
+    appliedParamsRef.current = key;
+    const view = usePavraView.getState();
+    if (paramChatId) view.selectChat(paramChatId);
+    if (paramThreadId) view.setThread(paramThreadId);
+    if (VALID_SECTIONS.has(paramSection as SidebarSection)) {
+      view.setSection(paramSection as SidebarSection);
+      view.setMode("chat");
+    }
+  }, [searchParams.chatId, searchParams.section, searchParams.threadId, viewHydrated]);
+}
+
+function usePavraHydrationAndDefaults(
+  coordinatorId: string,
+  rawCoordinatorId: string,
+  chatId: string,
+  rawChatId: string,
+  selectCoordinator: (id: string) => void,
+) {
   const [bootSettled, setBootSettled] = useState(() =>
     getHostRuntimeStore().isHostRegistryLoaded(),
   );
@@ -147,16 +181,6 @@ export function PavraScreen() {
       setViewHydrated(true);
     });
   }, []);
-  const compact = useIsCompactFormFactor();
-  const dark = usePavraDark();
-  const palette = dark ? palettes.dark : palettes.light;
-  const rawCoordinatorId = usePavraView((state) => state.coordinatorId);
-  const rawChatId = usePavraView((state) => state.chatId);
-  const mode = usePavraView((state) => state.mode);
-  const coordinatorId = resolveDefaultCoordinatorId(rawCoordinatorId, hosts);
-  const data = usePavraData(coordinatorId);
-  const selectCoordinator = usePavraView((state) => state.selectCoordinator);
-  const chatId = resolveDefaultChatId(rawChatId, data.state.conversations);
   useEffect(() => {
     if (!viewHydrated) return;
     if (coordinatorId && coordinatorId !== rawCoordinatorId) {
@@ -169,8 +193,62 @@ export function PavraScreen() {
       usePavraView.setState({ chatId });
     }
   }, [chatId, rawChatId, viewHydrated]);
+  usePavraUrlLocationSync(viewHydrated);
+  return { bootSettled, viewHydrated };
+}
+
+function shouldOpenCoordinatorPicker(input: {
+  form: string | null;
+  coordinatorId: string;
+  viewHydrated: boolean;
+  hostRegistryStatus: string;
+  bootSettled: boolean;
+}): boolean {
+  if (input.form === "hosts") return true;
+  return (
+    !input.coordinatorId &&
+    input.viewHydrated &&
+    input.hostRegistryStatus === "ready" &&
+    input.bootSettled
+  );
+}
+
+function resolveActivePavraPanels(
+  mode: "chat" | "studio" | "assistants",
+  section: SidebarSection,
+  coordinatorId: string,
+) {
+  const hasCoordinator = Boolean(coordinatorId);
+  return {
+    chatActive: mode === "chat" && section !== "inbox" && hasCoordinator,
+    inboxActive: mode === "chat" && section === "inbox" && hasCoordinator,
+    studioActive: mode === "studio",
+  };
+}
+
+export function PavraScreen() {
+  const hosts = useHosts();
+  const hostRegistryStatus = useHostRegistryStatus();
+  const compact = useIsCompactFormFactor();
+  const dark = usePavraDark();
+  const palette = dark ? palettes.dark : palettes.light;
+  const rawCoordinatorId = usePavraView((state) => state.coordinatorId);
+  const rawChatId = usePavraView((state) => state.chatId);
+  const mode = usePavraView((state) => state.mode);
+  const section = usePavraView((state) => state.section);
+  const coordinatorId = resolveDefaultCoordinatorId(rawCoordinatorId, hosts);
+  const data = usePavraData(coordinatorId);
+  const selectCoordinator = usePavraView((state) => state.selectCoordinator);
+  const chatId = resolveDefaultChatId(rawChatId, data.state.conversations);
+  const { bootSettled, viewHydrated } = usePavraHydrationAndDefaults(
+    coordinatorId,
+    rawCoordinatorId,
+    chatId,
+    rawChatId,
+    selectCoordinator,
+  );
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
-  usePavraTitle(mode, conversationTitle);
+  usePavraTitle(mode, conversationTitle, section);
   const [form, setForm] = useState<"assistant" | "group" | "task" | "workspaces" | "hosts" | null>(
     null,
   );
@@ -424,6 +502,13 @@ export function PavraScreen() {
     },
     [changeChat],
   );
+  const openInboxConversation = useCallback(
+    (targetChatId: string, targetThreadId: string | null) => {
+      selectChat(targetChatId);
+      usePavraView.getState().setThread(targetThreadId);
+    },
+    [selectChat],
+  );
   const editAssistant = useCallback(
     (id: string) => {
       setEditing(id);
@@ -564,6 +649,7 @@ export function PavraScreen() {
     }),
     [directoryMachines, hosts],
   );
+  const inboxState = useMemo(() => deriveInboxState(data.state), [data.state]);
   const processTurn = useMemo(
     () =>
       mode === "chat" && processTurnId
@@ -571,6 +657,14 @@ export function PavraScreen() {
         : null,
     [data.state.turns, mode, processTurnId],
   );
+  const panels = resolveActivePavraPanels(mode, section, coordinatorId);
+  const showCoordinatorModal = shouldOpenCoordinatorPicker({
+    form,
+    coordinatorId,
+    viewHydrated,
+    hostRegistryStatus,
+    bootSettled,
+  });
   const sidebarProps = {
     compact,
     chatId,
@@ -583,6 +677,8 @@ export function PavraScreen() {
     machines: directoryMachines,
     messages: data.state.messages,
     hostLabels,
+    inboxBadge: inboxState.needsAction.length,
+    inboxState,
     onSelect: selectChat,
     onAssistant: showAssistant,
     onEdit: editAssistant,
@@ -624,7 +720,7 @@ export function PavraScreen() {
                   <Text style={[text, DISMISS_TEXT]}>Dismiss</Text>
                 </PressHighlight>
               ) : null}
-              <RetainedPanel active={mode === "chat" && Boolean(coordinatorId)}>
+              <RetainedPanel active={panels.chatActive}>
                 <PavraChat
                   key={`${coordinatorId}:${chatId}`}
                   data={data}
@@ -638,13 +734,24 @@ export function PavraScreen() {
                   onSidebar={compact ? showSidebar : undefined}
                 />
               </RetainedPanel>
-              <RetainedPanel active={mode === "studio"}>
+              <RetainedPanel active={panels.inboxActive}>
+                <InboxPane
+                  data={data}
+                  inbox={inboxState}
+                  compact={compact}
+                  onOpenConversation={openInboxConversation}
+                  onOpenTask={openTask}
+                  onOpenTurn={openTurn}
+                  onSidebar={compact ? showSidebar : undefined}
+                />
+              </RetainedPanel>
+              <RetainedPanel active={panels.studioActive}>
                 <Studio
                   palette={palette}
                   data={data}
                   coordinatorId={coordinatorId}
                   hostLabels={hostLabels}
-                  active={mode === "studio"}
+                  active={panels.studioActive}
                   onAdd={showWorkspaces}
                   onSidebar={compact ? showSidebar : undefined}
                   onError={setError}
@@ -659,8 +766,7 @@ export function PavraScreen() {
                 onClose={closeProcessDrawer}
                 onOpenStudio={openTurnInStudio}
               />
-              {form === "hosts" ||
-              (!coordinatorId && viewHydrated && hostRegistryStatus === "ready" && bootSettled) ? (
+              {showCoordinatorModal ? (
                 <CoordinatorPickerModal
                   hosts={hosts}
                   onSelect={selectCoordinator}

@@ -1,7 +1,19 @@
 import { useEffect } from "react";
 import { isWeb } from "@/constants/platform";
-export function usePavraTitle(mode: string, label: string | undefined) {
-  const title = mode === "studio" ? "Studio · Pavra" : `${label ?? "Chat"} · Pavra`;
+import type { SidebarSection } from "./store";
+
+function formatPavraTitle(
+  mode: string,
+  label: string | undefined,
+  section?: SidebarSection,
+): string {
+  if (mode === "studio") return "Studio · Pavra";
+  if (section === "inbox") return "Inbox · Pavra";
+  return `${label ?? "Chat"} · Pavra`;
+}
+
+export function usePavraTitle(mode: string, label: string | undefined, section?: SidebarSection) {
+  const title = formatPavraTitle(mode, label, section);
   useEffect(() => {
     if (isWeb) document.title = title;
   }, [title]);

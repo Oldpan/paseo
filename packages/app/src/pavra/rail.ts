@@ -1,4 +1,4 @@
-// The Pavra rail is the shell's one navigation column. Chat, Member, Search and Studios live in
+// The Pavra rail is the shell's one navigation column. Chat, Inbox, Member, Search and Studios live in
 // the /pavra screen; History and Schedules are Paseo pages hosted in the same shell.
 import type { SidebarSection } from "./store";
 
