@@ -3,34 +3,17 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { View } from "react-native";
 import { SidebarMenuHostContext } from "@/components/headers/sidebar-menu-host";
-import { PressHighlight } from "@/components/ui/press-highlight";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { UsageSidebarRoot, useOpenSidebarUsage } from "@/usage/sidebar-item";
 import { IS_BIGBANG } from "./build";
 import type { RailItem } from "./rail";
 import { useRailNavigation } from "./use-rail";
+import { AnimatedDrawer } from "./ui/AnimatedDrawer";
 import { Rail } from "./ui/Rail";
 import { BigbangTheme, useBigbangDark, useTheme } from "./ui/ThemeProvider";
 
 const ROW = { flex: 1, minHeight: 0, flexDirection: "row" } as const;
 const FILL = { flex: 1, minWidth: 0, minHeight: 0 } as const;
-const OVERLAY = {
-  position: "absolute",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  zIndex: 100,
-  flexDirection: "row",
-} as const;
-const BACKDROP = {
-  position: "absolute",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: "rgba(0,0,0,0.45)",
-} as const;
 
 /** Hosts a Paseo page in the Bigbang shell in the Bigbang build, and leaves it alone otherwise. */
 export function BigbangPage({ children }: { children: ReactNode }) {
@@ -61,16 +44,15 @@ function PageShell({ children }: { children: ReactNode }) {
       <View style={frame} testID="bigbang-page">
         {!compact ? <PageRail onDone={closeDrawer} /> : null}
         <View style={FILL}>{children}</View>
-        {compact && drawer ? (
-          <View style={OVERLAY}>
-            <PressHighlight
-              accessibilityLabel="Close navigation"
-              onPress={closeDrawer}
-              style={BACKDROP}
-            />
-            <PageRail onDone={closeDrawer} />
-          </View>
-        ) : null}
+        <AnimatedDrawer
+          open={compact && drawer}
+          side="left"
+          drawerWidth={56}
+          closeLabel="Close navigation"
+          onClose={closeDrawer}
+        >
+          <PageRail onDone={closeDrawer} />
+        </AnimatedDrawer>
       </View>
     </SidebarMenuHostContext.Provider>
   );

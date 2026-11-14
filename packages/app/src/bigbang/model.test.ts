@@ -8,6 +8,8 @@ import {
   machineRoleLabel,
   mergeChatState,
   OPENED_GROUP,
+  resolveDefaultChatId,
+  resolveDefaultCoordinatorId,
   sortMessages,
   studioColumnFor,
   studioKey,
@@ -135,5 +137,35 @@ describe("machineRoleLabel", () => {
       "Unavailable · plugin missing",
     );
     expect(machineRoleLabel(undefined)).toBe("Studio only");
+  });
+});
+
+describe("resolveDefaultCoordinatorId and resolveDefaultChatId", () => {
+  it("preserves coordinatorId while hosts are empty and picks the first or coordinator host once loaded", () => {
+    expect(resolveDefaultCoordinatorId("saved-host", [])).toBe("saved-host");
+    expect(resolveDefaultCoordinatorId("", [])).toBe("");
+    expect(
+      resolveDefaultCoordinatorId(
+        "",
+        [{ serverId: "mac" }, { serverId: "spark" }],
+        [
+          { serverId: "mac", label: "Mac", role: "member" },
+          { serverId: "spark", label: "Spark", role: "coordinator" },
+        ],
+      ),
+    ).toBe("spark");
+    expect(resolveDefaultCoordinatorId("stale", [{ serverId: "spark" }, { serverId: "mac" }])).toBe(
+      "spark",
+    );
+    expect(resolveDefaultCoordinatorId("mac", [{ serverId: "spark" }, { serverId: "mac" }])).toBe(
+      "mac",
+    );
+  });
+
+  it("preserves chatId while conversations are empty and falls back to the first conversation", () => {
+    expect(resolveDefaultChatId("chat-1", [])).toBe("chat-1");
+    expect(resolveDefaultChatId("", [{ id: "dm-sky" }, { id: "dm-ada" }])).toBe("dm-sky");
+    expect(resolveDefaultChatId("missing", [{ id: "dm-sky" }, { id: "dm-ada" }])).toBe("dm-sky");
+    expect(resolveDefaultChatId("dm-ada", [{ id: "dm-sky" }, { id: "dm-ada" }])).toBe("dm-ada");
   });
 });

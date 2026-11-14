@@ -23,12 +23,13 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 
 | Doc                                                                  | What's in it                                                                                                                    |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| [docs/bigbang-roadmap.md](docs/bigbang-roadmap.md)                   | Bigbang Chat/Studio integration decisions, source/UI migration scope, milestones and pending choices                            |
+| [docs/bigbang-roadmap.md](docs/bigbang-roadmap.md)                   | Bigbang decisions, delivery order with one-line status per stage, what is not being built, and reference sources                |
+| [docs/bigbang-acceptance.md](docs/bigbang-acceptance.md)             | Bigbang acceptance log: dated evidence per platform, Git SHA and limits; what is still unverified                               |
 | [docs/bigbang-chat.md](docs/bigbang-chat.md)                         | Bigbang Chat: ledger vs executions, machines and member relay, anchoring, recovery, routing, tasks, mailbox, Studio             |
 | [docs/bigbang-development.md](docs/bigbang-development.md)           | Bigbang development: fork isolation, Mac + Spark topology, `bigbang:sync-spark` hot-reload workflow, and upstream merge cadence |
 | [docs/bigbang-phone.md](docs/bigbang-phone.md)                       | Bigbang phone control proposal (not built): Chat assistants operating an Android phone, ported from mika                        |
 | [docs/bigbang-browser.md](docs/bigbang-browser.md)                   | Bigbang browser control and takeover proposal (not built): per-assistant Chromium profiles and human-in-the-loop takeover       |
-| [docs/bigbang-routines.md](docs/bigbang-routines.md)                 | Bigbang routines and playbooks proposal (not built): scheduled assistant check-ins, `(pass)` silence, and reusable playbooks    |
+| [docs/bigbang-routines.md](docs/bigbang-routines.md)                 | Bigbang routines and playbooks proposal (not built): Paseo schedules with a plugin target, `(pass)` silence, playbooks          |
 | [docs/product.md](docs/product.md)                                   | What Paseo is, who it's for, where it's going                                                                                   |
 | [docs/architecture.md](docs/architecture.md)                         | System design, package layering, WebSocket protocol, agent lifecycle, data flow                                                 |
 | [docs/agent-lifecycle.md](docs/agent-lifecycle.md)                   | Agent states, parent/child relationships, archive semantics, tabs vs archive, subagents track                                   |

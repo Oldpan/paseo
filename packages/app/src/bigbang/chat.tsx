@@ -1,5 +1,19 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { text as type } from "./ui/theme";
 import { randomUUID } from "expo-crypto";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -7,20 +21,30 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
+import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { useShallow } from "zustand/shallow";
 import {
   sendMessage,
   cancelTask,
   respondTaskPermission,
   type Assistant,
+  type Message,
   type Task,
   type Turn,
 } from "../../../../extensions/bigbang/shared/contracts";
 import type { BigbangData } from "./data";
+import {
+  clampThreadWidth,
+  maxAllowedThreadWidth,
+  THREAD_DEFAULT_WIDTH,
+  THREAD_MIN_WIDTH,
+} from "./panel-resize";
 import { useBigbangView } from "./store";
 import type { Palette } from "./palette";
+import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane } from "./ui/ChatPane";
+import { ColResizeHandle } from "./ui/ColResizeHandle";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
 import { LiveTurnItem } from "./live-turn-item";
 import { openExchanges } from "./peer-activity";
@@ -68,10 +92,18 @@ interface TaskWiring {
   actionsFor(task: Task, inThread: boolean): TaskCardActions;
   respond(taskId: string, requestId: string, behavior: "allow" | "deny"): Promise<void>;
 }
-const FLEX = { flex: 1, minWidth: 0, minHeight: 0 };
-const SPLIT = { flex: 1, minWidth: 0, minHeight: 0, flexDirection: "row" } as const;
-const THREAD = { width: 420, maxWidth: "100%", minHeight: 0, borderLeftWidth: 1 } as const;
-const TASKS = { padding: 20, gap: 12 };
+const FLEX = { flex: 1, minWidth: 0, minHeight: 0 } as const;
+const SPLIT = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  flexDirection: "row",
+  position: "relative",
+} as const;
+const THREAD_CLIP = { height: "100%", minHeight: 0, overflow: "hidden", flexShrink: 0 } as const;
+const THREAD_INNER = { flex: 1, minHeight: 0 } as const;
+const TASKS = { padding: 20, gap: 12 } as const;
+const THREAD_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const HINT_DEBOUNCE_MS = 150;
 function noMention() {}
@@ -116,11 +148,7 @@ function headerEdit(
   return kind === "dm" && assistant ? edit : undefined;
 }
 /** Task navigation and RPCs shared by the cards, receipt rows and the Tasks tab. */
-function useTaskWiring(
-  data: BigbangData,
-  onOpenTask: (task: Task) => void,
-  setTab: (tab: string) => void,
-): TaskWiring {
+function useTaskWiring(data: BigbangData, onOpenTask: (task: Task) => void): TaskWiring {
   const hosts = useHosts();
   const setThread = useBigbangView((state) => state.setThread);
   return useMemo<TaskWiring>(() => {
@@ -131,9 +159,7 @@ function useTaskWiring(
     ): Promise<void> => {
       await data.call(respondTaskPermission, { taskId, requestId, behavior });
     };
-    // The thread panel only exists on the Chat tab.
     const openThread = (taskId: string) => {
-      setTab("chat");
       setThread(taskThreadId(taskId));
     };
     return {
@@ -149,7 +175,7 @@ function useTaskWiring(
         respond: (requestId, behavior) => respond(task.id, requestId, behavior),
       }),
     };
-  }, [data, hosts, onOpenTask, setTab, setThread]);
+  }, [data, hosts, onOpenTask, setThread]);
 }
 function TasksTab({
   data,
@@ -163,7 +189,7 @@ function TasksTab({
   const chatId = useBigbangView((state) => state.chatId);
   const tasks = data.state.tasks.filter((task) => task.conversationId === chatId);
   return (
-    <ScrollView contentContainerStyle={TASKS}>
+    <ScrollView style={FLEX} contentContainerStyle={TASKS}>
       {tasks.map((task) => (
         <TaskCard
           key={task.id}
@@ -192,6 +218,27 @@ function computeThreadTitle(
   return `Task thread${threadTask ? `: ${taskTitle(threadTask)}` : ""}`;
 }
 
+function computeThreadSubtitle(
+  threadId: string | null,
+  tasks: readonly Task[],
+  messages: readonly Message[],
+  chatId: string,
+  conversationName: string,
+): string | undefined {
+  if (!threadId) return undefined;
+  const replies = messages.filter(
+    (message) =>
+      message.conversationId === chatId && message.threadId === threadId && !isNoteMessage(message),
+  ).length;
+  const replyLabel = `${replies} ${replies === 1 ? "reply" : "replies"}`;
+  const taskId = taskIdOfThread(threadId);
+  const threadTask = taskId ? tasks.find((task) => task.id === taskId) : undefined;
+  if (threadTask) {
+    return `${threadTask.status.replace(/_/g, " ")} · ${replyLabel}`;
+  }
+  return conversationName ? `in ${conversationName} · ${replyLabel}` : replyLabel;
+}
+
 function chatHeaderTitle(
   conversation: { kind: string; name: string } | undefined,
   assistant: Assistant | undefined,
@@ -200,58 +247,136 @@ function chatHeaderTitle(
   return conversation?.name ?? "Bigbang";
 }
 
-function ChatSplitPane({
-  props,
-  compact,
-  threadId,
-  roundtable,
-  wiring,
-  threadTitle,
-  threadStyle,
-  leaveThread,
-  onOpenStudioThread,
+function DesktopThreadPane({
+  open,
+  threadWidth,
+  maxThreadWidth,
+  onWidthChange,
+  title,
+  subtitle,
+  backgroundColor,
+  borderColor,
+  onClose,
+  onOpenStudio,
+  children,
 }: {
-  props: ChatProps;
-  compact: boolean;
-  threadId: string | null;
-  roundtable: RoundtableProgress | null;
-  wiring: TaskWiring;
-  threadTitle: string;
-  threadStyle: StyleProp<ViewStyle>;
-  leaveThread(): void;
-  onOpenStudioThread?: () => void;
+  open: boolean;
+  threadWidth: number;
+  maxThreadWidth: number;
+  onWidthChange(width: number): void;
+  title: string;
+  subtitle?: string;
+  backgroundColor: string;
+  borderColor: string;
+  onClose(): void;
+  onOpenStudio?: () => void;
+  children: ReactNode;
 }) {
+  const widthSV = useSharedValue(0);
+  const opacitySV = useSharedValue(0);
+  const prevOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (prevOpenRef.current !== open) {
+      prevOpenRef.current = open;
+      widthSV.value = withTiming(open ? threadWidth : 0, {
+        duration: open ? 200 : 180,
+        easing: THREAD_EASING,
+      });
+      opacitySV.value = withTiming(open ? 1 : 0, {
+        duration: open ? 200 : 140,
+        easing: THREAD_EASING,
+      });
+      return;
+    }
+    if (open) {
+      widthSV.value = threadWidth;
+      opacitySV.value = 1;
+    }
+  }, [open, opacitySV, threadWidth, widthSV]);
+
+  const clipAnimatedStyle = useAnimatedStyle(() => ({
+    width: widthSV.value,
+    opacity: opacitySV.value,
+  }));
+  const clipStyle = useMemo(() => [THREAD_CLIP, clipAnimatedStyle], [clipAnimatedStyle]);
+  const innerStyle = useMemo(
+    () => [THREAD_INNER, inlineUnistylesStyle({ width: threadWidth, backgroundColor })],
+    [backgroundColor, threadWidth],
+  );
+
   return (
-    <View style={SPLIT}>
-      {!compact || !threadId ? (
-        <ConversationPane
-          key="root"
-          {...props}
-          threadId={null}
-          phone={compact}
-          roundtable={null}
-          wiring={wiring}
+    <>
+      {open ? (
+        <ColResizeHandle
+          testID="chat-thread-resize-handle"
+          accessibilityLabel="Resize thread panel"
+          grow="right"
+          width={threadWidth}
+          minWidth={THREAD_MIN_WIDTH}
+          maxWidth={maxThreadWidth}
+          defaultWidth={THREAD_DEFAULT_WIDTH}
+          onWidthChange={onWidthChange}
+          ruleWidth={2}
+          ruleColor={borderColor}
         />
       ) : null}
-      {threadId ? (
-        <View style={compact ? FLEX : threadStyle}>
+      <Animated.View pointerEvents={open ? "auto" : "none"} style={clipStyle}>
+        <View testID="chat-thread-panel" style={innerStyle}>
           <ThreadHeader
-            onClose={leaveThread}
-            compact={compact}
-            title={threadTitle}
-            onOpenStudio={onOpenStudioThread}
+            onClose={onClose}
+            compact={false}
+            title={title}
+            subtitle={subtitle}
+            onOpenStudio={onOpenStudio}
           />
-          <ConversationPane
-            key={threadId}
-            {...props}
-            threadId={threadId}
-            phone={compact}
-            roundtable={roundtable}
-            wiring={wiring}
-          />
+          {children}
         </View>
-      ) : null}
-    </View>
+      </Animated.View>
+    </>
+  );
+}
+
+function CompactThreadDrawer({
+  open,
+  drawerWidth,
+  backgroundColor,
+  title,
+  subtitle,
+  onClose,
+  onOpenStudio,
+  children,
+}: {
+  open: boolean;
+  drawerWidth: number;
+  backgroundColor: string;
+  title: string;
+  subtitle?: string;
+  onClose(): void;
+  onOpenStudio?: () => void;
+  children: ReactNode;
+}) {
+  const sheetStyle = useMemo(() => [FLEX, { backgroundColor }], [backgroundColor]);
+  return (
+    <AnimatedDrawer
+      open={open}
+      side="right"
+      drawerWidth={drawerWidth > 0 ? drawerWidth : 390}
+      fullWidth
+      backdrop={false}
+      zIndex={20}
+    >
+      <View testID="chat-thread-panel" style={sheetStyle}>
+        <ThreadHeader
+          onClose={onClose}
+          compact
+          title={title}
+          subtitle={subtitle}
+          onOpenStudio={onOpenStudio}
+        />
+        {children}
+      </View>
+    </AnimatedDrawer>
   );
 }
 
@@ -262,10 +387,18 @@ export function BigbangChat(props: ChatProps) {
   const coordinatorId = useBigbangView((state) => state.coordinatorId);
   const threadId = useBigbangView((state) => state.threadId);
   const setThread = useBigbangView((state) => state.setThread);
+  const threadWidth = useBigbangView((state) => state.threadWidth);
+  const setThreadWidth = useBigbangView((state) => state.setThreadWidth);
+  const [containerWidth, setContainerWidth] = useState(0);
   const [tab, setTab] = useState("chat");
+  const { activeId: renderedThreadId, open: threadOpen } = usePresenceId(threadId, 190);
   const conversation = data.state.conversations.find((item) => item.id === chatId);
   const assistant = data.state.assistants.find((item) => item.id === conversation?.members[0]);
   const hosts = useHosts();
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = Math.round(event.nativeEvent.layout.width);
+    setContainerWidth((current) => (current === nextWidth ? current : nextWidth));
+  }, []);
   const leaveThread = useCallback(() => setThread(null), [setThread]);
   const edit = useCallback(() => {
     if (assistant) onEditAssistant(assistant.id);
@@ -276,11 +409,13 @@ export function BigbangChat(props: ChatProps) {
     if (conversationId && onOpenStudio) onOpenStudio(conversationId, null);
   }, [conversationId, onOpenStudio]);
   const openStudioThread = useCallback(() => {
-    if (conversationId && threadId && onOpenStudio) onOpenStudio(conversationId, threadId);
-  }, [conversationId, onOpenStudio, threadId]);
+    if (conversationId && renderedThreadId && onOpenStudio) {
+      onOpenStudio(conversationId, renderedThreadId);
+    }
+  }, [conversationId, onOpenStudio, renderedThreadId]);
   const onOpenStudioRootProp = conversation && onOpenStudio ? openStudioRoot : undefined;
   const onOpenStudioThreadProp =
-    conversation && threadId && onOpenStudio ? openStudioThread : undefined;
+    conversation && renderedThreadId && onOpenStudio ? openStudioThread : undefined;
   const subtitle = useMemo(
     () =>
       headerSubtitle(
@@ -293,49 +428,101 @@ export function BigbangChat(props: ChatProps) {
       ),
     [assistant, conversation, coordinatorId, data.state.assistants, hosts, props.hostLabels],
   );
-  const roundtable = useMemo(
-    () => roundtableProgress(data.state.messages, data.state.turns, chatId, threadId),
-    [chatId, data.state.messages, data.state.turns, threadId],
+  const headerTitle = chatHeaderTitle(conversation, assistant);
+  const activeRoundtable = useMemo(
+    () => roundtableProgress(data.state.messages, data.state.turns, chatId, renderedThreadId),
+    [chatId, data.state.messages, data.state.turns, renderedThreadId],
   );
-  const threadStyle = useMemo(
-    () => [THREAD, { borderColor: palette.retroBorder }],
-    [palette.retroBorder],
-  );
-  const wiring = useTaskWiring(data, props.onOpenTask, setTab);
+  const wiring = useTaskWiring(data, props.onOpenTask);
   const threadTitle = useMemo(
-    () => computeThreadTitle(threadId, data.state.tasks, roundtable),
-    [data.state.tasks, roundtable, threadId],
+    () => computeThreadTitle(renderedThreadId, data.state.tasks, activeRoundtable),
+    [activeRoundtable, data.state.tasks, renderedThreadId],
   );
+  const threadSubtitle = useMemo(
+    () =>
+      computeThreadSubtitle(
+        renderedThreadId,
+        data.state.tasks,
+        data.state.messages,
+        chatId,
+        headerTitle,
+      ),
+    [chatId, data.state.messages, data.state.tasks, headerTitle, renderedThreadId],
+  );
+  const maxThreadWidth = maxAllowedThreadWidth(containerWidth);
+  const effectiveThreadWidth = clampThreadWidth(threadWidth, containerWidth);
+  const seed = `${assistant?.id}:${assistant?.name}`;
+  const editHandler = headerEdit(conversation?.kind, assistant, edit);
+
+  const threadContent = renderedThreadId ? (
+    <ConversationPane
+      key={renderedThreadId}
+      {...props}
+      threadId={renderedThreadId}
+      phone={compact}
+      roundtable={activeRoundtable}
+      wiring={wiring}
+    />
+  ) : null;
+
   return (
-    <View style={FLEX}>
-      <ChatHeader
-        label={chatHeaderTitle(conversation, assistant)}
-        seed={`${assistant?.id}:${assistant?.name}`}
-        group={conversation?.kind === "group"}
-        subtitle={subtitle}
-        connected={data.connected}
-        tab={tab}
-        onTab={setTab}
-        onSidebar={onSidebar}
-        onEdit={headerEdit(conversation?.kind, assistant, edit)}
-        onOpenStudio={onOpenStudioRootProp}
-      />
-      {tab === "chat" ? (
-        <ChatSplitPane
-          props={props}
-          compact={compact}
-          threadId={threadId}
-          roundtable={roundtable}
-          wiring={wiring}
-          threadTitle={threadTitle}
-          threadStyle={threadStyle}
-          leaveThread={leaveThread}
-          onOpenStudioThread={onOpenStudioThreadProp}
+    <View onLayout={handleLayout} style={SPLIT}>
+      <View style={FLEX}>
+        <ChatHeader
+          label={headerTitle}
+          seed={seed}
+          group={conversation?.kind === "group"}
+          subtitle={subtitle}
+          connected={data.connected}
+          tab={tab}
+          onTab={setTab}
+          onSidebar={onSidebar}
+          onEdit={editHandler}
+          onOpenStudio={onOpenStudioRootProp}
         />
+        {tab === "chat" ? (
+          <ConversationPane
+            key="root"
+            {...props}
+            threadId={null}
+            phone={compact}
+            roundtable={null}
+            wiring={wiring}
+          />
+        ) : null}
+        {tab === "task" ? <TasksTab data={data} palette={palette} wiring={wiring} /> : null}
+        {tab === "memory" ? (
+          <MemoryTab data={data} assistant={assistant} onEdit={assistant ? edit : undefined} />
+        ) : null}
+      </View>
+      {!compact && renderedThreadId ? (
+        <DesktopThreadPane
+          open={threadOpen}
+          threadWidth={effectiveThreadWidth}
+          maxThreadWidth={maxThreadWidth}
+          onWidthChange={setThreadWidth}
+          title={threadTitle}
+          subtitle={threadSubtitle}
+          backgroundColor={palette.surfaceSecondary}
+          borderColor={palette.black}
+          onClose={leaveThread}
+          onOpenStudio={onOpenStudioThreadProp}
+        >
+          {threadContent}
+        </DesktopThreadPane>
       ) : null}
-      {tab === "task" ? <TasksTab data={data} palette={palette} wiring={wiring} /> : null}
-      {tab === "memory" ? (
-        <MemoryTab data={data} assistant={assistant} onEdit={assistant ? edit : undefined} />
+      {compact ? (
+        <CompactThreadDrawer
+          open={Boolean(threadId)}
+          drawerWidth={containerWidth}
+          backgroundColor={palette.surfaceSecondary}
+          title={threadTitle}
+          subtitle={threadSubtitle}
+          onClose={leaveThread}
+          onOpenStudio={onOpenStudioThreadProp}
+        >
+          {threadContent}
+        </CompactThreadDrawer>
       ) : null}
     </View>
   );

@@ -1,12 +1,10 @@
-import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Text, View } from "react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { randomUUID } from "expo-crypto";
-import { FormFrame } from "./ui/FormChrome";
-import { ResourceChoice } from "./ui/ResourceChoice";
 import { RetainedPanel } from "@/components/retained-panel";
 import { UsageSidebarRoot } from "@/usage/sidebar-item";
-import { useHosts } from "@/runtime/host-runtime";
+import { getHostRuntimeStore, useHostRegistryStatus, useHosts } from "@/runtime/host-runtime";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
@@ -21,6 +19,7 @@ import {
 } from "../../../../extensions/bigbang/shared/contracts";
 import { useAssistantMachines, useBigbangData, useMachines, type BigbangData } from "./data";
 import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
+import { resolveDefaultChatId, resolveDefaultCoordinatorId } from "./model";
 import { taskIdOfThread, taskTitle } from "./task-view";
 import { useBigbangTitle } from "./title";
 import { CoordinatorNotice } from "./coordinator-notice";
@@ -31,27 +30,12 @@ import { BigbangForm } from "./forms";
 import { findLatestNonTaskTurn, turnColumnName } from "./chat-studio";
 import { openTurnProcess, Studio, StudioHomePanel } from "./studio";
 import { BigbangTheme, useBigbangDark } from "./ui/ThemeProvider";
+import { AnimatedDrawer } from "./ui/AnimatedDrawer";
+import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
 import { Sidebar } from "./ui/Sidebar";
 
 const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
 const CONTENT = { flex: 1, minHeight: 0, flexDirection: "row" } as const;
-const OVERLAY = {
-  position: "absolute",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  zIndex: 100,
-  flexDirection: "row",
-} as const;
-const BACKDROP = {
-  position: "absolute",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: "rgba(0,0,0,0.45)",
-} as const;
 const WORKSPACES_MODAL = {
   position: "absolute",
   top: 0,
@@ -137,14 +121,53 @@ const NO_DEFAULT_RESPONDER = "first";
 
 export function BigbangScreen() {
   const hosts = useHosts();
+  const hostRegistryStatus = useHostRegistryStatus();
+  const [bootSettled, setBootSettled] = useState(() =>
+    getHostRuntimeStore().isHostRegistryLoaded(),
+  );
+  const [viewHydrated, setViewHydrated] = useState(() => useBigbangView.persist.hasHydrated());
+  useEffect(() => {
+    let active = true;
+    void getHostRuntimeStore()
+      .boot()
+      .finally(() => {
+        if (active) setBootSettled(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (useBigbangView.persist.hasHydrated()) {
+      setViewHydrated(true);
+      return;
+    }
+    return useBigbangView.persist.onFinishHydration(() => {
+      setViewHydrated(true);
+    });
+  }, []);
   const compact = useIsCompactFormFactor();
   const dark = useBigbangDark();
   const palette = dark ? palettes.dark : palettes.light;
-  const coordinatorId = useBigbangView((state) => state.coordinatorId);
-  const chatId = useBigbangView((state) => state.chatId);
+  const rawCoordinatorId = useBigbangView((state) => state.coordinatorId);
+  const rawChatId = useBigbangView((state) => state.chatId);
   const mode = useBigbangView((state) => state.mode);
+  const coordinatorId = resolveDefaultCoordinatorId(rawCoordinatorId, hosts);
   const data = useBigbangData(coordinatorId);
   const selectCoordinator = useBigbangView((state) => state.selectCoordinator);
+  const chatId = resolveDefaultChatId(rawChatId, data.state.conversations);
+  useEffect(() => {
+    if (!viewHydrated) return;
+    if (coordinatorId && coordinatorId !== rawCoordinatorId) {
+      selectCoordinator(coordinatorId);
+    }
+  }, [coordinatorId, rawCoordinatorId, selectCoordinator, viewHydrated]);
+  useEffect(() => {
+    if (!viewHydrated) return;
+    if (chatId && chatId !== rawChatId) {
+      useBigbangView.setState({ chatId });
+    }
+  }, [chatId, rawChatId, viewHydrated]);
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
   useBigbangTitle(mode, conversationTitle);
   const [form, setForm] = useState<"assistant" | "group" | "task" | "workspaces" | "hosts" | null>(
@@ -412,17 +435,6 @@ export function BigbangScreen() {
     },
     [data, selectChat],
   );
-  const hostRows = useMemo(
-    () =>
-      hosts.map((host) => ({
-        host,
-        select: () => {
-          useBigbangView.getState().selectCoordinator(host.serverId);
-          close();
-        },
-      })),
-    [close, hosts],
-  );
   const assistantFields = useMemo(
     () =>
       assistantFormFields({
@@ -603,15 +615,13 @@ export function BigbangScreen() {
                   onError={setError}
                 />
               </RetainedPanel>
-              {form === "hosts" || !coordinatorId ? (
-                <FormFrame title="Chat coordinator" onClose={close}>
-                  <Text style={text}>
-                    Choose the host that stores Chat. Switching Studio never changes this choice.
-                  </Text>
-                  {hostRows.map(({ host, select }) => (
-                    <ResourceChoice key={host.serverId} onPress={select} label={host.label} />
-                  ))}
-                </FormFrame>
+              {form === "hosts" ||
+              (!coordinatorId && viewHydrated && hostRegistryStatus === "ready" && bootSettled) ? (
+                <CoordinatorPickerModal
+                  hosts={hosts}
+                  onSelect={selectCoordinator}
+                  onClose={close}
+                />
               ) : null}
               <FormHost
                 form={form}
@@ -632,16 +642,15 @@ export function BigbangScreen() {
               />
             </View>
           </View>
-          {compact && sidebarOpen ? (
-            <View style={OVERLAY}>
-              <PressHighlight
-                accessibilityLabel="Close sidebar"
-                onPress={hideSidebar}
-                style={BACKDROP}
-              />
-              <Sidebar {...sidebarProps} />
-            </View>
-          ) : null}
+          <AnimatedDrawer
+            open={compact && sidebarOpen}
+            side="left"
+            drawerWidth={290}
+            closeLabel="Close sidebar"
+            onClose={hideSidebar}
+          >
+            <Sidebar {...sidebarProps} />
+          </AnimatedDrawer>
         </View>
       </UsageSidebarRoot>
     </BigbangTheme>

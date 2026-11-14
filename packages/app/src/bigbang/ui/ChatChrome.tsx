@@ -18,8 +18,82 @@ import {
 } from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { copyText } from "./clipboard";
-import { bubbleShadow, ctrlShadow, text as type, selectedFillProps } from "./theme";
+import { bubbleShadow, ctrlShadow, text as type, selectedFillProps, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
+
+function HeaderIconButton({
+  label,
+  onPress,
+  size = 32,
+  children,
+}: {
+  label: string;
+  onPress(): void;
+  size?: number;
+  children: ReactNode;
+}) {
+  const { palette: t, name } = useTheme();
+  return (
+    <Pressable
+      role="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        return [
+          {
+            width: size,
+            height: size,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
+            alignItems: "center",
+            justifyContent: "center",
+            transform: [{ translateY: hovered ? -1 : 0 }],
+            ...webTransition("transform 120ms ease, background-color 120ms ease"),
+          },
+          ctrlShadow(t, name),
+        ];
+      }}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+function StudioButton({ label, onPress }: { label: string; onPress(): void }) {
+  const { palette: t, name } = useTheme();
+  return (
+    <Pressable
+      role="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        return [
+          {
+            height: 32,
+            paddingHorizontal: 10,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            transform: [{ translateY: hovered ? -1 : 0 }],
+            ...webTransition("transform 120ms ease, background-color 120ms ease"),
+          },
+          ctrlShadow(t, name),
+        ];
+      }}
+    >
+      <BoxesIcon color={t.textSecondary} size={13} />
+      <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Studio</Text>
+    </Pressable>
+  );
+}
 
 export function ChatHeader({
   label,
@@ -45,151 +119,139 @@ export function ChatHeader({
   onOpenStudio?: () => void;
 }) {
   const { palette: t, name } = useTheme();
+  const tabs = [
+    { id: "chat", label: "Chat" },
+    { id: "task", label: "Task" },
+    ...(!group ? [{ id: "memory", label: "Memory" }] : []),
+  ];
   return (
     <View
       style={{
+        minHeight: 56,
         backgroundColor: t.surfacePrimary,
-        paddingHorizontal: 16,
-        paddingTop: 6,
-        paddingBottom: 4,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
         borderBottomWidth: 2,
         borderBottomColor: t.black,
+        justifyContent: "center",
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
-        {onSidebar ? (
-          <Pressable
-            role="button"
-            accessibilityLabel="Open sidebar"
-            onPress={onSidebar}
-            style={[
-              {
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: t.surfaceElevated,
-                alignItems: "center",
-                justifyContent: "center",
-              },
-              ctrlShadow(t, name),
-            ]}
-          >
-            <MenuIcon color={t.textSecondary} size={16} />
-          </Pressable>
-        ) : null}
-        <View style={{ position: "relative" }}>
-          <AgentAvatar seed={seed} label={label} size={36} theme={t} name={name} />
-          <View style={{ position: "absolute", right: -2, bottom: -2 }}>
-            <StatusDot color={connected ? t.success : t.destructive} border={t.surfacePrimary} />
+      <View
+        style={{
+          flexDirection: "row",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          columnGap: 12,
+          rowGap: 8,
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            flex: 1,
+            minWidth: 160,
+          }}
+        >
+          {onSidebar ? (
+            <HeaderIconButton label="Open sidebar" onPress={onSidebar} size={34}>
+              <MenuIcon color={t.textSecondary} size={16} />
+            </HeaderIconButton>
+          ) : null}
+          <View style={{ position: "relative" }}>
+            <AgentAvatar seed={seed} label={label} size={34} theme={t} name={name} />
+            <View style={{ position: "absolute", right: -2, bottom: -2 }}>
+              <StatusDot color={connected ? t.success : t.destructive} border={t.surfacePrimary} />
+            </View>
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              role="heading"
+              numberOfLines={1}
+              style={type(t.textPrimary, 14, { fontWeight: "700" })}
+            >
+              {label}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={
+                subtitle
+                  ? type(t.textSecondary, 11, { marginTop: 1 })
+                  : type(t.textMuted, 10, {
+                      letterSpacing: 1.4,
+                      textTransform: "uppercase",
+                      marginTop: 2,
+                    })
+              }
+            >
+              {subtitle ?? (group ? "Group chat" : "Private chat")}
+            </Text>
           </View>
         </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text
-            role="heading"
-            numberOfLines={1}
-            style={type(t.textPrimary, 14, { fontWeight: "600" })}
-          >
-            {label}
-          </Text>
-          <Text
-            numberOfLines={1}
-            style={
-              subtitle
-                ? type(t.textSecondary, 11, { marginTop: 2 })
-                : type(t.textMuted, 11, {
-                    letterSpacing: 1.6,
-                    textTransform: "uppercase",
-                    marginTop: 4,
-                  })
-            }
-          >
-            {subtitle ?? (group ? "Group chat" : "Private chat")}
-          </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {tabs.map((item) => {
+            const selected = tab === item.id;
+            return (
+              <Pressable
+                key={item.id}
+                role="button"
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected }}
+                onPress={() => onTab(item.id)}
+                {...selectedFillProps(selected)}
+                style={(state) => {
+                  const hovered = Boolean((state as { hovered?: boolean }).hovered);
+                  return [
+                    {
+                      height: 32,
+                      borderRadius: 10,
+                      borderWidth: 1,
+                      borderColor: t.retroBorder,
+                      backgroundColor: selected
+                        ? hovered
+                          ? t.brandAccentHover
+                          : t.brandAccent
+                        : hovered
+                          ? t.surfaceHover
+                          : t.surfaceElevated,
+                      paddingHorizontal: 12,
+                      justifyContent: "center",
+                      transform: [{ translateY: hovered ? -1 : 0 }],
+                      ...webTransition("transform 120ms ease, background-color 120ms ease"),
+                    },
+                    ctrlShadow(t, name),
+                  ];
+                }}
+              >
+                <Text
+                  style={type(selected ? t.onAccent : t.textSecondary, 12, {
+                    fontWeight: "600",
+                  })}
+                >
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+          {onOpenStudio || onEdit ? (
+            <View
+              style={{
+                width: 1,
+                height: 18,
+                backgroundColor: t.dividerLine,
+                marginHorizontal: 2,
+              }}
+            />
+          ) : null}
+          {onOpenStudio ? <StudioButton label="Open in Studio" onPress={onOpenStudio} /> : null}
+          {onEdit ? (
+            <HeaderIconButton label={`Edit ${label}`} onPress={onEdit} size={32}>
+              <SettingsIcon color={t.textSecondary} size={15} />
+            </HeaderIconButton>
+          ) : null}
         </View>
-        {onOpenStudio ? (
-          <Pressable
-            role="button"
-            accessibilityLabel="Open in Studio"
-            onPress={onOpenStudio}
-            style={[
-              {
-                height: 34,
-                paddingHorizontal: 10,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: t.surfaceElevated,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-              },
-              ctrlShadow(t, name),
-            ]}
-          >
-            <BoxesIcon color={t.textSecondary} size={14} />
-            <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Studio</Text>
-          </Pressable>
-        ) : null}
-        {onEdit ? (
-          <Pressable
-            role="button"
-            accessibilityLabel={`Edit ${label}`}
-            onPress={onEdit}
-            style={[
-              {
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: t.surfaceElevated,
-                alignItems: "center",
-                justifyContent: "center",
-              },
-              ctrlShadow(t, name),
-            ]}
-          >
-            <SettingsIcon color={t.textSecondary} size={15} />
-          </Pressable>
-        ) : null}
-      </View>
-      <View style={{ flexDirection: "row", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-        {[
-          { id: "chat", label: "Chat" },
-          { id: "task", label: "Task" },
-          ...(!group ? [{ id: "memory", label: "Memory" }] : []),
-        ].map((item) => (
-          <Pressable
-            key={item.id}
-            role="button"
-            accessibilityLabel={item.label}
-            accessibilityState={{ selected: tab === item.id }}
-            onPress={() => onTab(item.id)}
-            {...selectedFillProps(tab === item.id)}
-            style={[
-              {
-                height: 32,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: tab === item.id ? t.brandAccent : t.surfaceElevated,
-                paddingHorizontal: 12,
-                justifyContent: "center",
-              },
-              ctrlShadow(t, name),
-            ]}
-          >
-            <Text
-              style={type(tab === item.id ? t.onAccent : t.textSecondary, 12, {
-                fontWeight: "600",
-              })}
-            >
-              {item.label}
-            </Text>
-          </Pressable>
-        ))}
       </View>
     </View>
   );
@@ -332,9 +394,9 @@ export function ChatMessage({
             })}
           </Text>
         </View>
-        <Pressable
-          onHoverIn={showChrome}
-          onHoverOut={hideChrome}
+        <View
+          onPointerEnter={showChrome}
+          onPointerLeave={hideChrome}
           accessibilityLabel={`Message from ${sender}`}
           style={{ position: "relative", maxWidth: "100%" }}
         >
@@ -408,7 +470,7 @@ export function ChatMessage({
           >
             <MessageBody id={id} content={content} user={user} quote={quote} />
           </View>
-        </Pressable>
+        </View>
         {children}
         {onReply && replyCount > 0 ? (
           <View style={{ marginTop: 6 }}>
@@ -582,52 +644,67 @@ export function ThreadHeader({
   onClose,
   compact,
   title = "Thread",
+  subtitle,
   onOpenStudio,
 }: {
   onClose(): void;
   compact: boolean;
   title?: string;
+  subtitle?: string;
   onOpenStudio?: () => void;
 }) {
-  const { palette: t } = useTheme();
+  const { palette: t, name } = useTheme();
   return (
     <View
       style={{
-        height: 45,
-        paddingHorizontal: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: t.retroBorder,
+        minHeight: 56,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
+        backgroundColor: t.surfacePrimary,
+        borderBottomWidth: 2,
+        borderBottomColor: t.black,
         flexDirection: "row",
-        gap: 8,
+        gap: 10,
         alignItems: "center",
       }}
     >
-      {compact ? <ArrowLeftIcon color={t.textMuted} /> : null}
-      <Text style={type(t.textPrimary, 13, { fontWeight: "700", flex: 1 })}>{title}</Text>
-      {onOpenStudio ? (
-        <Pressable
-          role="button"
-          accessibilityLabel="Open thread in Studio"
-          onPress={onOpenStudio}
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 4,
-            paddingHorizontal: 8,
-            paddingVertical: 4,
-            borderRadius: 8,
-            borderWidth: 1,
-            borderColor: t.retroBorder,
-            backgroundColor: t.surfaceElevated,
-          }}
+      {compact ? (
+        <HeaderIconButton label="Back to chat" onPress={onClose} size={32}>
+          <ArrowLeftIcon color={t.textPrimary} size={15} />
+        </HeaderIconButton>
+      ) : (
+        <View
+          style={[
+            {
+              width: 32,
+              height: 32,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: t.retroBorder,
+              backgroundColor: t.surfaceElevated,
+              alignItems: "center",
+              justifyContent: "center",
+            },
+            ctrlShadow(t, name),
+          ]}
         >
-          <BoxesIcon color={t.textSecondary} size={12} />
-          <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Studio</Text>
-        </Pressable>
-      ) : null}
-      <Pressable role="button" accessibilityLabel="Close thread" onPress={onClose}>
-        <CloseIcon color={t.textSecondary} size={16} />
-      </Pressable>
+          <ChatIcon color={t.brandAccent} size={15} />
+        </View>
+      )}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={type(t.textPrimary, 14, { fontWeight: "700" })}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text numberOfLines={1} style={type(t.textSecondary, 11, { marginTop: 1 })}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+      {onOpenStudio ? <StudioButton label="Open thread in Studio" onPress={onOpenStudio} /> : null}
+      <HeaderIconButton label="Close thread" onPress={onClose} size={32}>
+        <CloseIcon color={t.textPrimary} size={15} />
+      </HeaderIconButton>
     </View>
   );
 }

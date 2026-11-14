@@ -1,6 +1,6 @@
 // Why Chat did not load on the selected host. A member keeps no ledger, so instead of a generic
 // failure the user is sent to the coordinator it serves.
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Text, View } from "react-native";
 import type { HostProfile } from "@/types/host-connection";
 import { useChatRole, type BigbangData } from "./data";
@@ -37,6 +37,12 @@ export function CoordinatorNotice({
     hosts.find((host) => host.serverId === serverId)?.label ?? serverId;
   const target =
     role?.mode === "member" && role.coordinatorServerId ? role.coordinatorServerId : null;
+  const known = target !== null && hosts.some((host) => host.serverId === target);
+  useEffect(() => {
+    if (known && target && target !== coordinatorId) {
+      onSelect(target);
+    }
+  }, [coordinatorId, known, onSelect, target]);
   const open = useCallback(() => {
     if (target) onSelect(target);
   }, [onSelect, target]);
@@ -46,7 +52,6 @@ export function CoordinatorNotice({
         <Text style={style}>{chatReadError(error)}</Text>
       </View>
     );
-  const known = target !== null && hosts.some((host) => host.serverId === target);
   return (
     <View style={ROW} accessibilityRole="alert">
       <Text style={style}>

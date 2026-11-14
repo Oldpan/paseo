@@ -102,3 +102,40 @@ export function machineRoleLabel(machine: MachineInfo | undefined): string {
   if (machine.role === "member") return "Member";
   return machine.reason ? `Unavailable · ${machine.reason}` : "Unavailable";
 }
+
+/**
+ * Picks a valid coordinator host when none is selected yet (or when the persisted coordinatorId
+ * is no longer among saved hosts). Preserves the current `coordinatorId` while `hosts` is empty
+ * so cold hydration does not wipe a persisted selection.
+ */
+export function resolveDefaultCoordinatorId(
+  coordinatorId: string,
+  hosts: readonly { serverId: string }[],
+  machines?: readonly MachineInfo[],
+): string {
+  if (hosts.length === 0) return coordinatorId;
+  if (coordinatorId && hosts.some((host) => host.serverId === coordinatorId)) {
+    return coordinatorId;
+  }
+  const coordinatorMachine = machines?.find(
+    (machine) =>
+      machine.role === "coordinator" && hosts.some((host) => host.serverId === machine.serverId),
+  );
+  if (coordinatorMachine) return coordinatorMachine.serverId;
+  return hosts[0]!.serverId;
+}
+
+/**
+ * Picks the first conversation when no chat is selected yet (or when the persisted chatId
+ * does not exist on the active coordinator). Preserves `chatId` while `conversations` is empty.
+ */
+export function resolveDefaultChatId(
+  chatId: string,
+  conversations: readonly { id: string }[],
+): string {
+  if (conversations.length === 0) return chatId;
+  if (chatId && conversations.some((conversation) => conversation.id === chatId)) {
+    return chatId;
+  }
+  return conversations[0]!.id;
+}

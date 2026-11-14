@@ -71,7 +71,15 @@ export function Rail({
           style={{ width: 32, height: 32, borderRadius: 8 }}
         />
       </Pressable>
-      <View style={{ height: 2, width: "100%", backgroundColor: t.black, marginVertical: 4 }} />
+      <View
+        style={{
+          height: 2,
+          width: "100%",
+          backgroundColor: t.black,
+          marginTop: 6,
+          marginBottom: 4,
+        }}
+      />
       <View style={{ gap: 6, alignItems: "center", paddingVertical: 4 }}>
         {expand}
         {ENTRIES.map((entry) => (
