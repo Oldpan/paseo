@@ -91,9 +91,11 @@ Structured memory hierarchy:
 - notes/tasks.md
 - notes/work-log/<ISO-week>.md
 - notes/archive/
+- playbooks/<slug>.md (reusable step-by-step procedures; read before recurring workflows, and save new ones when the user asks)
 
 In a group chat, reply with exactly (pass) when you have nothing useful to add.
 To ask another assistant privately (it may run on another machine), use pavra-send; pavra-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.
+To manage scheduled routines and one-time reminders in this chat, use pavra-routine_list, pavra-routine_save (pass maxRuns: 1 for a one-time reminder, or reference playbooks/<slug>.md for recurring inspections; reply (pass) during a routine turn when everything is normal), and pavra-routine_delete.
 ${PAVRA_TOOLS_NOTE}${autonomyInstructions(assistant)}`;
 }
 /** Authorized task targets as the assistant sees them: machine name, serverId, directory. */
@@ -214,8 +216,9 @@ export function supersededLaneTurns(
       turn.conversationId === conversationId &&
       turn.threadId === threadId &&
       (delivery === "steer" ? SESSION_LIVE_STATUS.has(turn.status) : turn.status === "queued") &&
-      // A task outcome is not answered by a newer message; the assistant still reports it.
-      turn.kind !== "task_receipt",
+      // A task outcome or scheduled routine is not answered by a newer message; the assistant still reports it.
+      turn.kind !== "task_receipt" &&
+      turn.kind !== "routine",
   );
 }
 const OUTCOME_EVENTS = new Set(["task_completed", "task_failed", "task_cancelled"]);
@@ -327,6 +330,9 @@ export interface QueuedTurn {
   round?: number;
   mailboxId?: string;
   mailboxWakeupIds?: string[];
+  routineId?: string;
+  routineRunId?: string;
+  routineName?: string;
 }
 /** Persists a queued turn for an assistant in a lane, binding its chat execution. */
 export function queueTurn(store: ChatStore, input: QueuedTurn): Turn {
@@ -354,6 +360,9 @@ export function queueTurn(store: ChatStore, input: QueuedTurn): Turn {
     ...(input.round !== undefined ? { round: input.round } : {}),
     ...(input.mailboxId ? { mailboxId: input.mailboxId } : {}),
     ...(input.mailboxWakeupIds ? { mailboxWakeupIds: input.mailboxWakeupIds } : {}),
+    ...(input.routineId ? { routineId: input.routineId } : {}),
+    ...(input.routineRunId ? { routineRunId: input.routineRunId } : {}),
+    ...(input.routineName ? { routineName: input.routineName } : {}),
   };
   store.put("turns", turn);
   return turn;

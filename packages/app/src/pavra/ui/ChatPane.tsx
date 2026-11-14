@@ -8,7 +8,10 @@ import type {
   Turn,
   Assistant,
   PlaybookSummary,
+  Routine,
+  RoutineCadence,
 } from "../../../../../extensions/pavra/shared/contracts";
+import { formatRoutineCadence, formatRoutineOutcome, routineKindLabel } from "../routines";
 import { Composer } from "./Composer";
 import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
@@ -30,6 +33,8 @@ export interface MessageRow {
   onOpenProcess?: () => void;
   /** The message this one quotes, resolved to a sender name and a short text. */
   quote?: { sender: string; text: string };
+  /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
+  routineBadge?: string;
   /** Display text of a system or task_event row. */
   note?: string;
   /** A `task_event` receipt row; set instead of `note`. */
@@ -142,6 +147,7 @@ export function ChatPane({
         onQuote={row.onQuote}
         onOpenProcess={row.onOpenProcess}
         quote={row.quote}
+        routineBadge={row.routineBadge}
       >
         {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
       </ChatMessage>
@@ -433,6 +439,242 @@ export function PlaybooksPane({
           </Chip>
         ) : null}
       </View>
+    </ScrollView>
+  );
+}
+
+type CadencePreset = "every-1h" | "every-30m" | "cron" | "reminder-15m";
+
+const CADENCE_PRESETS: Array<{ id: CadencePreset; label: string }> = [
+  { id: "every-1h", label: "Every 1h" },
+  { id: "every-30m", label: "Every 30m" },
+  { id: "cron", label: "Cron" },
+  { id: "reminder-15m", label: "Reminder (15m)" },
+];
+
+export function RoutinesPane({
+  assistant,
+  routines,
+  busyId,
+  saving,
+  error,
+  onCreate,
+  onRunOnce,
+  onPause,
+  onResume,
+  onDelete,
+}: {
+  assistant?: Assistant;
+  routines: readonly Routine[];
+  busyId: string | null;
+  saving: boolean;
+  error: string | null;
+  onCreate(input: {
+    name: string;
+    prompt: string;
+    cadence: RoutineCadence;
+    maxRuns?: number | null;
+  }): void;
+  onRunOnce(id: string): void;
+  onPause(id: string): void;
+  onResume(id: string): void;
+  onDelete(id: string): void;
+}) {
+  const { palette: t } = useTheme();
+  const [name, setName] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [preset, setPreset] = useState<CadencePreset>("every-1h");
+  const [cronExpression, setCronExpression] = useState("0 9 * * *");
+  const [formKey, setFormKey] = useState(0);
+
+  const handleCreate = useCallback(() => {
+    const trimmedName = name.trim();
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedName || !trimmedPrompt) return;
+    let cadence: RoutineCadence;
+    let maxRuns: number | null = null;
+    if (preset === "every-30m") {
+      cadence = { type: "every", everyMs: 30 * 60_000 };
+    } else if (preset === "cron") {
+      cadence = { type: "cron", expression: cronExpression.trim() || "0 9 * * *" };
+    } else if (preset === "reminder-15m") {
+      cadence = { type: "every", everyMs: 15 * 60_000 };
+      maxRuns = 1;
+    } else {
+      cadence = { type: "every", everyMs: 60 * 60_000 };
+    }
+    onCreate({ name: trimmedName, prompt: trimmedPrompt, cadence, maxRuns });
+    setName("");
+    setPrompt("");
+    setFormKey((value) => value + 1);
+  }, [cronExpression, name, onCreate, preset, prompt]);
+
+  return (
+    <ScrollView
+      contentContainerStyle={{ padding: 24, gap: 14 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={type(t.textPrimary, 18, { fontWeight: "700" })}>Routines & Reminders</Text>
+      <Text style={type(t.textMuted, 12)}>
+        {assistant?.name ?? "This assistant"} runs scheduled checks or one-time reminders in this
+        chat. When a routine finds nothing that needs attention, it replies (pass) and stays silent.
+      </Text>
+      {assistant ? (
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            borderRadius: 12,
+            backgroundColor: t.surfaceSecondary,
+            padding: 14,
+            gap: 10,
+          }}
+        >
+          <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+            {CADENCE_PRESETS.map((item) => (
+              <Chip
+                key={item.id}
+                label={`Select cadence ${item.label}`}
+                onPress={() => setPreset(item.id)}
+                accent={preset === item.id}
+                disabled={saving}
+              >
+                {item.label}
+              </Chip>
+            ))}
+          </View>
+          <PavraInput
+            key={`name:${formKey}`}
+            accessibilityLabel="Routine name"
+            initialValue={name}
+            onChangeText={setName}
+            editable={!saving}
+            placeholder={
+              preset === "reminder-15m"
+                ? "Reminder title (e.g. Reply to email)"
+                : "Routine name (e.g. Morning check)"
+            }
+            style={{ minHeight: 34 }}
+          />
+          {preset === "cron" ? (
+            <PavraInput
+              key={`cron:${formKey}`}
+              accessibilityLabel="Cron expression"
+              initialValue={cronExpression}
+              onChangeText={setCronExpression}
+              editable={!saving}
+              placeholder="5-field cron (e.g. 0 9 * * *)"
+              style={{ minHeight: 34 }}
+            />
+          ) : null}
+          <PavraInput
+            key={`prompt:${formKey}`}
+            accessibilityLabel="Routine prompt"
+            initialValue={prompt}
+            onChangeText={setPrompt}
+            multiline
+            editable={!saving}
+            placeholder="Instructions for the turn (e.g. Follow playbooks/daily-check.md; reply (pass) if normal)."
+            style={{ minHeight: 90 }}
+          />
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            <Chip
+              label="Create routine"
+              onPress={handleCreate}
+              disabled={!name.trim() || !prompt.trim() || saving}
+              accent
+            >
+              {saving
+                ? "Saving…"
+                : preset === "reminder-15m"
+                  ? "Create reminder"
+                  : "Create routine"}
+            </Chip>
+          </View>
+        </View>
+      ) : null}
+      {error ? (
+        <Text accessibilityRole="alert" style={type(t.destructive, 12)}>
+          {error}
+        </Text>
+      ) : null}
+      {routines.map((routine) => {
+        const lastRun = routine.runs.at(-1);
+        const busy = busyId === routine.id;
+        return (
+          <View
+            key={routine.id}
+            testID={`routine-card-${routine.id}`}
+            style={{
+              borderWidth: 1,
+              borderColor: t.retroBorder,
+              borderRadius: 12,
+              backgroundColor: t.surfaceSecondary,
+              padding: 14,
+              gap: 8,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                flexWrap: "wrap",
+                gap: 6,
+              }}
+            >
+              <Text style={type(t.textPrimary, 14, { fontWeight: "700" })}>{routine.name}</Text>
+              <Text style={type(t.textMuted, 11, { fontWeight: "600" })}>
+                {`${routineKindLabel(routine)} · ${routine.status} · ${formatRoutineCadence(routine.cadence)}`}
+              </Text>
+            </View>
+            <Text numberOfLines={3} style={type(t.textSecondary, 12)}>
+              {routine.prompt}
+            </Text>
+            <Text
+              style={type(t.textMuted, 11)}
+            >{`Last run: ${formatRoutineOutcome(lastRun)}`}</Text>
+            <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+              <Chip
+                label={`Run ${routine.name} now`}
+                onPress={() => onRunOnce(routine.id)}
+                disabled={busy}
+              >
+                Run now
+              </Chip>
+              {routine.status === "active" ? (
+                <Chip
+                  label={`Pause ${routine.name}`}
+                  onPress={() => onPause(routine.id)}
+                  disabled={busy}
+                >
+                  Pause
+                </Chip>
+              ) : (
+                <Chip
+                  label={`Resume ${routine.name}`}
+                  onPress={() => onResume(routine.id)}
+                  disabled={busy}
+                >
+                  Resume
+                </Chip>
+              )}
+              <Chip
+                label={`Delete ${routine.name}`}
+                onPress={() => onDelete(routine.id)}
+                disabled={busy}
+              >
+                Delete
+              </Chip>
+            </View>
+          </View>
+        );
+      })}
+      {routines.length === 0 ? (
+        <Text style={type(t.textMuted, 12)}>
+          No routines or reminders in this chat yet. Create one above, or ask the assistant in chat.
+        </Text>
+      ) : null}
     </ScrollView>
   );
 }

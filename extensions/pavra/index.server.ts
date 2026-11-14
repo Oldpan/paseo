@@ -22,6 +22,11 @@ import {
   archiveStudio,
   listStudioMembers,
   setStudioAssistants,
+  saveRoutine,
+  pauseRoutine,
+  resumeRoutine,
+  runRoutineOnce,
+  deleteRoutine,
 } from "./shared/contracts";
 import {
   MEMBER_PROTOCOL,
@@ -127,6 +132,11 @@ export default function contribute(server: PluginServerContext) {
   server.handle(unbindStudioWorkspace, (input) => ({ studio: chat().studio.unbind(input) }));
   server.handle(archiveStudio, (input) => chat().studio.archive(input.id));
   server.handle(setStudioAssistants, (input) => chat().studio.setAssistants(input));
+  server.handle(saveRoutine, (input) => chat().saveRoutine(input));
+  server.handle(pauseRoutine, (input) => chat().pauseRoutine(input));
+  server.handle(resumeRoutine, (input) => chat().resumeRoutine(input));
+  server.handle(runRoutineOnce, (input) => chat().runRoutineOnce(input));
+  server.handle(deleteRoutine, (input) => chat().deleteRoutine(input));
   server.handle(listStudioMembers, async (input) => {
     const listing = await chat().studio.members(input.studioId);
     return {

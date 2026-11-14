@@ -9,6 +9,20 @@ const at = (assistant: Assistant) => `@${assistant.name}`;
 /** Opens the prompt of a turn that reports a finished task; the outcome follows as a bracketed line. */
 export const TASK_RECEIPT_LEAD = `A task you started has ended; its outcome is in brackets below. Tell the user what happened in your own words, with what matters to them and what you suggest next. Reply exactly ${PASS_REPLY} only if the user has already seen everything. When a task finishes and reveals durable decisions, pitfalls, or user preferences, update MEMORY.md (keep under 200 lines) or the relevant file under notes/ in your working directory.`;
 
+export function routinePromptHeader(params: {
+  routineName?: string;
+  prompt: string;
+  now?: number;
+}): string {
+  const name = params.routineName?.trim() || "Routine";
+  const timestamp = new Date(params.now ?? Date.now()).toISOString();
+  return [
+    `[Routine: ${name} | Triggered at ${timestamp}]`,
+    `If everything is normal and nothing needs the user's attention, reply with exactly ${PASS_REPLY}. Otherwise, post a concise update or findings for the user.`,
+    params.prompt.trim(),
+  ].join("\n\n");
+}
+
 /**
  * The first prompt of a task execution. A worktree task's working directory is its own worktree,
  * but a brief written in chat often names the source checkout by absolute path; without this line
@@ -73,6 +87,8 @@ function reasonLine(turn: Turn, wokenBy: Assistant | undefined): string {
     }
     case "task_receipt":
       return TASK_RECEIPT_LEAD;
+    case "routine":
+      return `Scheduled routine "${turn.routineName ?? "Routine"}" triggered now. Follow the routine instructions below; reply with exactly ${PASS_REPLY} if nothing needs attention, or post your findings to the chat.`;
     default:
       return "The user addressed you. Reply to their latest message.";
   }

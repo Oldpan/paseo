@@ -123,6 +123,7 @@ export function ChatHeader({
   const tabs = [
     { id: "chat", label: "Chat" },
     { id: "task", label: "Task" },
+    { id: "routines", label: "Routines" },
     ...(!group
       ? [
           { id: "memory", label: "Memory" },
@@ -418,6 +419,7 @@ export function ChatMessage({
   onQuote,
   onOpenProcess,
   quote,
+  routineBadge,
   children,
 }: {
   id: string;
@@ -434,6 +436,8 @@ export function ChatMessage({
   onOpenProcess?: () => void;
   /** The message this one answers, shown as a compact block above its text. */
   quote?: { sender: string; text: string };
+  /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
+  routineBadge?: string;
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
@@ -501,6 +505,21 @@ export function ChatMessage({
           <Text style={type(t.textPrimary, 15, { fontWeight: "600", flexShrink: 1 })}>
             {sender}
           </Text>
+          {routineBadge ? (
+            <View
+              testID={`routine-badge-${id}`}
+              style={{
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: t.surfaceElevated,
+                paddingHorizontal: 7,
+                paddingVertical: 1,
+              }}
+            >
+              <Text style={type(t.textSecondary, 10, { fontWeight: "600" })}>{routineBadge}</Text>
+            </View>
+          ) : null}
           <Text style={type(t.textSubtle, 10)}>
             {new Date(createdAt).toLocaleTimeString(undefined, {
               hour: "2-digit",

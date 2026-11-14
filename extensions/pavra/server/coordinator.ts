@@ -7,15 +7,22 @@ import {
   type ChatState,
   type Conversation,
   type Message,
+  type Routine,
+  type RoutineRun,
   type Task,
   type Turn,
   cancelTurn,
   deleteAssistantPlaybook,
+  deleteRoutine,
   listAssistantPlaybooks,
+  pauseRoutine,
   readAssistantMemory,
   readAssistantPlaybook,
   readState,
   respondTaskPermission,
+  resumeRoutine,
+  runRoutineOnce,
+  saveRoutine,
   sendMessage,
   startTask,
   writeAssistantMemory,
@@ -76,11 +83,22 @@ import {
   type TaskEventType,
 } from "./task-events";
 import { workspaceMemoryHint } from "./prompts";
+import {
+  advanceNextRoutineRunAtPast,
+  appendRoutineRun,
+  computeNextRoutineRunAt,
+  countSettledRoutineRuns,
+  firstLineSummary,
+  shouldCompleteRoutine,
+  updateRoutineRun,
+  validateRoutineCadence,
+} from "./routines";
 
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const TURN_LIVE = new Set(["running", "attention", "unknown"]);
 const DEFAULT_SWEEP_MS = 60_000;
 const MAILBOX_SWEEP_MS = 30_000;
+const ROUTINE_TICK_MS = 1_000;
 const SUPERSEDED = "Superseded by a newer message.";
 const INTERRUPTED_MESSAGE =
   "Interrupted: the execution closed before this reply finished. Send again to continue.";
@@ -173,6 +191,7 @@ export class Coordinator {
   readonly mailbox: Mailbox;
   readonly studio: Studio;
   private mailboxTimer: ReturnType<typeof setInterval> | null = null;
+  private routineTimer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
   private inboxTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watches = new Map<string, () => void>();
@@ -272,6 +291,7 @@ export class Coordinator {
     if (this.recovered || !this.port) return;
     this.recovered = true;
     restoreChatSessions(this.store);
+    this.recoverRoutines();
     // Resume what the last process left: roundtable epochs between turns, and peer batches that
     // came due while it was down.
     this.roundtable.advanceAll();
@@ -282,6 +302,8 @@ export class Coordinator {
     // Mailbox admission waits and replies for lanes that went idle without a hook.
     this.mailboxTimer = setInterval(() => this.kick(), MAILBOX_SWEEP_MS);
     this.mailboxTimer.unref();
+    this.routineTimer = setInterval(() => void this.tickRoutines(), ROUTINE_TICK_MS);
+    this.routineTimer.unref();
     void this.sweep();
   }
   // Long poll: with `after`, hold the request until the ledger advances past it.
@@ -510,6 +532,430 @@ export class Coordinator {
     }
     this.store.transaction(() => this.store.put("conversations", conversation));
     return conversation;
+  }
+
+  saveRoutine(input: RpcInput<typeof saveRoutine>): Routine {
+    const { assistant, conversation, threadId } = this.validateRoutineTarget(input);
+    validateRoutineCadence(input.cadence);
+    const now = this.now();
+    const id = input.id ?? randomUUID();
+    const existing = this.store.get("routines", id);
+    const maxRuns = input.maxRuns === undefined ? (existing?.maxRuns ?? null) : input.maxRuns;
+    const expiresAt =
+      input.expiresAt === undefined ? (existing?.expiresAt ?? null) : input.expiresAt;
+    if (expiresAt !== null && expiresAt <= now)
+      throw new Error("Routine expiration time must be in the future.");
+    const nextRunAt =
+      input.runOnCreate && !existing ? now : computeNextRoutineRunAt(input.cadence, now);
+    const routine: Routine = {
+      id,
+      name: input.name.trim(),
+      prompt: input.prompt.trim(),
+      assistantId: assistant.id,
+      conversationId: conversation.id,
+      threadId,
+      cadence: input.cadence,
+      status: "active",
+      maxRuns,
+      expiresAt,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      nextRunAt,
+      lastRunAt: existing?.lastRunAt ?? null,
+      pausedAt: null,
+      runs: existing?.runs ?? [],
+    };
+    this.store.transaction(() => this.store.put("routines", routine));
+    if (input.runOnCreate) void this.tickRoutines();
+    return routine;
+  }
+
+  private validateRoutineTarget(input: RpcInput<typeof saveRoutine>): {
+    assistant: Assistant;
+    conversation: Conversation;
+    threadId: string | null;
+  } {
+    const assistant = this.store.get("assistants", input.assistantId);
+    if (!assistant) throw new Error("Assistant no longer exists.");
+    const conversation = this.store.get("conversations", input.conversationId);
+    if (!conversation?.members.includes(assistant.id))
+      throw new Error("Choose an assistant that is a member of this chat.");
+    const threadId = input.threadId ?? null;
+    if (
+      threadId !== null &&
+      this.store.get("messages", threadId)?.conversationId !== conversation.id
+    )
+      throw new Error("Thread belongs to another chat.");
+    return { assistant, conversation, threadId };
+  }
+
+  pauseRoutine(input: RpcInput<typeof pauseRoutine>): Routine {
+    const routine = this.store.get("routines", input.id);
+    if (!routine) throw new Error("Routine no longer exists.");
+    if (routine.status === "paused") return routine;
+    const now = this.now();
+    const paused: Routine = {
+      ...routine,
+      status: "paused",
+      pausedAt: now,
+      nextRunAt: null,
+      updatedAt: now,
+    };
+    this.store.transaction(() => this.store.put("routines", paused));
+    return paused;
+  }
+
+  resumeRoutine(input: RpcInput<typeof resumeRoutine>): Routine {
+    const routine = this.store.get("routines", input.id);
+    if (!routine) throw new Error("Routine no longer exists.");
+    const assistant = this.store.get("assistants", routine.assistantId);
+    const conversation = this.store.get("conversations", routine.conversationId);
+    if (!assistant || !conversation?.members.includes(assistant.id))
+      throw new Error("Assistant or chat membership no longer exists.");
+    const now = this.now();
+    if (routine.expiresAt !== null && routine.expiresAt <= now)
+      throw new Error("Routine has already expired.");
+    const settledRuns = countSettledRoutineRuns(routine);
+    const maxRuns =
+      routine.maxRuns !== null && settledRuns >= routine.maxRuns
+        ? settledRuns + 1
+        : routine.maxRuns;
+    const resumed: Routine = {
+      ...routine,
+      status: "active",
+      maxRuns,
+      pausedAt: null,
+      nextRunAt: computeNextRoutineRunAt(routine.cadence, now),
+      updatedAt: now,
+    };
+    this.store.transaction(() => this.store.put("routines", resumed));
+    return resumed;
+  }
+
+  deleteRoutine(input: RpcInput<typeof deleteRoutine>): RpcOutput<typeof deleteRoutine> {
+    const deleted = this.store.transaction(() => this.store.delete("routines", input.id));
+    return { deleted, id: input.id };
+  }
+
+  async runRoutineOnce(input: RpcInput<typeof runRoutineOnce>): Promise<Routine> {
+    const existing = this.store.get("routines", input.id);
+    if (!existing) throw new Error("Routine no longer exists.");
+    await this.queue.run("routines", async () => {
+      await this.fireRoutine(input.id, { manual: true });
+    });
+    return this.store.get("routines", input.id) ?? existing;
+  }
+
+  tickRoutines(): Promise<void> {
+    if (this.closed || !this.port) return Promise.resolve();
+    const now = this.now();
+    const routines = this.store.snapshot().routines ?? [];
+    const hasDueOrCompleted = routines.some(
+      (routine) =>
+        routine.status === "active" &&
+        ((routine.nextRunAt !== null && routine.nextRunAt <= now) ||
+          (!routine.runs.some((run) => run.status === "running") &&
+            shouldCompleteRoutine(routine, now))),
+    );
+    if (!hasDueOrCompleted) return Promise.resolve();
+    return this.queue.run("routines", async () => {
+      if (this.closed || !this.port) return;
+      const currentNow = this.now();
+      const currentRoutines = this.store.snapshot().routines ?? [];
+      for (const routine of currentRoutines) {
+        if (routine.status !== "active") continue;
+        const hasRunning = routine.runs.some((run) => run.status === "running");
+        if (!hasRunning && shouldCompleteRoutine(routine, currentNow)) {
+          this.store.transaction(() =>
+            this.store.put("routines", {
+              ...routine,
+              status: "completed",
+              nextRunAt: null,
+              pausedAt: null,
+              updatedAt: currentNow,
+            }),
+          );
+          continue;
+        }
+        if (routine.nextRunAt !== null && routine.nextRunAt <= currentNow) {
+          await this.fireRoutine(routine.id, { manual: false });
+        }
+      }
+    });
+  }
+
+  recoverRoutines(): void {
+    const now = this.now();
+    const state = this.store.snapshot();
+    const routines = state.routines ?? [];
+    if (routines.length === 0) return;
+    const turnsById = new Map(state.turns.map((turn) => [turn.id, turn]));
+    this.store.transaction(() => {
+      for (const routine of routines) {
+        let changed = false;
+        const runs = routine.runs.map((run): RoutineRun => {
+          if (run.status !== "running") return run;
+          const turn = run.turnId ? turnsById.get(run.turnId) : undefined;
+          if (turn && LIVE.has(turn.status)) return run;
+          changed = true;
+          if (turn?.status === "completed") {
+            const finalMsg = turn.finalMessageId
+              ? this.store.get("messages", turn.finalMessageId)
+              : this.store.get("messages", `final:${turn.id}`);
+            const text = finalMsg?.content?.trim() ?? "";
+            const passed = !text || isPass(text);
+            return {
+              ...run,
+              endedAt: run.endedAt ?? now,
+              status: "succeeded",
+              outcome: passed ? "passed" : "replied",
+              summary: passed ? "Silent ((pass))" : firstLineSummary(text),
+              error: null,
+            };
+          }
+          const error = turn?.error ?? "Interrupted before routine turn finished.";
+          return {
+            ...run,
+            endedAt: run.endedAt ?? now,
+            status: "failed",
+            outcome: "failed",
+            summary: error,
+            error,
+          };
+        });
+        let nextRunAt = routine.nextRunAt;
+        if (routine.status === "active" && nextRunAt !== null && nextRunAt <= now) {
+          nextRunAt = advanceNextRoutineRunAtPast(routine.cadence, nextRunAt, now);
+          changed = true;
+        }
+        let status = routine.status;
+        let pausedAt = routine.pausedAt;
+        const candidate: Routine = {
+          ...routine,
+          runs,
+          nextRunAt,
+          updatedAt: changed ? now : routine.updatedAt,
+        };
+        if (
+          status === "active" &&
+          !runs.some((run) => run.status === "running") &&
+          shouldCompleteRoutine(candidate, now)
+        ) {
+          status = "completed";
+          nextRunAt = null;
+          pausedAt = null;
+          changed = true;
+        }
+        if (changed) {
+          this.store.put("routines", {
+            ...candidate,
+            status,
+            nextRunAt,
+            pausedAt,
+            updatedAt: now,
+          });
+        }
+      }
+    });
+  }
+
+  private async fireRoutine(routineId: string, options: { manual: boolean }): Promise<void> {
+    const routine = this.store.get("routines", routineId);
+    if (!routine || (!options.manual && routine.status !== "active")) return;
+    const now = this.now();
+    const scheduledFor = options.manual ? now : (routine.nextRunAt ?? now);
+    const assistant = this.store.get("assistants", routine.assistantId);
+    const conversation = this.store.get("conversations", routine.conversationId);
+    if (!assistant || !conversation?.members.includes(assistant.id)) {
+      this.pauseRoutineMissingMember(routine, scheduledFor, now);
+      return;
+    }
+
+    const activeTurn = this.store
+      .snapshot()
+      .turns.some((turn) => turn.routineId === routine.id && LIVE.has(turn.status));
+    if (activeTurn) {
+      this.recordSkippedRoutineRun(
+        routine,
+        scheduledFor,
+        now,
+        options.manual,
+        "Skipped: previous routine turn is still active",
+      );
+      return;
+    }
+
+    const serverId = this.machineOf(assistant);
+    if (serverId !== undefined) {
+      const online = this.machines
+        ? await this.machines.online(serverId).catch(() => false)
+        : false;
+      const latest = this.store.get("routines", routineId);
+      if (!latest || (!options.manual && latest.status !== "active")) return;
+      if (!online) {
+        this.recordSkippedRoutineRun(
+          latest,
+          scheduledFor,
+          now,
+          options.manual,
+          "Skipped: host_offline",
+        );
+        return;
+      }
+    }
+
+    const current = this.store.get("routines", routineId);
+    if (!current || (!options.manual && current.status !== "active")) return;
+    const runId = randomUUID();
+    const turnId = randomUUID();
+    const run: RoutineRun = {
+      id: runId,
+      scheduledFor,
+      startedAt: now,
+      endedAt: null,
+      status: "running",
+      outcome: null,
+      turnId,
+      summary: null,
+      error: null,
+    };
+    const nextRunAt = options.manual
+      ? current.nextRunAt
+      : advanceNextRoutineRunAtPast(current.cadence, scheduledFor, now);
+    this.store.transaction(() => {
+      this.store.put("routines", {
+        ...current,
+        lastRunAt: now,
+        nextRunAt,
+        updatedAt: now,
+        runs: appendRoutineRun(current.runs, run),
+      });
+      queueTurn(this.store, {
+        id: turnId,
+        conversationId: current.conversationId,
+        threadId: current.threadId,
+        assistant,
+        kind: "routine",
+        triggerId: runId,
+        rootTriggerId: runId,
+        prompt: current.prompt,
+        routineId: current.id,
+        routineRunId: runId,
+        routineName: current.name,
+      });
+    });
+    this.kick();
+  }
+
+  private pauseRoutineMissingMember(routine: Routine, scheduledFor: number, now: number): void {
+    const error = "Assistant or chat membership no longer exists.";
+    const run: RoutineRun = {
+      id: randomUUID(),
+      scheduledFor,
+      startedAt: now,
+      endedAt: now,
+      status: "failed",
+      outcome: "failed",
+      turnId: null,
+      summary: error,
+      error,
+    };
+    this.store.transaction(() =>
+      this.store.put("routines", {
+        ...routine,
+        status: "paused",
+        pausedAt: now,
+        nextRunAt: null,
+        lastRunAt: now,
+        updatedAt: now,
+        runs: appendRoutineRun(routine.runs, run),
+      }),
+    );
+  }
+
+  private recordSkippedRoutineRun(
+    routine: Routine,
+    scheduledFor: number,
+    now: number,
+    manual: boolean,
+    summary: string,
+  ): void {
+    const run: RoutineRun = {
+      id: randomUUID(),
+      scheduledFor,
+      startedAt: now,
+      endedAt: now,
+      status: "succeeded",
+      outcome: "skipped",
+      turnId: null,
+      summary,
+      error: null,
+    };
+    const nextRunAt = manual
+      ? routine.nextRunAt
+      : advanceNextRoutineRunAtPast(routine.cadence, scheduledFor, now);
+    const runs = appendRoutineRun(routine.runs, run);
+    const updated: Routine = {
+      ...routine,
+      runs,
+      lastRunAt: now,
+      nextRunAt,
+      updatedAt: now,
+    };
+    const completed = shouldCompleteRoutine(updated, now);
+    this.store.transaction(() =>
+      this.store.put("routines", {
+        ...updated,
+        ...(completed
+          ? {
+              status: "completed",
+              nextRunAt: null,
+              pausedAt: null,
+            }
+          : {}),
+      }),
+    );
+  }
+
+  private settleRoutineTurn(turn: Turn, text: string): void {
+    if (!turn.routineId || !turn.routineRunId) return;
+    const routine = this.store.get("routines", turn.routineId);
+    if (!routine) return;
+    const now = this.now();
+    const trimmed = text.trim();
+    const succeeded = turn.status === "completed";
+    const passed = succeeded && (!trimmed || isPass(trimmed));
+    const failureText = turn.error ?? "Routine turn failed";
+    let outcome: RoutineRun["outcome"] = "failed";
+    let summary = failureText;
+    if (succeeded) {
+      outcome = passed ? "passed" : "replied";
+      summary = passed ? "Silent ((pass))" : firstLineSummary(trimmed);
+    }
+    const runs = updateRoutineRun(routine.runs, turn.routineRunId, (run) => ({
+      ...run,
+      endedAt: now,
+      status: succeeded ? "succeeded" : "failed",
+      outcome,
+      summary,
+      error: succeeded ? null : failureText,
+    }));
+    const updated: Routine = {
+      ...routine,
+      runs,
+      updatedAt: now,
+    };
+    const completed = shouldCompleteRoutine(updated, now);
+    this.store.put("routines", {
+      ...updated,
+      ...(completed
+        ? {
+            status: "completed",
+            nextRunAt: null,
+            pausedAt: null,
+          }
+        : {}),
+    });
   }
 
   send(input: RpcInput<typeof sendMessage>): { id: string } {
@@ -828,6 +1274,7 @@ export class Coordinator {
     };
     this.store.transaction(() => {
       this.store.put("turns", cancelled);
+      this.settleRoutineTurn({ ...cancelled, error: "Cancelled" }, "");
       this.mailbox.turnEnded(cancelled, "");
       if (turn.epochId) this.roundtable.advance(turn.epochId);
     });
@@ -957,6 +1404,8 @@ export class Coordinator {
   // A turn ended outside the settle path: the roundtable moves on to its next speaker.
   private afterTurn(turn: Turn): void {
     // A failed dispatch is retried by the sweep, not here, so a host that is down is not hammered.
+    if (turn.routineId && turn.status === "failed")
+      this.store.transaction(() => this.settleRoutineTurn(turn, ""));
     if (turn.mailboxId && turn.status === "failed") this.mailbox.turnEnded(turn, "");
     if (!turn.epochId || turn.status !== "failed") return;
     this.roundtable.advance(turn.epochId);
@@ -968,6 +1417,7 @@ export class Coordinator {
     const state = this.store.snapshot();
     this.roundtable.advanceAll();
     this.fanout.flushDue();
+    void this.tickRoutines();
     for (const turn of state.turns)
       if (turn.accepted && TURN_LIVE.has(turn.status)) this.settle(turn.agentId);
     for (const task of state.tasks) {
@@ -1089,26 +1539,7 @@ export class Coordinator {
     const { status, error } = this.turnOutcome(turn, task, finish, read.error);
     const text = read.text.trim();
     this.store.transaction(() => {
-      let final: Message | undefined;
-      // A mailbox turn's answer is a reply to the asking assistant, never a chat message.
-      if (status === "completed" && assistant && text && !isPass(text) && !turn.mailboxId) {
-        const id = `final:${turn.id}`;
-        final = this.store.get("messages", id) ?? undefined;
-        if (!final)
-          final = this.store.putMessage({
-            id,
-            conversationId: turn.conversationId,
-            threadId: turn.threadId,
-            senderId: assistant.id,
-            content: text,
-            createdAt: this.now(),
-            taskId: turn.taskId ?? null,
-            kind: "final",
-            turnId: turn.id,
-            ...(turn.epochId ? { epochId: turn.epochId } : {}),
-            ...(turn.round !== undefined ? { round: turn.round } : {}),
-          });
-      }
+      const final = this.recordFinalTurnMessage(turn, status, assistant, text);
       const settled: Turn = {
         ...turn,
         status,
@@ -1116,6 +1547,7 @@ export class Coordinator {
         ...(final ? { finalMessageId: final.id } : {}),
       };
       this.store.put("turns", settled);
+      this.settleRoutineTurn(settled, text);
       this.mailbox.turnEnded(settled, text);
       // What the assistant said may wake others; what the roundtable does next depends on it.
       if (final) this.fanout.onFinal(settled, final);
@@ -1137,6 +1569,35 @@ export class Coordinator {
     // Stopping the asking reply withdraws what it asked; a newer user message does not.
     if (status === "cancelled" && error !== SUPERSEDED) this.mailbox.senderTurnCancelled(turn);
   }
+  private recordFinalTurnMessage(
+    turn: Turn,
+    status: Turn["status"],
+    assistant: Assistant | null,
+    text: string,
+  ): Message | undefined {
+    // A mailbox turn's answer is a reply to the asking assistant, never a chat message.
+    if (status !== "completed" || !assistant || !text || isPass(text) || turn.mailboxId) {
+      return undefined;
+    }
+    const id = `final:${turn.id}`;
+    const existing = this.store.get("messages", id);
+    if (existing) return existing;
+    return this.store.putMessage({
+      id,
+      conversationId: turn.conversationId,
+      threadId: turn.threadId,
+      senderId: assistant.id,
+      content: text,
+      createdAt: this.now(),
+      taskId: turn.taskId ?? null,
+      kind: "final",
+      turnId: turn.id,
+      ...(turn.epochId ? { epochId: turn.epochId } : {}),
+      ...(turn.round !== undefined ? { round: turn.round } : {}),
+      ...(turn.routineId ? { routineId: turn.routineId } : {}),
+      ...(turn.routineName ? { routineName: turn.routineName } : {}),
+    });
+  }
   // How an ended turn closes: its task's cancellation, a newer user message, or its own outcome.
   private turnOutcome(
     turn: Turn,
@@ -1153,7 +1614,12 @@ export class Coordinator {
           message.threadId === turn.threadId &&
           message.senderId === "user",
       );
-    if (!turn.taskId && turn.kind !== "task_receipt" && latestUser?.id !== turn.seenUserId)
+    if (
+      !turn.taskId &&
+      turn.kind !== "task_receipt" &&
+      turn.kind !== "routine" &&
+      latestUser?.id !== turn.seenUserId
+    )
       return { status: "cancelled", error: SUPERSEDED };
     if (finish.outcome?.kind === "canceled")
       return { status: "cancelled", error: finish.outcome.reason };
@@ -1258,6 +1724,7 @@ export class Coordinator {
       if ("agentId" in target) {
         const failed: Turn = { ...target, status: "failed", error };
         this.store.put("turns", failed);
+        this.settleRoutineTurn(failed, "");
         this.mailbox.turnEnded(failed, "");
         if (target.epochId) this.roundtable.advance(target.epochId);
       }
@@ -1473,6 +1940,7 @@ export class Coordinator {
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
     if (this.mailboxTimer) clearInterval(this.mailboxTimer);
+    if (this.routineTimer) clearInterval(this.routineTimer);
     if (this.inboxTimer) clearTimeout(this.inboxTimer);
     for (const stop of this.watches.values()) stop();
     this.watches.clear();

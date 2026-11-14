@@ -63,6 +63,7 @@ function cloneSnapshot(state: ChatState, messageLimit?: number): ChatState {
     turns: [...state.turns],
     ...(state.studios ? { studios: [...state.studios] } : {}),
     ...(state.peerMessages ? { peerMessages: [...state.peerMessages] } : {}),
+    ...(state.routines ? { routines: [...state.routines] } : {}),
   };
 }
 
@@ -125,6 +126,7 @@ export class ChatStore {
       turns: [],
       studios: [],
       peerMessages: [],
+      routines: [],
     };
     const rows = this.db
       .prepare("SELECT collection, value FROM records WHERE seq > ? ORDER BY seq")
@@ -155,6 +157,19 @@ export class ChatStore {
       )
       .run(collection, value.id, JSON.stringify(value), event.lastInsertRowid);
     this.markChanged();
+  }
+  delete<K extends Collection>(collection: K, id: string): boolean {
+    this.snapshotCache = null;
+    const removed = this.db
+      .prepare("DELETE FROM records WHERE collection=? AND id=?")
+      .run(collection, id);
+    if (removed.changes === 0) return false;
+    const event = this.db
+      .prepare("INSERT INTO changes(collection,id) VALUES (?,?)")
+      .run(collection, id);
+    this.db.prepare("DELETE FROM changes WHERE seq < ?").run(event.lastInsertRowid);
+    this.markChanged();
+    return true;
   }
   /** Stores a message, stamping the next monotonic `seq` unless it already has one. */
   putMessage(message: Message): Message {

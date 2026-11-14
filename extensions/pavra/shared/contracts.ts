@@ -53,6 +53,8 @@ export const messageSchema = z.object({
   quoteOf: z.string().optional(),
   epochId: z.string().optional(),
   round: z.number().optional(),
+  routineId: z.string().optional(),
+  routineName: z.string().optional(),
   // Lifecycle receipt payload of a `task_event` row. `type` stays a string so a newer daemon can add
   // event types an older client does not know; see `taskEventTypes` for the current set.
   event: z
@@ -130,10 +132,14 @@ export const turnSchema = z.object({
       "roundtable",
       "task_followup",
       "task_receipt",
+      "routine",
     ])
     .optional(),
   epochId: z.string().optional(),
   round: z.number().optional(),
+  routineId: z.string().optional(),
+  routineRunId: z.string().optional(),
+  routineName: z.string().optional(),
   // The user message that started the chain of turns this one belongs to. Agent-triggered turns
   // (mention, peer_inbox) are budgeted per root trigger.
   rootTriggerId: z.string().optional(),
@@ -219,6 +225,54 @@ export const peerMessageSchema = z.object({
   threadId: z.string().nullable().optional(),
   createdAt: z.number(),
 });
+export const routineCadenceSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("every"),
+    everyMs: z.number().int().positive(),
+  }),
+  z.object({
+    type: z.literal("cron"),
+    expression: z.string().trim().min(1),
+    timezone: z.string().trim().min(1).optional(),
+  }),
+]);
+export type RoutineCadence = z.infer<typeof routineCadenceSchema>;
+export const routineRunOutcomeSchema = z.enum(["replied", "passed", "skipped", "failed"]);
+export type RoutineRunOutcome = z.infer<typeof routineRunOutcomeSchema>;
+export const routineRunSchema = z.object({
+  id: z.string(),
+  scheduledFor: z.number(),
+  startedAt: z.number(),
+  endedAt: z.number().nullable(),
+  status: z.enum(["running", "succeeded", "failed"]),
+  outcome: routineRunOutcomeSchema.nullable(),
+  turnId: z.string().nullable(),
+  summary: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export type RoutineRun = z.infer<typeof routineRunSchema>;
+export const routineStatusSchema = z.enum(["active", "paused", "completed"]);
+export type RoutineStatus = z.infer<typeof routineStatusSchema>;
+export const routineSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(80),
+  prompt: z.string().min(1).max(20_000),
+  assistantId: z.string().uuid(),
+  conversationId: z.string().min(1),
+  threadId: z.string().nullable(),
+  cadence: routineCadenceSchema,
+  status: routineStatusSchema,
+  maxRuns: z.number().int().positive().nullable(),
+  expiresAt: z.number().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  nextRunAt: z.number().nullable(),
+  lastRunAt: z.number().nullable(),
+  pausedAt: z.number().nullable(),
+  runs: z.array(routineRunSchema),
+});
+export type Routine = z.infer<typeof routineSchema>;
+
 export const stateSchema = z.object({
   generation: z.string(),
   cursor: z.number(),
@@ -229,6 +283,7 @@ export const stateSchema = z.object({
   turns: z.array(turnSchema),
   studios: z.array(studioSchema).optional(),
   peerMessages: z.array(peerMessageSchema).optional(),
+  routines: z.array(routineSchema).optional(),
 });
 export type Studio = z.infer<typeof studioSchema>;
 export type PeerMessage = z.infer<typeof peerMessageSchema>;
@@ -434,4 +489,41 @@ export const setStudioAssistants = defineRpc({
     assistantIds: z.array(z.string().uuid()).max(20),
   }),
   output: studioSchema,
+});
+
+export const saveRoutine = defineRpc({
+  name: "chat.routine.save",
+  input: z.object({
+    id: z.string().min(1).optional(),
+    name: z.string().trim().min(1).max(80),
+    prompt: z.string().trim().min(1).max(20_000),
+    assistantId: z.string().uuid(),
+    conversationId: z.string().min(1),
+    threadId: z.string().nullable().optional(),
+    cadence: routineCadenceSchema,
+    maxRuns: z.number().int().positive().nullable().optional(),
+    expiresAt: z.number().nullable().optional(),
+    runOnCreate: z.boolean().optional(),
+  }),
+  output: routineSchema,
+});
+export const pauseRoutine = defineRpc({
+  name: "chat.routine.pause",
+  input: z.object({ id: z.string().min(1) }),
+  output: routineSchema,
+});
+export const resumeRoutine = defineRpc({
+  name: "chat.routine.resume",
+  input: z.object({ id: z.string().min(1) }),
+  output: routineSchema,
+});
+export const runRoutineOnce = defineRpc({
+  name: "chat.routine.run_once",
+  input: z.object({ id: z.string().min(1) }),
+  output: routineSchema,
+});
+export const deleteRoutine = defineRpc({
+  name: "chat.routine.delete",
+  input: z.object({ id: z.string().min(1) }),
+  output: z.object({ deleted: z.boolean(), id: z.string() }),
 });

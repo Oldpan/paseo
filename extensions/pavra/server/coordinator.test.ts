@@ -17,6 +17,7 @@ import {
 } from "./assistant-files";
 import { workspaceMemoryHint } from "./prompts";
 import type { MachinePort } from "./machines";
+import { callAgentTool } from "./agent-tools";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -1272,5 +1273,469 @@ describe("sub-thread fork_context and semantic Studio tab titles", () => {
         threadId: null,
       }),
     ).toBe("Max · Mailbox");
+  });
+});
+
+describe("routines and reminders (Stage A.2: T0 + T1)", () => {
+  function clockFixture(initialNow = Date.UTC(2026, 10, 15, 8, 0, 0)) {
+    let clock = initialNow;
+    const directory = mkdtempSync(path.join(tmpdir(), "pavra-routines-"));
+    cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+    const store = new ChatStore(path.join(directory, "chat.sqlite"));
+    cleanup.push(() => store.close());
+    const execution = new FakeExecution();
+    const coordinator = new Coordinator(store, directory, {
+      execution,
+      now: () => clock,
+    });
+    cleanup.push(() => coordinator.close());
+    coordinator.attach();
+    const assistant = coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Sky",
+      provider: "codex/test-model",
+      persona: "Inspect carefully",
+    });
+    const conversation = coordinator.createConversation({
+      id: randomUUID(),
+      name: "Sky",
+      kind: "dm",
+      members: [assistant.id],
+      roundtable: false,
+    });
+    const ended = (agentId: string, outcome = completed) =>
+      coordinator.onTurnEnded({ agent: { id: agentId }, outcome });
+    const finals = () => store.snapshot().messages.filter((message) => message.kind === "final");
+    return {
+      directory,
+      store,
+      execution,
+      coordinator,
+      assistant,
+      conversation,
+      ended,
+      finals,
+      now: () => clock,
+      advance: (ms: number) => {
+        clock += ms;
+      },
+    };
+  }
+
+  it("fires a routine on due tick, stays silent on (pass), and commits a routine-tagged final on content", async () => {
+    const f = clockFixture();
+    await f.coordinator.writeAssistantPlaybook({
+      assistantId: f.assistant.id,
+      slug: "daily-check",
+      content: "# Daily Check\n\n1. Verify services.\n2. Reply (pass) if healthy.",
+    });
+
+    const routine = f.coordinator.saveRoutine({
+      name: "Morning check",
+      prompt: "Follow playbooks/daily-check.md and report any issue.",
+      assistantId: f.assistant.id,
+      conversationId: f.conversation.id,
+      cadence: { type: "every", everyMs: 60_000 },
+    });
+    expect(routine.status).toBe("active");
+    expect(routine.nextRunAt).toBe(f.now() + 60_000);
+    expect(routine.runs).toEqual([]);
+
+    // Tick 1: assistant replies (pass) -> silent, no chat message committed, outcome = "passed".
+    f.advance(60_000);
+    await f.coordinator.tickRoutines();
+    await f.coordinator.idle();
+
+    const turn1 = f.store.snapshot().turns.find((t) => t.routineId === routine.id)!;
+    expect(turn1.kind).toBe("routine");
+    expect(turn1.routineName).toBe("Morning check");
+    const sent1 = f.execution.sent.find((item) => item.messageId === turn1.id)!;
+    expect(sent1.text).toContain("[Routine: Morning check |");
+    expect(sent1.text).toContain("Follow playbooks/daily-check.md and report any issue.");
+    expect(sent1.text).toContain("[Playbooks]\n- playbooks/daily-check.md: Daily Check");
+
+    f.execution.say(turn1.agentId, "(pass)", "r1");
+    f.execution.finish(turn1.agentId);
+    f.ended(turn1.agentId);
+    await f.coordinator.idle();
+
+    expect(f.finals()).toEqual([]);
+    const afterPass = f.store.get("routines", routine.id)!;
+    expect(afterPass.status).toBe("active");
+    expect(afterPass.nextRunAt).toBe(f.now() + 60_000);
+    expect(afterPass.runs).toHaveLength(1);
+    expect(afterPass.runs[0]).toMatchObject({
+      status: "succeeded",
+      outcome: "passed",
+      turnId: turn1.id,
+      summary: "Silent ((pass))",
+      error: null,
+    });
+
+    // Tick 2: assistant replies with findings -> final message committed with routineId & routineName, outcome = "replied".
+    f.advance(60_000);
+    await f.coordinator.tickRoutines();
+    await f.coordinator.idle();
+
+    const turn2 = f.store
+      .snapshot()
+      .turns.find((t) => t.routineId === routine.id && t.id !== turn1.id)!;
+    f.execution.say(
+      turn2.agentId,
+      "Disk usage reached 91% on /var.\nRecommend pruning old logs.",
+      "r2",
+    );
+    f.execution.finish(turn2.agentId);
+    f.ended(turn2.agentId);
+    await f.coordinator.idle();
+
+    expect(f.finals()).toHaveLength(1);
+    expect(f.finals()[0]).toMatchObject({
+      id: `final:${turn2.id}`,
+      content: "Disk usage reached 91% on /var.\nRecommend pruning old logs.",
+      routineId: routine.id,
+      routineName: "Morning check",
+    });
+    const afterReply = f.store.get("routines", routine.id)!;
+    expect(afterReply.runs).toHaveLength(2);
+    expect(afterReply.runs[1]).toMatchObject({
+      status: "succeeded",
+      outcome: "replied",
+      turnId: turn2.id,
+      summary: "Disk usage reached 91% on /var.",
+      error: null,
+    });
+  });
+
+  it("completes a one-shot reminder (maxRuns: 1) after its first run so later ticks do not fire again", async () => {
+    const f = clockFixture();
+    const reminder = f.coordinator.saveRoutine({
+      name: "Reply to email",
+      prompt: "Remind the user to reply to the finance email.",
+      assistantId: f.assistant.id,
+      conversationId: f.conversation.id,
+      cadence: { type: "every", everyMs: 30_000 },
+      maxRuns: 1,
+    });
+    expect(reminder.status).toBe("active");
+    expect(reminder.maxRuns).toBe(1);
+
+    f.advance(30_000);
+    await f.coordinator.tickRoutines();
+    await f.coordinator.idle();
+
+    const turn = f.store.snapshot().turns.find((t) => t.routineId === reminder.id)!;
+    f.execution.say(turn.agentId, "Reminder: please reply to the finance email!", "rem1");
+    f.execution.finish(turn.agentId);
+    f.ended(turn.agentId);
+    await f.coordinator.idle();
+
+    const completedReminder = f.store.get("routines", reminder.id)!;
+    expect(completedReminder).toMatchObject({
+      status: "completed",
+      nextRunAt: null,
+      pausedAt: null,
+    });
+    expect(completedReminder.runs).toHaveLength(1);
+    expect(completedReminder.runs[0]).toMatchObject({
+      status: "succeeded",
+      outcome: "replied",
+      summary: "Reminder: please reply to the finance email!",
+    });
+    expect(f.finals()).toHaveLength(1);
+    expect(f.finals()[0]).toMatchObject({
+      routineId: reminder.id,
+      routineName: "Reply to email",
+    });
+
+    // Advancing clock further does not fire the completed reminder again.
+    f.advance(120_000);
+    await f.coordinator.tickRoutines();
+    await f.coordinator.idle();
+    expect(f.store.snapshot().turns.filter((t) => t.routineId === reminder.id)).toHaveLength(1);
+  });
+
+  it("skips firing when the previous turn for the same routine is still active", async () => {
+    const f = clockFixture();
+    const routine = f.coordinator.saveRoutine({
+      name: "Hourly sync",
+      prompt: "Check sync status.",
+      assistantId: f.assistant.id,
+      conversationId: f.conversation.id,
+      cadence: { type: "every", everyMs: 60_000 },
+    });
+
+    f.advance(60_000);
+    await f.coordinator.tickRoutines();
+    await f.coordinator.idle();
+
+    const turn1 = f.store.snapshot().turns.find((t) => t.routineId === routine.id)!;
+    expect(turn1.status).toBe("running");
+
+    // Next tick arrives while turn1 is still running -> skipped, no second turn queued.
+    f.advance(60_000);
+    await f.coordinator.tickRoutines();
+    await f.coordinator.idle();
+
+    expect(f.store.snapshot().turns.filter((t) => t.routineId === routine.id)).toHaveLength(1);
+    const updated = f.store.get("routines", routine.id)!;
+    expect(updated.runs).toHaveLength(2);
+    expect(updated.runs[0]).toMatchObject({ status: "running", outcome: null, turnId: turn1.id });
+    expect(updated.runs[1]).toMatchObject({
+      status: "succeeded",
+      outcome: "skipped",
+      turnId: null,
+      summary: "Skipped: previous routine turn is still active",
+    });
+    expect(updated.nextRunAt).toBe(f.now() + 60_000);
+  });
+
+  it("skips firing with host_offline when the assistant's member machine is offline, without posting a chat error", async () => {
+    let clock = Date.UTC(2026, 10, 15, 9, 0, 0);
+    let macOnline = false;
+    const directory = mkdtempSync(path.join(tmpdir(), "pavra-routines-offline-"));
+    cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+    const store = new ChatStore(path.join(directory, "chat.sqlite"));
+    cleanup.push(() => store.close());
+    const execution = new FakeExecution();
+    const machines: MachinePort = {
+      self: async () => "srv_spark",
+      isMember: (serverId) => serverId === "srv_mac",
+      online: async (serverId) => (serverId === "srv_mac" ? macOnline : true),
+      list: async () => [
+        { serverId: "srv_spark", label: "Spark", role: "coordinator" },
+        { serverId: "srv_mac", label: "Mac", role: "member" },
+      ],
+      call: async () => {
+        throw new Error("unexpected call");
+      },
+    };
+    const coordinator = new Coordinator(store, directory, {
+      execution,
+      machines,
+      now: () => clock,
+    });
+    cleanup.push(() => coordinator.close());
+    coordinator.attach();
+
+    const max = coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Max",
+      provider: "codex/test-model",
+      persona: "Member assistant",
+      serverId: "srv_mac",
+    });
+    const dm = coordinator.createConversation({
+      id: randomUUID(),
+      name: "Max",
+      kind: "dm",
+      members: [max.id],
+      roundtable: false,
+    });
+
+    const routine = coordinator.saveRoutine({
+      name: "Mac health",
+      prompt: "Check Mac disk space.",
+      assistantId: max.id,
+      conversationId: dm.id,
+      cadence: { type: "every", everyMs: 60_000 },
+    });
+
+    clock += 60_000;
+    await coordinator.tickRoutines();
+    await coordinator.idle();
+
+    expect(store.snapshot().turns).toEqual([]);
+    expect(store.snapshot().messages).toEqual([]);
+    const skippedRoutine = store.get("routines", routine.id)!;
+    expect(skippedRoutine.runs).toHaveLength(1);
+    expect(skippedRoutine.runs[0]).toMatchObject({
+      status: "succeeded",
+      outcome: "skipped",
+      turnId: null,
+      summary: "Skipped: host_offline",
+      error: null,
+    });
+    expect(skippedRoutine.nextRunAt).toBe(clock + 60_000);
+
+    // Once Mac comes back online, the next tick dispatches normally.
+    macOnline = true;
+    clock += 60_000;
+    await coordinator.tickRoutines();
+    await coordinator.idle();
+    expect(store.snapshot().turns).toHaveLength(1);
+  });
+
+  it("advances overdue nextRunAt past now on startup recovery without backfilling missed runs", async () => {
+    let clock = Date.UTC(2026, 10, 15, 10, 0, 0);
+    const directory = mkdtempSync(path.join(tmpdir(), "pavra-routines-recover-"));
+    cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+    const dbFile = path.join(directory, "chat.sqlite");
+
+    const store1 = new ChatStore(dbFile);
+    const execution1 = new FakeExecution();
+    const coordinator1 = new Coordinator(store1, directory, {
+      execution: execution1,
+      now: () => clock,
+    });
+    coordinator1.attach();
+    const assistant = coordinator1.saveAssistant({
+      id: randomUUID(),
+      name: "Sky",
+      provider: "codex/test-model",
+      persona: "Assistant",
+    });
+    const conversation = coordinator1.createConversation({
+      id: randomUUID(),
+      name: "Sky",
+      kind: "dm",
+      members: [assistant.id],
+      roundtable: false,
+    });
+    const routine = coordinator1.saveRoutine({
+      name: "Hourly check",
+      prompt: "Check status.",
+      assistantId: assistant.id,
+      conversationId: conversation.id,
+      cadence: { type: "every", everyMs: 3_600_000 },
+    });
+    expect(routine.nextRunAt).toBe(clock + 3_600_000);
+    await coordinator1.close();
+    store1.close();
+
+    // Daemon was down for 5.5 hours; on restart, nextRunAt advances to +6h without firing immediately.
+    clock += 5.5 * 3_600_000;
+    const store2 = new ChatStore(dbFile);
+    cleanup.push(() => store2.close());
+    const execution2 = new FakeExecution();
+    const coordinator2 = new Coordinator(store2, directory, {
+      execution: execution2,
+      now: () => clock,
+    });
+    cleanup.push(() => coordinator2.close());
+    coordinator2.attach();
+    await coordinator2.idle();
+
+    const recovered = store2.get("routines", routine.id)!;
+    expect(recovered.runs).toEqual([]);
+    expect(recovered.nextRunAt).toBeGreaterThan(clock);
+    expect(store2.snapshot().turns).toEqual([]);
+  });
+
+  it("allows an assistant to list, create, update, and delete its own routines via pavra-routine_* tools and enforces routine-turn and ownership guards", async () => {
+    const f = clockFixture();
+    const otherAssistant = f.coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Max",
+      provider: "codex/test-model",
+      persona: "Other",
+    });
+    const otherChat = f.coordinator.createConversation({
+      id: randomUUID(),
+      name: "Max",
+      kind: "dm",
+      members: [otherAssistant.id],
+      roundtable: false,
+    });
+    const otherRoutine = f.coordinator.saveRoutine({
+      name: "Max routine",
+      prompt: "Max check",
+      assistantId: otherAssistant.id,
+      conversationId: otherChat.id,
+      cadence: { type: "every", everyMs: 60_000 },
+    });
+
+    // Start a normal chat turn for Sky so Sky has a bound ChatSession and live turn.
+    const msgId = randomUUID();
+    f.coordinator.send({
+      id: msgId,
+      conversationId: f.conversation.id,
+      threadId: null,
+      content: "Set up a daily check and a reminder for me",
+    });
+    await f.coordinator.idle();
+    const userTurn = f.store.snapshot().turns.find((t) => t.triggerId === msgId)!;
+    const caller = { agentId: userTurn.agentId, serverId: undefined as unknown as string };
+
+    // 1. Create a recurring cron routine and a one-time reminder (maxRuns: 1).
+    const createdRecurring = (await callAgentTool(f.coordinator, caller, "routine_save", {
+      name: "Daily check",
+      prompt: "Follow playbooks/daily-check.md and reply (pass) if normal.",
+      cadence: { type: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
+    })) as { routine: { id: string; name: string; maxRuns: number | null }; created: boolean };
+    expect(createdRecurring.created).toBe(true);
+    expect(createdRecurring.routine.name).toBe("Daily check");
+    expect(createdRecurring.routine.maxRuns).toBeNull();
+
+    const createdReminder = (await callAgentTool(f.coordinator, caller, "routine_save", {
+      name: "Call Bob",
+      prompt: "Remind the user to call Bob.",
+      cadence: { type: "every", everyMs: 900_000 },
+      maxRuns: 1,
+    })) as { routine: { id: string; name: string; maxRuns: number | null }; created: boolean };
+    expect(createdReminder.created).toBe(true);
+    expect(createdReminder.routine.maxRuns).toBe(1);
+
+    // Saving again with the same name updates in place rather than duplicating.
+    const updatedRecurring = (await callAgentTool(f.coordinator, caller, "routine_save", {
+      name: "Daily check",
+      prompt: "Updated daily check instructions.",
+      cadence: { type: "cron", expression: "30 9 * * *", timezone: "Asia/Shanghai" },
+    })) as { routine: { id: string; prompt: string }; created: boolean };
+    expect(updatedRecurring.created).toBe(false);
+    expect(updatedRecurring.routine.id).toBe(createdRecurring.routine.id);
+    expect(updatedRecurring.routine.prompt).toBe("Updated daily check instructions.");
+
+    // 2. List routines in this chat -> returns Sky's 2 routines, not Max's.
+    const listed = (await callAgentTool(f.coordinator, caller, "routine_list", {})) as {
+      routines: Array<{ id: string; name: string }>;
+    };
+    expect(listed.routines.map((r) => r.name).toSorted()).toEqual(["Call Bob", "Daily check"]);
+
+    // 3. Refuses operating on another assistant's routine.
+    await expect(
+      callAgentTool(f.coordinator, caller, "routine_delete", { id: otherRoutine.id }),
+    ).rejects.toThrow("only delete your own routines");
+    await expect(
+      callAgentTool(f.coordinator, caller, "routine_save", {
+        id: otherRoutine.id,
+        name: "Hijack",
+        prompt: "Hijack",
+        cadence: { type: "every", everyMs: 60_000 },
+      }),
+    ).rejects.toThrow("only modify your own routines");
+
+    // 4. Delete the one-time reminder.
+    const deleted = (await callAgentTool(f.coordinator, caller, "routine_delete", {
+      id: createdReminder.routine.id,
+    })) as { deleted: boolean; id: string };
+    expect(deleted).toEqual({ deleted: true, id: createdReminder.routine.id });
+    expect(f.store.get("routines", createdReminder.routine.id)).toBeNull();
+
+    // Finish userTurn, then trigger a kind: "routine" turn and verify routine_save cannot create new routines inside it.
+    f.execution.say(userTurn.agentId, "Done setting up routines.", "u1");
+    f.execution.finish(userTurn.agentId);
+    f.ended(userTurn.agentId);
+    await f.coordinator.idle();
+
+    await f.coordinator.runRoutineOnce({ id: createdRecurring.routine.id });
+    await f.coordinator.idle();
+    const routineTurn = f.store
+      .snapshot()
+      .turns.find((t) => t.routineId === createdRecurring.routine.id)!;
+    expect(routineTurn.kind).toBe("routine");
+
+    await expect(
+      callAgentTool(
+        f.coordinator,
+        { agentId: routineTurn.agentId, serverId: undefined as unknown as string },
+        "routine_save",
+        {
+          name: "Recursive routine",
+          prompt: "Spawn another routine",
+          cadence: { type: "every", everyMs: 60_000 },
+        },
+      ),
+    ).rejects.toThrow("Routines cannot create new routines during a routine turn.");
   });
 });

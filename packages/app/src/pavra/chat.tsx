@@ -44,7 +44,7 @@ import { usePavraView } from "./store";
 import type { Palette } from "./palette";
 import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
-import { ChatPane, MemoryPane, PlaybooksPane } from "./ui/ChatPane";
+import { ChatPane, MemoryPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
 import { ColResizeHandle } from "./ui/ColResizeHandle";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
@@ -53,6 +53,7 @@ import { openExchanges } from "./peer-activity";
 import { PeerActivity } from "./ui/PeerActivity";
 import { useAssistantMemory } from "./memory";
 import { useAssistantPlaybooks } from "./playbooks";
+import { formatMessageRoutineBadge, useAssistantRoutines } from "./routines";
 import { isNoteMessage, sortMessages } from "./model";
 import {
   followUpState,
@@ -506,9 +507,10 @@ export function PavraChat(props: ChatProps) {
           />
         ) : null}
         {tab === "task" ? <TasksTab data={data} palette={palette} wiring={wiring} /> : null}
-        {tab === "memory" ? (
-          <MemoryTab data={data} assistant={assistant} onEdit={assistant ? edit : undefined} />
+        {tab === "routines" ? (
+          <RoutinesTab data={data} assistant={assistant} conversationId={chatId} />
         ) : null}
+        {tab === "memory" ? <MemoryTab data={data} assistant={assistant} onEdit={edit} /> : null}
         {tab === "playbooks" ? <PlaybooksTab data={data} assistant={assistant} /> : null}
       </View>
       {!compact && renderedThreadId ? (
@@ -565,7 +567,7 @@ function MemoryTab({
       onChange={memory.change}
       onSave={memory.save}
       onReload={memory.reload}
-      onEdit={onEdit}
+      onEdit={assistant ? onEdit : undefined}
     />
   );
 }
@@ -588,6 +590,31 @@ function PlaybooksTab({ data, assistant }: { data: PavraData; assistant?: Assist
       onSave={playbooks.save}
       onDelete={playbooks.remove}
       onReload={playbooks.reload}
+    />
+  );
+}
+function RoutinesTab({
+  data,
+  assistant,
+  conversationId,
+}: {
+  data: PavraData;
+  assistant?: Assistant;
+  conversationId: string;
+}) {
+  const routines = useAssistantRoutines(data, assistant?.id, conversationId);
+  return (
+    <RoutinesPane
+      assistant={assistant}
+      routines={routines.routines}
+      busyId={routines.busyId}
+      saving={routines.saving}
+      error={routines.error}
+      onCreate={routines.create}
+      onRunOnce={routines.runOnce}
+      onPause={routines.pause}
+      onResume={routines.resume}
+      onDelete={routines.remove}
     />
   );
 }
@@ -889,6 +916,7 @@ function ConversationPane({
               text: original ? quotePreview(original.content) : "No longer available",
             }
           : undefined,
+        routineBadge: formatMessageRoutineBadge(message, turn),
         note: message.kind === "system" ? noteLabel(message) : undefined,
         event:
           message.kind === "task_event" && taskId

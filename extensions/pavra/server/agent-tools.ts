@@ -16,6 +16,14 @@ import {
   sendTool,
 } from "./peer-tools";
 import {
+  routineDeleteHandler,
+  routineDeleteTool,
+  routineListHandler,
+  routineListTool,
+  routineSaveHandler,
+  routineSaveTool,
+} from "./routine-tools";
+import {
   deterministicTaskId,
   excerpt,
   resultMessageId,
@@ -268,6 +276,9 @@ export const agentTools: readonly AgentToolEntry[] = [
     run: (coordinator, input, context) =>
       taskStatusHandler(coordinator)(taskStatusTool.input.parse(input), context),
   },
+  toolEntry(routineListTool, routineListHandler),
+  toolEntry(routineSaveTool, routineSaveHandler),
+  toolEntry(routineDeleteTool, routineDeleteHandler),
 ];
 
 /** Runs a tool call a member relayed; the member's daemon already verified the agent. */

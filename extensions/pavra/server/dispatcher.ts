@@ -14,7 +14,7 @@ import {
   threadRootHeader,
   unseenMessages,
 } from "./chat-sessions";
-import { TASK_RECEIPT_LEAD, groupPreamble } from "./prompts";
+import { TASK_RECEIPT_LEAD, groupPreamble, routinePromptHeader } from "./prompts";
 import { ROUNDTABLE_HISTORY_LIMIT } from "./roundtable";
 
 export function errorMessage(error: unknown): string {
@@ -376,6 +376,23 @@ export class Dispatcher {
     if (turn.mailboxId) return turn.prompt;
     const store = this.deps.store;
     const conversation = store.get("conversations", turn.conversationId);
+    if (turn.kind === "routine") {
+      const header = routinePromptHeader({
+        routineName: turn.routineName,
+        prompt: turn.prompt,
+      });
+      const body = messages ? `${messages}\n\n${header}` : header;
+      if (conversation?.kind === "group") {
+        return `${groupPreamble({
+          turn,
+          assistant,
+          conversation,
+          assistants: store.snapshot().assistants,
+          epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
+        })}\n\n${body}`;
+      }
+      return body;
+    }
     const body = turn.kind === "task_receipt" ? messages || `[${turn.prompt}]` : messages;
     if (conversation?.kind === "group")
       return `${groupPreamble({
