@@ -10,12 +10,16 @@ import {
   type Task,
   type Turn,
   cancelTurn,
+  deleteAssistantPlaybook,
+  listAssistantPlaybooks,
   readAssistantMemory,
+  readAssistantPlaybook,
   readState,
   respondTaskPermission,
   sendMessage,
   startTask,
   writeAssistantMemory,
+  writeAssistantPlaybook,
 } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS, type TaskLimits } from "../shared/settings";
 import {
@@ -23,17 +27,26 @@ import {
   memberMemoryRead,
   memberMemoryWrite,
   memberMemorySnapshot,
+  memberPlaybookDelete,
+  memberPlaybookRead,
+  memberPlaybooksList,
+  memberPlaybookWrite,
   memberTaskOutcomeSync,
   type MemberEvent,
 } from "../shared/member";
 import {
   assistantRoot,
   channelSlug,
+  deletePlaybook,
+  isSafeNoteSegment,
+  listPlaybooks,
   prepareHome,
   readMemory,
   readMemorySnapshot,
+  readPlaybook,
   syncTaskOutcomeToNotes,
   writeMemory,
+  writePlaybook,
   type MemorySnapshot,
   type TaskOutcomeNoteInput,
 } from "./assistant-files";
@@ -223,16 +236,14 @@ export class Coordinator {
       turnEnded: (turn) => this.afterTurn(turn),
       admit: (turn) => this.mailbox.admit(turn),
       accepted: (turn) => this.mailbox.accepted(turn),
-      memoryHint: (turn, assistant, isFreshSession) => {
-        if (!isFreshSession) return "";
+      memoryHint: async (turn, assistant, isFreshSession) => {
         const conversation = this.store.get("conversations", turn.conversationId);
         const slug = channelSlug(turn.conversationId, conversation?.name);
         let snapshot: MemorySnapshot | undefined;
-        if (!this.machineOf(assistant)) {
-          try {
-            snapshot = readMemorySnapshot(this.assistantDirectory(assistant.id), slug);
-          } catch {}
-        }
+        try {
+          snapshot = await this.readAssistantMemorySnapshot(assistant.id, slug);
+        } catch {}
+        if (!isFreshSession && !snapshot?.playbooks?.length) return "";
         return workspaceMemoryHint({
           conversationId: turn.conversationId,
           conversationName: conversation?.name,
@@ -385,6 +396,60 @@ export class Coordinator {
       assistantId,
       subdirectory,
       slug,
+    });
+  }
+  async listAssistantPlaybooks(
+    input: RpcInput<typeof listAssistantPlaybooks>,
+  ): Promise<RpcOutput<typeof listAssistantPlaybooks>> {
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return { playbooks: listPlaybooks(this.assistantDirectory(input.assistantId)) };
+    return this.member().call(serverId, memberPlaybooksList, {
+      assistantId: input.assistantId,
+      subdirectory,
+    });
+  }
+  async readAssistantPlaybook(
+    input: RpcInput<typeof readAssistantPlaybook>,
+  ): Promise<RpcOutput<typeof readAssistantPlaybook>> {
+    if (!isSafeNoteSegment(input.slug)) throw new Error("Invalid note file name.");
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return readPlaybook(this.assistantDirectory(input.assistantId), input.slug);
+    return this.member().call(serverId, memberPlaybookRead, {
+      assistantId: input.assistantId,
+      subdirectory,
+      slug: input.slug,
+    });
+  }
+  async writeAssistantPlaybook(
+    input: RpcInput<typeof writeAssistantPlaybook>,
+  ): Promise<RpcOutput<typeof writeAssistantPlaybook>> {
+    if (!isSafeNoteSegment(input.slug)) throw new Error("Invalid note file name.");
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId)
+      return writePlaybook(
+        this.assistantDirectory(input.assistantId),
+        input.slug,
+        input.content,
+        input.expectedMtimeMs,
+      );
+    return this.member().call(serverId, memberPlaybookWrite, {
+      assistantId: input.assistantId,
+      subdirectory,
+      slug: input.slug,
+      content: input.content,
+      ...(input.expectedMtimeMs !== undefined ? { expectedMtimeMs: input.expectedMtimeMs } : {}),
+    });
+  }
+  async deleteAssistantPlaybook(
+    input: RpcInput<typeof deleteAssistantPlaybook>,
+  ): Promise<RpcOutput<typeof deleteAssistantPlaybook>> {
+    if (!isSafeNoteSegment(input.slug)) throw new Error("Invalid note file name.");
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return deletePlaybook(this.assistantDirectory(input.assistantId), input.slug);
+    return this.member().call(serverId, memberPlaybookDelete, {
+      assistantId: input.assistantId,
+      subdirectory,
+      slug: input.slug,
     });
   }
   async syncAssistantTaskOutcome(assistantId: string, input: TaskOutcomeNoteInput): Promise<void> {

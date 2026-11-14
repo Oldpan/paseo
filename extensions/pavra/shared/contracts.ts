@@ -267,6 +267,49 @@ export const writeAssistantMemory = defineRpc({
   }),
   output: z.object({ content: z.string(), mtimeMs: z.number() }),
 });
+export const playbookSummarySchema = z.object({
+  slug: z.string(),
+  title: z.string(),
+  mtimeMs: z.number(),
+});
+export const playbookFileSchema = z.object({
+  slug: z.string(),
+  content: z.string(),
+  mtimeMs: z.number(),
+});
+export type PlaybookSummary = z.infer<typeof playbookSummarySchema>;
+export type PlaybookFile = z.infer<typeof playbookFileSchema>;
+export const listAssistantPlaybooks = defineRpc({
+  name: "chat.assistant.playbooks.list",
+  input: z.object({ assistantId: z.string().uuid() }),
+  output: z.object({ playbooks: z.array(playbookSummarySchema) }),
+});
+export const readAssistantPlaybook = defineRpc({
+  name: "chat.assistant.playbook.read",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    slug: z.string().min(1).max(80),
+  }),
+  output: playbookFileSchema,
+});
+export const writeAssistantPlaybook = defineRpc({
+  name: "chat.assistant.playbook.write",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    slug: z.string().min(1).max(80),
+    content: z.string().max(1_000_000),
+    expectedMtimeMs: z.number().optional(),
+  }),
+  output: playbookFileSchema,
+});
+export const deleteAssistantPlaybook = defineRpc({
+  name: "chat.assistant.playbook.delete",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    slug: z.string().min(1).max(80),
+  }),
+  output: z.object({ deleted: z.boolean() }),
+});
 export const saveAssistant = defineRpc({
   name: "chat.assistant.save",
   input: assistantSchema,

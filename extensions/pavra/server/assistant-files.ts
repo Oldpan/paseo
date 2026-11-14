@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 // An assistant's home lives on the machine its executions run on: `<pavra>/assistants/<id>`,
-// with MEMORY.md and notes/. The coordinator and member plugins both use these helpers on their
-// own disk, so the ledger never needs remote file access.
+// with MEMORY.md, notes/, and playbooks/. The coordinator and member plugins both use these helpers
+// on their own disk, so the ledger never needs remote file access.
 
 export const MAX_MEMORY_INDEX_LINES = 200;
 export const MAX_USER_PREFERENCES_CHARS = 8000;
@@ -16,10 +24,24 @@ export interface MemoryFile {
   mtimeMs: number;
 }
 
+export interface PlaybookSummary {
+  slug: string;
+  title: string;
+  mtimeMs: number;
+}
+
+export interface PlaybookFile {
+  slug: string;
+  content: string;
+  /** 0 when the file does not exist yet. */
+  mtimeMs: number;
+}
+
 export interface MemorySnapshot {
   memoryIndex: string;
   userPreferences: string;
   channelOutcomes: string;
+  playbooks?: Array<{ slug: string; title: string }>;
 }
 
 export interface TaskOutcomeNoteInput {
@@ -87,6 +109,7 @@ export function prepareHome(directory: string, seed: string): void {
   mkdirSync(path.join(directory, "notes", "channels"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(directory, "notes", "work-log"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(directory, "notes", "archive"), { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(directory, "playbooks"), { recursive: true, mode: 0o700 });
   try {
     writeFileSync(path.join(directory, "MEMORY.md"), seed, { mode: 0o600, flag: "wx" });
   } catch (error) {
@@ -156,7 +179,12 @@ export function readMemorySnapshot(directory: string, slug?: string): MemorySnap
     } catch {}
   }
 
-  return { memoryIndex, userPreferences, channelOutcomes };
+  const playbooks = listPlaybooks(directory).map(({ slug: itemSlug, title }) => ({
+    slug: itemSlug,
+    title,
+  }));
+
+  return { memoryIndex, userPreferences, channelOutcomes, playbooks };
 }
 
 const OUTCOMES_START = "<!-- recent-durable-outcomes:start -->";
@@ -275,4 +303,80 @@ export function writeMemory(directory: string, content: string, expectedMtimeMs:
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   writeAtomic(path.join(directory, "MEMORY.md"), content);
   return readMemory(directory);
+}
+
+function playbookTitle(slug: string, content: string): string {
+  const lines = content.split(/\r?\n/).map((line) => line.trim());
+  for (const line of lines) {
+    const heading = line.match(/^#+\s+(.+)$/);
+    if (heading?.[1]?.trim()) return heading[1].trim();
+  }
+  const firstLine = lines.find((line) => line.length > 0);
+  return firstLine ? firstLine.slice(0, 120) : slug;
+}
+
+export function listPlaybooks(directory: string): PlaybookSummary[] {
+  const playbooksDir = path.join(directory, "playbooks");
+  let entries: string[];
+  try {
+    entries = readdirSync(playbooksDir);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  const items: PlaybookSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".md")) continue;
+    const slug = entry.slice(0, -3);
+    if (!isSafeNoteSegment(slug)) continue;
+    try {
+      const file = readPlaybook(directory, slug);
+      if (file.mtimeMs > 0) {
+        items.push({
+          slug,
+          title: playbookTitle(slug, file.content),
+          mtimeMs: file.mtimeMs,
+        });
+      }
+    } catch {}
+  }
+  return items.toSorted((a, b) => a.slug.localeCompare(b.slug));
+}
+
+export function readPlaybook(directory: string, slug: string): PlaybookFile {
+  const file = noteFile(path.join(directory, "playbooks"), slug);
+  try {
+    return { slug, content: readFileSync(file, "utf8"), mtimeMs: statSync(file).mtimeMs };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return { slug, content: "", mtimeMs: 0 };
+    throw error;
+  }
+}
+
+export function writePlaybook(
+  directory: string,
+  slug: string,
+  content: string,
+  expectedMtimeMs?: number,
+): PlaybookFile {
+  const playbooksDir = path.join(directory, "playbooks");
+  const file = noteFile(playbooksDir, slug);
+  if (expectedMtimeMs !== undefined && readPlaybook(directory, slug).mtimeMs !== expectedMtimeMs)
+    throw new Error("The playbook changed since it was loaded. Reload it and try again.");
+  mkdirSync(playbooksDir, { recursive: true, mode: 0o700 });
+  writeAtomic(file, content);
+  return readPlaybook(directory, slug);
+}
+
+export function deletePlaybook(directory: string, slug: string): { deleted: boolean } {
+  const file = noteFile(path.join(directory, "playbooks"), slug);
+  try {
+    unlinkSync(file);
+    return { deleted: true };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return { deleted: false };
+    throw error;
+  }
 }

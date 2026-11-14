@@ -4,6 +4,10 @@ import {
   readState,
   readAssistantMemory,
   writeAssistantMemory,
+  listAssistantPlaybooks,
+  readAssistantPlaybook,
+  writeAssistantPlaybook,
+  deleteAssistantPlaybook,
   saveAssistant,
   createConversation,
   sendMessage,
@@ -26,17 +30,25 @@ import {
   memberMemoryRead,
   memberMemoryWrite,
   memberMemorySnapshot,
+  memberPlaybooksList,
+  memberPlaybookRead,
+  memberPlaybookWrite,
+  memberPlaybookDelete,
   memberTaskOutcomeSync,
   memberPoll,
   memberRespond,
 } from "./shared/member";
 import {
   assistantRoot,
+  deletePlaybook,
+  listPlaybooks,
   prepareHome,
   readMemory,
   readMemorySnapshot,
+  readPlaybook,
   syncTaskOutcomeToNotes,
   writeMemory,
+  writePlaybook,
 } from "./server/assistant-files";
 import type { MachinePort } from "./server/machines";
 import { callPluginRpc } from "./server/member/rpc";
@@ -90,6 +102,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(saveAssistant, (input) => chat().saveAssistant(input));
   server.handle(readAssistantMemory, (input) => chat().readAssistantMemory(input));
   server.handle(writeAssistantMemory, (input) => chat().writeAssistantMemory(input));
+  server.handle(listAssistantPlaybooks, (input) => chat().listAssistantPlaybooks(input));
+  server.handle(readAssistantPlaybook, (input) => chat().readAssistantPlaybook(input));
+  server.handle(writeAssistantPlaybook, (input) => chat().writeAssistantPlaybook(input));
+  server.handle(deleteAssistantPlaybook, (input) => chat().deleteAssistantPlaybook(input));
   server.handle(createConversation, (input) => chat().createConversation(input));
   server.handle(sendMessage, (input) => chat().send(input));
   server.handle(cancelTurn, (input) => chat().cancelTurn(input));
@@ -141,6 +157,14 @@ export default function contribute(server: PluginServerContext) {
     writeMemory(memberHome(input), input.content, input.expectedMtimeMs),
   );
   server.handle(memberMemorySnapshot, (input) => readMemorySnapshot(memberHome(input), input.slug));
+  server.handle(memberPlaybooksList, (input) => ({
+    playbooks: listPlaybooks(memberHome(input)),
+  }));
+  server.handle(memberPlaybookRead, (input) => readPlaybook(memberHome(input), input.slug));
+  server.handle(memberPlaybookWrite, (input) =>
+    writePlaybook(memberHome(input), input.slug, input.content, input.expectedMtimeMs),
+  );
+  server.handle(memberPlaybookDelete, (input) => deletePlaybook(memberHome(input), input.slug));
   server.handle(memberTaskOutcomeSync, (input) => {
     syncTaskOutcomeToNotes(memberHome(input), input.outcome);
     return { ok: true as const };

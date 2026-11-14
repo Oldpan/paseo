@@ -72,8 +72,12 @@ export interface DispatcherDeps {
   admit(turn: Turn): boolean;
   /** The execution confirmed a turn: it has the message. */
   accepted(turn: Turn): void;
-  /** Formats a memory hint when a session is fresh (first turn, branch, rollover). */
-  memoryHint?: (turn: Turn, assistant: Assistant, isFreshSession: boolean) => string;
+  /** Formats a memory hint when a session is fresh (first turn, branch, rollover) or has playbooks. */
+  memoryHint?: (
+    turn: Turn,
+    assistant: Assistant,
+    isFreshSession: boolean,
+  ) => Promise<string> | string;
 }
 
 // A turn is persisted `prepared` before anything is sent. If the process dies in between, the
@@ -116,7 +120,7 @@ export class Dispatcher {
         return;
       }
       if (!this.deps.admit(turn)) return;
-      turn = this.prepare(turn, assistant);
+      turn = await this.prepare(turn, assistant);
       await this.send(turn, assistant);
     } catch (error) {
       this.fail(turn, error);
@@ -213,7 +217,7 @@ export class Dispatcher {
         lastInstructions: turn.systemPrompt ?? session.lastInstructions,
       });
   }
-  private prepare(turn: Turn, assistant: Assistant): Turn {
+  private async prepare(turn: Turn, assistant: Assistant): Promise<Turn> {
     if (turn.prepared && (turn.taskId || turn.chatSessionId)) return turn;
     return turn.taskId
       ? this.prepareTaskTurn(turn, assistant)
@@ -240,7 +244,7 @@ export class Dispatcher {
     this.deps.store.transaction(() => this.deps.store.put("turns", prepared));
     return prepared;
   }
-  private prepareChatTurn(turn: Turn, assistant: Assistant): Turn {
+  private async prepareChatTurn(turn: Turn, assistant: Assistant): Promise<Turn> {
     const store = this.deps.store;
     if (!turn.chatSessionId && turn.status !== "queued")
       throw Object.assign(
@@ -275,8 +279,8 @@ export class Dispatcher {
       prompt = delta.length > 0 ? `${prompt}\n\n${turn.prompt}` : turn.prompt;
     if (instructions !== session.lastInstructions)
       prompt = `Updated assistant instructions:\n${instructions}\n\n${prompt}`;
-    if (isFreshSession && this.deps.memoryHint && !turn.mailboxId) {
-      const hint = this.deps.memoryHint(turn, assistant, isFreshSession);
+    if (this.deps.memoryHint && !turn.mailboxId) {
+      const hint = await this.deps.memoryHint(turn, assistant, isFreshSession);
       if (hint?.trim()) prompt = `${hint.trim()}\n\n${prompt}`;
     }
     const history = boundHistoryThrough(

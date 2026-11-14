@@ -122,7 +122,47 @@ export const memberMemorySnapshot = defineRpc({
     memoryIndex: z.string(),
     userPreferences: z.string(),
     channelOutcomes: z.string(),
+    playbooks: z.array(z.object({ slug: z.string(), title: z.string() })).optional(),
   }),
+});
+
+const playbookSummaryOutput = z.object({
+  slug: z.string(),
+  title: z.string(),
+  mtimeMs: z.number(),
+});
+const playbookFileOutput = z.object({
+  slug: z.string(),
+  content: z.string(),
+  mtimeMs: z.number(),
+});
+export const memberPlaybooksList = defineRpc({
+  name: "member.playbooks.list",
+  input: assistantHomeInput,
+  output: z.object({ playbooks: z.array(playbookSummaryOutput) }),
+});
+export const memberPlaybookRead = defineRpc({
+  name: "member.playbook.read",
+  input: assistantHomeInput.extend({
+    slug: z.string().min(1).max(80),
+  }),
+  output: playbookFileOutput,
+});
+export const memberPlaybookWrite = defineRpc({
+  name: "member.playbook.write",
+  input: assistantHomeInput.extend({
+    slug: z.string().min(1).max(80),
+    content: z.string().max(1_000_000),
+    expectedMtimeMs: z.number().optional(),
+  }),
+  output: playbookFileOutput,
+});
+export const memberPlaybookDelete = defineRpc({
+  name: "member.playbook.delete",
+  input: assistantHomeInput.extend({
+    slug: z.string().min(1).max(80),
+  }),
+  output: z.object({ deleted: z.boolean() }),
 });
 
 export const taskOutcomeInputSchema = z.object({

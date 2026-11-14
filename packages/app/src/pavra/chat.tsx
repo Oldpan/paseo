@@ -44,7 +44,7 @@ import { usePavraView } from "./store";
 import type { Palette } from "./palette";
 import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
-import { ChatPane, MemoryPane } from "./ui/ChatPane";
+import { ChatPane, MemoryPane, PlaybooksPane } from "./ui/ChatPane";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
 import { ColResizeHandle } from "./ui/ColResizeHandle";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
@@ -52,6 +52,7 @@ import { LiveTurnItem } from "./live-turn-item";
 import { openExchanges } from "./peer-activity";
 import { PeerActivity } from "./ui/PeerActivity";
 import { useAssistantMemory } from "./memory";
+import { useAssistantPlaybooks } from "./playbooks";
 import { isNoteMessage, sortMessages } from "./model";
 import {
   followUpState,
@@ -508,6 +509,7 @@ export function PavraChat(props: ChatProps) {
         {tab === "memory" ? (
           <MemoryTab data={data} assistant={assistant} onEdit={assistant ? edit : undefined} />
         ) : null}
+        {tab === "playbooks" ? <PlaybooksTab data={data} assistant={assistant} /> : null}
       </View>
       {!compact && renderedThreadId ? (
         <DesktopThreadPane
@@ -564,6 +566,28 @@ function MemoryTab({
       onSave={memory.save}
       onReload={memory.reload}
       onEdit={onEdit}
+    />
+  );
+}
+function PlaybooksTab({ data, assistant }: { data: PavraData; assistant?: Assistant }) {
+  const playbooks = useAssistantPlaybooks(data, assistant?.id);
+  return (
+    <PlaybooksPane
+      assistant={assistant}
+      playbooks={playbooks.playbooks}
+      selectedSlug={playbooks.selectedSlug}
+      content={playbooks.content}
+      editorKey={playbooks.editorKey}
+      loading={playbooks.loading}
+      saving={playbooks.saving}
+      dirty={playbooks.dirty}
+      error={playbooks.error}
+      onSelect={playbooks.select}
+      onCreate={playbooks.create}
+      onChange={playbooks.change}
+      onSave={playbooks.save}
+      onDelete={playbooks.remove}
+      onReload={playbooks.reload}
     />
   );
 }

@@ -44,6 +44,7 @@ export function workspaceMemoryHint(params: {
     `notes/channels/${slug}.md`,
     "notes/tasks.md",
     `notes/work-log/${week}.md`,
+    "playbooks/ (reusable step-by-step procedures; read matching playbooks/<slug>.md before recurring workflows, and save new ones when the user asks)",
   ];
   const sections: string[] = [lines.join("\n")];
   if (params.snapshot?.userPreferences?.trim()) {
@@ -51,6 +52,11 @@ export function workspaceMemoryHint(params: {
   }
   if (params.snapshot?.channelOutcomes?.trim()) {
     sections.push(`[Recent channel outcomes]\n${params.snapshot.channelOutcomes.trim()}`);
+  }
+  if (params.snapshot?.playbooks?.length) {
+    sections.push(
+      `[Playbooks]\n${params.snapshot.playbooks.map((item) => `- playbooks/${item.slug}.md: ${item.title}`).join("\n")}`,
+    );
   }
   return sections.join("\n\n");
 }

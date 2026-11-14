@@ -123,7 +123,12 @@ export function ChatHeader({
   const tabs = [
     { id: "chat", label: "Chat" },
     { id: "task", label: "Task" },
-    ...(!group ? [{ id: "memory", label: "Memory" }] : []),
+    ...(!group
+      ? [
+          { id: "memory", label: "Memory" },
+          { id: "playbooks", label: "Playbooks" },
+        ]
+      : []),
   ];
   return (
     <View

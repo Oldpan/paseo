@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FlatList, ScrollView, Text, View, type ListRenderItemInfo } from "react-native";
 import { isNoteMessage } from "../model";
 import { PavraInput } from "./FormChrome";
@@ -7,6 +7,7 @@ import type {
   Task,
   Turn,
   Assistant,
+  PlaybookSummary,
 } from "../../../../../extensions/pavra/shared/contracts";
 import { Composer } from "./Composer";
 import type { GroupComposerState } from "./GroupComposer";
@@ -302,6 +303,135 @@ export function MemoryPane({
           Reload
         </Chip>
         {onEdit ? <Chip onPress={onEdit}>Edit persona and model</Chip> : null}
+      </View>
+    </ScrollView>
+  );
+}
+export function PlaybooksPane({
+  assistant,
+  playbooks,
+  selectedSlug,
+  content,
+  editorKey,
+  loading,
+  saving,
+  dirty,
+  error,
+  onSelect,
+  onCreate,
+  onChange,
+  onSave,
+  onDelete,
+  onReload,
+}: {
+  assistant?: Assistant;
+  playbooks: readonly PlaybookSummary[];
+  selectedSlug: string | null;
+  content: string;
+  editorKey: number;
+  loading: boolean;
+  saving: boolean;
+  dirty: boolean;
+  error: string | null;
+  onSelect(slug: string): void;
+  onCreate(slug: string): void;
+  onChange(text: string): void;
+  onSave(): void;
+  onDelete(slug?: string): void;
+  onReload(): void;
+}) {
+  const { palette: t } = useTheme();
+  const [newSlug, setNewSlug] = useState("");
+  const [slugKey, setSlugKey] = useState(0);
+  const handleCreate = useCallback(() => {
+    const trimmed = newSlug.trim();
+    if (!trimmed) return;
+    onCreate(trimmed);
+    setNewSlug("");
+    setSlugKey((value) => value + 1);
+  }, [newSlug, onCreate]);
+  return (
+    <ScrollView
+      contentContainerStyle={{ padding: 24, gap: 12 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={type(t.textPrimary, 18, { fontWeight: "700" })}>Playbooks</Text>
+      <Text style={type(t.textMuted, 12)}>
+        {assistant?.name ?? "This assistant"} keeps reusable step-by-step procedures in{" "}
+        playbooks/&lt;slug&gt;.md and follows them on matching requests or routines.
+      </Text>
+      {assistant ? (
+        <>
+          <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {playbooks.map((item) => (
+              <Chip
+                key={item.slug}
+                label={`Select playbook ${item.slug}`}
+                onPress={() => onSelect(item.slug)}
+                accent={selectedSlug === item.slug}
+                disabled={saving}
+              >
+                {item.slug}
+              </Chip>
+            ))}
+          </View>
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <PavraInput
+              key={slugKey}
+              accessibilityLabel="New playbook slug"
+              initialValue={newSlug}
+              onChangeText={setNewSlug}
+              editable={!loading && !saving}
+              placeholder="New playbook slug (e.g. daily-check)"
+              style={{ flex: 1, minWidth: 200, minHeight: 34 }}
+            />
+            <Chip
+              label="Create playbook"
+              onPress={handleCreate}
+              disabled={!newSlug.trim() || loading || saving}
+            >
+              Create
+            </Chip>
+          </View>
+          {selectedSlug ? (
+            <PavraInput
+              key={`${selectedSlug}:${editorKey}`}
+              accessibilityLabel="Playbook content"
+              initialValue={content}
+              onChangeText={onChange}
+              multiline
+              editable={!loading && !saving}
+              placeholder={loading ? "Loading…" : `# ${selectedSlug}`}
+              style={{ minHeight: 240 }}
+            />
+          ) : (
+            <Text style={type(t.textMuted, 12)}>
+              {loading
+                ? "Loading playbooks…"
+                : "No playbooks yet. Enter a slug above and press Create to start one."}
+            </Text>
+          )}
+        </>
+      ) : null}
+      {error ? (
+        <Text accessibilityRole="alert" style={type(t.destructive, 12)}>
+          {error}
+        </Text>
+      ) : null}
+      <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+        {selectedSlug ? (
+          <Chip onPress={onSave} disabled={!dirty || saving || loading} accent>
+            {saving ? "Saving…" : "Save playbook"}
+          </Chip>
+        ) : null}
+        <Chip onPress={onReload} disabled={saving || loading}>
+          Reload
+        </Chip>
+        {selectedSlug ? (
+          <Chip onPress={() => onDelete(selectedSlug)} disabled={saving || loading}>
+            Delete
+          </Chip>
+        ) : null}
       </View>
     </ScrollView>
   );

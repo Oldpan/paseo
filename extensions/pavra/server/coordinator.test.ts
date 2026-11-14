@@ -15,6 +15,8 @@ import {
   prepareHome,
   readMemorySnapshot,
 } from "./assistant-files";
+import { workspaceMemoryHint } from "./prompts";
+import type { MachinePort } from "./machines";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -646,6 +648,7 @@ describe("file memory", () => {
     expect(existsSync(path.join(dir, "notes", "channels"))).toBe(true);
     expect(existsSync(path.join(dir, "notes", "work-log"))).toBe(true);
     expect(existsSync(path.join(dir, "notes", "archive"))).toBe(true);
+    expect(existsSync(path.join(dir, "playbooks"))).toBe(true);
   });
 
   it("truncates MEMORY.md to 200 lines in readMemorySnapshot", () => {
@@ -783,6 +786,238 @@ describe("file memory", () => {
     expect(text).toContain("[Workspace memory to check if you need it]");
     expect(text).toContain("notes/work-log/");
     expect(text).toContain("You: What did we decide?");
+  });
+
+  it("lists, reads, writes, and deletes local playbooks with mtime conflict and path traversal checks", async () => {
+    const f = fixture();
+    expect(await f.coordinator.listAssistantPlaybooks({ assistantId: f.assistant.id })).toEqual({
+      playbooks: [],
+    });
+    expect(
+      await f.coordinator.readAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "daily-health",
+      }),
+    ).toEqual({
+      slug: "daily-health",
+      content: "",
+      mtimeMs: 0,
+    });
+
+    const written = await f.coordinator.writeAssistantPlaybook({
+      assistantId: f.assistant.id,
+      slug: "daily-health",
+      content: "# Daily Health Check\n\nReply with PLAYBOOK_HEALTH_OK_77.",
+      expectedMtimeMs: 0,
+    });
+    expect(written.slug).toBe("daily-health");
+    expect(written.mtimeMs).toBeGreaterThan(0);
+
+    await f.coordinator.writeAssistantPlaybook({
+      assistantId: f.assistant.id,
+      slug: "alpha-check",
+      content: "First line title\n\nStep 1",
+    });
+
+    const listed = await f.coordinator.listAssistantPlaybooks({ assistantId: f.assistant.id });
+    expect(listed.playbooks.map((item) => ({ slug: item.slug, title: item.title }))).toEqual([
+      { slug: "alpha-check", title: "First line title" },
+      { slug: "daily-health", title: "Daily Health Check" },
+    ]);
+
+    await expect(
+      f.coordinator.writeAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "daily-health",
+        content: "Stale update",
+        expectedMtimeMs: written.mtimeMs - 1,
+      }),
+    ).rejects.toThrow("changed since it was loaded");
+
+    await expect(
+      f.coordinator.readAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "../secret",
+      }),
+    ).rejects.toThrow("Invalid note file name");
+    await expect(
+      f.coordinator.writeAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "../secret",
+        content: "bad",
+      }),
+    ).rejects.toThrow("Invalid note file name");
+    await expect(
+      f.coordinator.deleteAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "../secret",
+      }),
+    ).rejects.toThrow("Invalid note file name");
+
+    const turn = await f.say("Check playbooks");
+    const prompt = f.execution.sent.find((item) => item.messageId === turn.id)!.text;
+    expect(prompt).toContain("playbooks/ (reusable step-by-step procedures");
+    expect(prompt).toContain(
+      "[Playbooks]\n- playbooks/alpha-check.md: First line title\n- playbooks/daily-health.md: Daily Health Check",
+    );
+
+    expect(
+      await f.coordinator.deleteAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "alpha-check",
+      }),
+    ).toEqual({ deleted: true });
+    expect(
+      await f.coordinator.deleteAssistantPlaybook({
+        assistantId: f.assistant.id,
+        slug: "alpha-check",
+      }),
+    ).toEqual({ deleted: false });
+    expect(
+      (await f.coordinator.listAssistantPlaybooks({ assistantId: f.assistant.id })).playbooks.map(
+        (item) => item.slug,
+      ),
+    ).toEqual(["daily-health"]);
+  });
+
+  it("delegates playbook list, read, write, delete, and prompt injection to a member machine", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "pavra-member-playbooks-"));
+    cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+    const store = new ChatStore(path.join(directory, "chat.sqlite"));
+    cleanup.push(() => store.close());
+    const execution = new FakeExecution();
+    const memberBooks = new Map<string, { content: string; title: string; mtimeMs: number }>();
+    const machines: MachinePort = {
+      self: async () => "srv_spark",
+      isMember: (serverId) => serverId === "srv_mac",
+      online: async (serverId) => serverId === "srv_mac",
+      list: async () => [
+        { serverId: "srv_spark", label: "Spark", role: "coordinator" },
+        { serverId: "srv_mac", label: "Mac", role: "member" },
+      ],
+      call: async (_serverId, contract, input) => {
+        if (contract.name === "member.home.prepare") {
+          return contract.output.parse({ directory: "/mac/pavra/assistants/max" });
+        }
+        if (contract.name === "member.playbooks.list") {
+          return contract.output.parse({
+            playbooks: [...memberBooks.entries()]
+              .map(([slug, val]) => ({ slug, title: val.title, mtimeMs: val.mtimeMs }))
+              .toSorted((a, b) => a.slug.localeCompare(b.slug)),
+          });
+        }
+        if (contract.name === "member.playbook.read") {
+          const { slug } = input as { slug: string };
+          const found = memberBooks.get(slug);
+          return contract.output.parse({
+            slug,
+            content: found?.content ?? "",
+            mtimeMs: found?.mtimeMs ?? 0,
+          });
+        }
+        if (contract.name === "member.playbook.write") {
+          const { slug, content, expectedMtimeMs } = input as {
+            slug: string;
+            content: string;
+            expectedMtimeMs?: number;
+          };
+          const currentMtime = memberBooks.get(slug)?.mtimeMs ?? 0;
+          if (expectedMtimeMs !== undefined && currentMtime !== expectedMtimeMs) {
+            throw new Error("The playbook changed since it was loaded. Reload it and try again.");
+          }
+          const next = {
+            content,
+            title: content.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? slug,
+            mtimeMs: currentMtime + 1,
+          };
+          memberBooks.set(slug, next);
+          return contract.output.parse({ slug, content: next.content, mtimeMs: next.mtimeMs });
+        }
+        if (contract.name === "member.playbook.delete") {
+          const { slug } = input as { slug: string };
+          const deleted = memberBooks.delete(slug);
+          return contract.output.parse({ deleted });
+        }
+        if (contract.name === "member.memory.snapshot") {
+          return contract.output.parse({
+            memoryIndex: "",
+            userPreferences: "",
+            channelOutcomes: "",
+            playbooks: [...memberBooks.entries()].map(([slug, val]) => ({
+              slug,
+              title: val.title,
+            })),
+          });
+        }
+        throw new Error(`unexpected ${contract.name}`);
+      },
+    };
+    const coordinator = new Coordinator(store, directory, { execution, machines });
+    cleanup.push(() => coordinator.close());
+    coordinator.attach();
+
+    const max = coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Max",
+      provider: "codex/test-model",
+      persona: "Member assistant",
+      serverId: "srv_mac",
+    });
+    const dm = coordinator.createConversation({
+      id: randomUUID(),
+      name: "Max",
+      kind: "dm",
+      members: [max.id],
+      roundtable: false,
+    });
+
+    const written = await coordinator.writeAssistantPlaybook({
+      assistantId: max.id,
+      slug: "daily-health",
+      content: "# Daily Health Check\n\nReply with PLAYBOOK_HEALTH_OK_77.",
+    });
+    expect(written).toEqual({
+      slug: "daily-health",
+      content: "# Daily Health Check\n\nReply with PLAYBOOK_HEALTH_OK_77.",
+      mtimeMs: 1,
+    });
+    expect(await coordinator.listAssistantPlaybooks({ assistantId: max.id })).toEqual({
+      playbooks: [{ slug: "daily-health", title: "Daily Health Check", mtimeMs: 1 }],
+    });
+    expect(
+      await coordinator.readAssistantPlaybook({ assistantId: max.id, slug: "daily-health" }),
+    ).toEqual(written);
+
+    const msgId = randomUUID();
+    coordinator.send({
+      id: msgId,
+      conversationId: dm.id,
+      threadId: null,
+      content: "Run daily health check",
+    });
+    await coordinator.idle();
+    const turn = store.snapshot().turns.find((t) => t.triggerId === msgId)!;
+    const sent = execution.sent.find((item) => item.messageId === turn.id)!;
+    expect(sent.text).toContain("[Playbooks]\n- playbooks/daily-health.md: Daily Health Check");
+
+    expect(
+      await coordinator.deleteAssistantPlaybook({ assistantId: max.id, slug: "daily-health" }),
+    ).toEqual({ deleted: true });
+    expect(await coordinator.listAssistantPlaybooks({ assistantId: max.id })).toEqual({
+      playbooks: [],
+    });
+
+    const hint = workspaceMemoryHint({
+      conversationId: dm.id,
+      conversationName: dm.name,
+      snapshot: {
+        memoryIndex: "",
+        userPreferences: "",
+        channelOutcomes: "",
+        playbooks: [{ slug: "release-check", title: "Release Checklist" }],
+      },
+    });
+    expect(hint).toContain("[Playbooks]\n- playbooks/release-check.md: Release Checklist");
   });
 });
 
