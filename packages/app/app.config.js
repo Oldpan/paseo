@@ -133,9 +133,9 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: isPavra ? "#0D0D10" : "#000000",
+        backgroundColor: isPavra ? "#131516" : "#000000",
         foregroundImage: isPavra
-          ? "./assets/images/pavra-icon.png"
+          ? "./assets/images/pavra-android-icon-foreground.png"
           : "./assets/images/android-icon-foreground.png",
       },
       edgeToEdgeEnabled: true,
