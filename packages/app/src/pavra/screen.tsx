@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Text, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { randomUUID } from "expo-crypto";
 import { RetainedPanel } from "@/components/retained-panel";
@@ -40,7 +41,7 @@ import { Sidebar } from "./ui/Sidebar";
 import { usePavraNotifications } from "./use-pavra-notifications";
 
 const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
-const CONTENT = { flex: 1, minHeight: 0, flexDirection: "row" } as const;
+const CONTENT = { flex: 1, minHeight: 0, flexDirection: "row", position: "relative" } as const;
 const WORKSPACES_MODAL = {
   position: "absolute",
   top: 0,
@@ -298,10 +299,18 @@ export function PavraScreen() {
   );
   const showSidebar = useCallback(() => setSidebarOpen(true), []);
   const hideSidebar = useCallback(() => setSidebarOpen(false), []);
+  const insets = useSafeAreaInsets();
   const text = useMemo(() => ({ color: palette.textPrimary }), [palette.textPrimary]);
   const frame = useMemo(
-    () => ({ flex: 1, backgroundColor: palette.surfacePrimary }),
-    [palette.surfacePrimary],
+    () => ({
+      flex: 1,
+      backgroundColor: palette.surfacePrimary,
+      paddingTop: insets.top,
+      paddingBottom: insets.bottom,
+      paddingLeft: insets.left,
+      paddingRight: insets.right,
+    }),
+    [insets.bottom, insets.left, insets.right, insets.top, palette.surfacePrimary],
   );
   const changeChat = usePavraView((state) => state.selectChat);
   const close = useCallback(() => {
@@ -814,16 +823,16 @@ export function PavraScreen() {
                 onError={setError}
               />
             </View>
+            <AnimatedDrawer
+              open={compact && sidebarOpen}
+              side="left"
+              drawerWidth={290}
+              closeLabel="Close sidebar"
+              onClose={hideSidebar}
+            >
+              <Sidebar {...sidebarProps} />
+            </AnimatedDrawer>
           </View>
-          <AnimatedDrawer
-            open={compact && sidebarOpen}
-            side="left"
-            drawerWidth={290}
-            closeLabel="Close sidebar"
-            onClose={hideSidebar}
-          >
-            <Sidebar {...sidebarProps} />
-          </AnimatedDrawer>
         </View>
       </UsageSidebarRoot>
     </PavraTheme>
