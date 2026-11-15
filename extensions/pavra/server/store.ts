@@ -64,6 +64,7 @@ function cloneSnapshot(state: ChatState, messageLimit?: number): ChatState {
     ...(state.studios ? { studios: [...state.studios] } : {}),
     ...(state.peerMessages ? { peerMessages: [...state.peerMessages] } : {}),
     ...(state.routines ? { routines: [...state.routines] } : {}),
+    ...(state.takeovers ? { takeovers: [...state.takeovers] } : {}),
   };
 }
 
@@ -127,6 +128,7 @@ export class ChatStore {
       studios: [],
       peerMessages: [],
       routines: [],
+      takeovers: [],
     };
     const rows = this.db
       .prepare("SELECT collection, value FROM records WHERE seq > ? ORDER BY seq")

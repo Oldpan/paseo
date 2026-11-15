@@ -23,6 +23,7 @@ export const EMPTY_CHAT_STATE: ChatState = {
   studios: [],
   peerMessages: [],
   routines: [],
+  takeovers: [],
 };
 export function mergeChatState(previous: ChatState, incoming: ChatState): ChatState {
   if (incoming.generation !== previous.generation) return incoming;
@@ -46,6 +47,7 @@ export function mergeChatState(previous: ChatState, incoming: ChatState): ChatSt
     studios: merge(previous.studios ?? [], incoming.studios ?? []),
     peerMessages: merge(previous.peerMessages ?? [], incoming.peerMessages ?? []),
     routines: merge(previous.routines ?? [], incoming.routines ?? []),
+    takeovers: merge(previous.takeovers ?? [], incoming.takeovers ?? []),
   };
 }
 export function studioKey(column: Pick<StudioColumn, "serverId" | "workspaceId">): string {

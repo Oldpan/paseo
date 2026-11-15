@@ -2,14 +2,17 @@ import { randomUUID } from "expo-crypto";
 import { useCallback, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
+  cancelTakeover,
   cancelTask,
   cancelTurn,
   deleteRoutine,
   pauseRoutine,
+  resolveTakeover,
   respondTaskPermission,
   resumeRoutine,
   runRoutineOnce,
   sendMessage,
+  type Takeover,
   type Task,
   type Turn,
 } from "../../../../../extensions/pavra/shared/contracts";
@@ -21,6 +24,7 @@ import type {
   InboxSuggestionItem,
   InboxUpcomingItem,
 } from "../inbox";
+import { BrowserTakeoverModal, TakeoverCard } from "./BrowserTakeoverModal";
 import { HeaderIconButton } from "./ChatChrome";
 import { MenuIcon } from "./icons";
 import { ctrlShadow, selectedFillProps, text as type, webTransition, type Palette } from "./theme";
@@ -242,6 +246,10 @@ export function InboxPane({
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTakeover, setActiveTakeover] = useState<{
+    takeover: Takeover;
+    assistantName: string;
+  } | null>(null);
 
   const runAction = useCallback(async (key: string, work: () => Promise<unknown>) => {
     setBusyKey(key);
@@ -271,6 +279,28 @@ export function InboxPane({
     },
     [data, runAction],
   );
+
+  const handleResolveTakeover = useCallback(
+    (takeoverId: string) => {
+      void runAction(`takeover-resolve:${takeoverId}`, () =>
+        data.call(resolveTakeover, { id: takeoverId }),
+      );
+    },
+    [data, runAction],
+  );
+
+  const handleCancelTakeover = useCallback(
+    (takeoverId: string) => {
+      void runAction(`takeover-cancel:${takeoverId}`, () =>
+        data.call(cancelTakeover, { id: takeoverId }),
+      );
+    },
+    [data, runAction],
+  );
+
+  const handleOpenTakeover = useCallback((takeover: Takeover, assistantName: string) => {
+    setActiveTakeover({ takeover, assistantName });
+  }, []);
 
   const handleContinueBudgetTask = useCallback(
     (item: Extract<InboxActionItem, { kind: "task_budget" }>) => {
@@ -476,6 +506,9 @@ export function InboxPane({
                 onRespondPermission={handleRespondPermission}
                 onCancelTurn={handleCancelTurn}
                 onContinueBudgetTask={handleContinueBudgetTask}
+                onOpenTakeover={handleOpenTakeover}
+                onResolveTakeover={handleResolveTakeover}
+                onCancelTakeover={handleCancelTakeover}
                 onOpenConversation={onOpenConversation}
                 onOpenTask={onOpenTask}
                 onOpenTurn={onOpenTurn}
@@ -546,6 +579,14 @@ export function InboxPane({
           </SectionFrame>
         ) : null}
       </ScrollView>
+      {activeTakeover ? (
+        <BrowserTakeoverModal
+          takeover={activeTakeover.takeover}
+          assistantName={activeTakeover.assistantName}
+          data={data}
+          onClose={() => setActiveTakeover(null)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -556,6 +597,9 @@ function NeedsActionCard({
   onRespondPermission,
   onCancelTurn,
   onContinueBudgetTask,
+  onOpenTakeover,
+  onResolveTakeover,
+  onCancelTakeover,
   onOpenConversation,
   onOpenTask,
   onOpenTurn,
@@ -565,12 +609,34 @@ function NeedsActionCard({
   onRespondPermission(taskId: string, requestId: string | null, behavior: "allow" | "deny"): void;
   onCancelTurn(turnId: string): void;
   onContinueBudgetTask(item: Extract<InboxActionItem, { kind: "task_budget" }>): void;
+  onOpenTakeover(takeover: Takeover, assistantName: string): void;
+  onResolveTakeover(takeoverId: string): void;
+  onCancelTakeover(takeoverId: string): void;
   onOpenConversation(conversationId: string, threadId: string | null): void;
   onOpenTask(task: Task): void;
   onOpenTurn(turn: Turn): void;
 }) {
   const { palette: t } = useTheme();
   const contextLabel = `${item.assistantName} · ${item.conversationName}`;
+
+  if (item.kind === "takeover") {
+    const busy =
+      busyKey === `takeover-resolve:${item.takeoverId}` ||
+      busyKey === `takeover-cancel:${item.takeoverId}`;
+    return (
+      <TakeoverCard
+        testID={`inbox-item-${item.id}`}
+        takeover={item.takeover}
+        assistantName={item.assistantName}
+        conversationName={item.conversationName}
+        busy={busy}
+        onOpenTakeover={(takeover) => onOpenTakeover(takeover, item.assistantName)}
+        onResolve={onResolveTakeover}
+        onCancel={onCancelTakeover}
+        onOpenConversation={onOpenConversation}
+      />
+    );
+  }
 
   if (item.kind === "task_permission") {
     const busy = busyKey === `perm:${item.taskId}:allow` || busyKey === `perm:${item.taskId}:deny`;

@@ -4,6 +4,7 @@ import type {
   ChatState,
   Conversation,
   Message,
+  Takeover,
   Task,
   Turn,
 } from "../../../../extensions/pavra/shared/contracts";
@@ -556,5 +557,68 @@ describe("pavra notifications", () => {
         },
       },
     ]);
+  });
+
+  it("emits a high-priority takeover notification when a new pending takeover appears", () => {
+    const tracker = createPavraNotificationTracker({
+      coordinatorId: "srv_spark",
+      appActive: true,
+      activeMode: "chat",
+      activeSection: "chat",
+      activeChatId: CONV_SKY.id,
+      activeThreadId: null,
+    });
+
+    const base = makeState({ cursor: 1 });
+    expect(tracker.update(base)).toEqual([]);
+
+    const takeover: Takeover = {
+      id: "to-99",
+      kind: "browser",
+      status: "pending",
+      assistantId: ASSISTANT_SKY.id,
+      conversationId: CONV_SKY.id,
+      threadId: null,
+      turnId: "turn-1",
+      serverId: "srv_spark",
+      reason: "Complete SSO login in browser",
+      url: "https://sso.example.com/login",
+      title: "SSO Login",
+      screenshotDataUrl: null,
+      createdAt: 2_000,
+      updatedAt: 2_000,
+    };
+
+    const events = tracker.update(
+      makeState({
+        cursor: 2,
+        takeovers: [takeover],
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        key: "takeover:to-99",
+        kind: "takeover",
+        title: "Takeover needed · Sky",
+        body: "Complete SSO login in browser",
+        target: {
+          serverId: "srv_spark",
+          pavraSection: "inbox",
+          pavraConversationId: CONV_SKY.id,
+          pavraThreadId: null,
+        },
+      },
+    ]);
+
+    // Does not re-emit on subsequent updates
+    expect(
+      tracker.update(
+        makeState({
+          cursor: 3,
+          takeovers: [takeover],
+        }),
+      ),
+    ).toEqual([]);
   });
 });
