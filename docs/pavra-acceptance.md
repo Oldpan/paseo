@@ -90,11 +90,12 @@ Spark 上自托管的 Paseo relay，部署方式见 [pavra-development.md](pavra
 
 ## 2026-11-15
 
-基于 `b1c6acbcb` 与 `5b8cbaa58` 在 Spark 协调器（`srv_tGAs1l4XHjbH`）与 Mac member（`srv_khQ9DQI8Ym0h`）双机实测通过操作手册（Playbooks）、例行与提醒（T0–T1）及收件箱（Inbox）：
+基于 `b1c6acbcb`、`5b8cbaa58`、`38fbc25ab` 与 `2f1328da0` 在 Spark 协调器（`srv_tGAs1l4XHjbH`）与 Mac member（`srv_khQ9DQI8Ym0h`）双机实测通过操作手册（Playbooks）、例行与提醒（T0–T1）、收件箱（Inbox）及本地通知与手机配对入口（Stage 2）：
 
 - **操作手册（Playbooks，`b1c6acbcb`）**：在 Sky（Spark 本机存储）与 Max（经 `member.playbook.*` 中继读写 Mac home）上分别验证 `chat.assistant.playbook.write`、`list`、`read`、`delete` 及 `expectedMtimeMs` 乐观锁冲突拦截；在 Max 私聊发送执行指令时，回合提示词注入 `[Playbooks]` 索引，Max 读取 `playbooks/daily-health.md` 并按手册返回结果。
 - **例行与一次性提醒（T0–T1，`5b8cbaa58`）**：在 Sky 上创建引用 `playbooks/daily-workspace-check.md` 的例行（`eb914949`）并执行 `chat.routine.run_once`，回合（`1d05452e`）回复 `(pass)` 后运行记录（`825ce72a`）记为 `outcome: "passed"`，私聊未新增消息气泡（`messagesBefore: 4`、`messagesAfter: 4`）；在 Max 上创建一次性提醒（`b9535f7c`，`maxRuns: 1`）并触发运行，回合（`5ec8d031`）跨机完成后提交带 `routineId`／`routineName` 标记的 `final` 消息，运行记录（`bc3d24cb`）记为 `outcome: "replied"`，提醒自动转为 `status: "completed"`、`nextRunAt: null`（回执存 `.dev/pavra/stage-a2-routines-acceptance.json`）。
-- **收件箱（Inbox）**：`deriveInboxState` 从 `chat.state` 纯函数派生 `needsAction`（任务工具审批、回合 `attention`、任务预算耗尽）、`recentActivity`（例行运行结果与任务回执）、`upcoming`（按 `nextRunAt` 升序的活动例行与提醒）和 `suggestions`（超时或失败未追问任务、最新失败回合、已暂停或最近失败例行），不调用模型；审批处理、预算续行或例行暂停后对应项立即从原分段移除或转入建议。
+- **收件箱（Inbox，`38fbc25ab`）**：`deriveInboxState` 从 `chat.state` 纯函数派生 `needsAction`（任务工具审批、回合 `attention`、任务预算耗尽）、`recentActivity`（例行运行结果与任务回执）、`upcoming`（按 `nextRunAt` 升序的活动例行与提醒）和 `suggestions`（超时或失败未追问任务、最新失败回合、已暂停或最近失败例行），不调用模型；审批处理、预算续行或例行暂停后对应项立即从原分段移除或转入建议（回执存 `.dev/pavra/stage-c-inbox-acceptance.json`）。
+- **本地通知、点击跳转与手机配对入口（Stage 2，`2f1328da0`）**：`createPavraNotificationTracker` 对 Spark `chat.state` 实时状态做增量去重比对：首次快照（`cursor: 70`）写入 `12` 个已见 key、发出 `0` 条通知；在 Sky 上触发一次性提醒例行（`cd639e4c`，运行 `53a41b3e`，回合 `24a5090d`）回复 `STAGE2_NOTIFY_OK` 后，游标推进首次发出 1 条 `routine_reply` 通知（`key: "msg:final:24a5090d-8181-44d0-9bfd-0074c4ad4583"`，`target: { serverId: "srv_tGAs1l4XHjbH", pavraSection: "chat", pavraConversationId: "dm:sky", pavraThreadId: null }`），后续增量与全量轮询均发出 `0` 条重复通知；`parseNotificationOpenTarget` 与 `buildPavraNotificationRoute` 解析为 `/pavra?serverId=srv_tGAs1l4XHjbH&section=chat&chatId=dm%3Asky` 并自动切换协调器与对应聊天或收件箱（回执存 `.dev/pavra/stage2-notifications-acceptance.json`）。`CoordinatorPickerModal` 与 `Member → Machines` 已接入配对链接粘贴与 `pavra://` 深链支持。限制：Android 真机蜂窝配对与锁屏通知尚待实机验证。
 
 ## 尚未验收
 
