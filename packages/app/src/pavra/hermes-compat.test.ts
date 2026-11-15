@@ -180,4 +180,13 @@ describe("Hermes runtime compatibility", () => {
       }
     }
   });
+
+  it("guards all expo/dom proxy method calls in PavraTerminalEmulator with optional invocation", () => {
+    const emulatorPath = path.join(pavraDir, "terminal", "emulator.native.tsx");
+    const source = readFileSync(emulatorPath, "utf8");
+    const unsafeCalls = [...source.matchAll(/dom\.current\?\.\w+\(/g)].map((m) => m[0]);
+    expect(unsafeCalls).toEqual([]);
+    const safeCalls = [...source.matchAll(/dom\.current\?\.\w+\?\.\(/g)].map((m) => m[0]);
+    expect(safeCalls.length).toBeGreaterThanOrEqual(10);
+  });
 });

@@ -1,6 +1,7 @@
 # Build output
 dist/
 release/
+release-pavra/
 
 # Dependencies
 node_modules/

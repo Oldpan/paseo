@@ -75,10 +75,10 @@ function pruneSharpLibvips(nodeModules, platform, arch) {
   }
 }
 
-function pruneNativeModules(appOutDir, platform, arch) {
+function pruneNativeModules(appOutDir, platform, arch, appFileName = EXECUTABLE_NAME) {
   const resourcesDir =
     platform === "darwin"
-      ? path.join(appOutDir, `${EXECUTABLE_NAME}.app`, "Contents", "Resources")
+      ? path.join(appOutDir, `${appFileName}.app`, "Contents", "Resources")
       : path.join(appOutDir, "resources");
 
   const nodeModules = path.join(resourcesDir, "app.asar.unpacked", "node_modules");
@@ -115,7 +115,8 @@ exports.default = async function afterPack(context) {
   const platform = context.electronPlatformName;
   const arch = ARCH_MAP[context.arch] || process.arch;
 
-  pruneNativeModules(context.appOutDir, platform, arch);
+  const appFileName = context.packager?.appInfo?.productFilename || EXECUTABLE_NAME;
+  pruneNativeModules(context.appOutDir, platform, arch, appFileName);
 
   if (platform === "linux") {
     installLinuxLauncher(context.appOutDir);

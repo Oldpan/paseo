@@ -36,16 +36,16 @@ export function PavraTerminalEmulator({
   const dom = useRef<TerminalDomHandle>(null);
   const writeOutput = useCallback(
     (data: Uint8Array) =>
-      dom.current?.writeEncodedOutput(props.streamKey, encodeTerminalBytes(data)),
+      dom.current?.writeEncodedOutput?.(props.streamKey, encodeTerminalBytes(data)),
     [props.streamKey],
   );
   const replay = useCallback(
     (event: import("@getpaseo/client").TerminalReplayEvent) => {
       if (event.type === "data") {
-        dom.current?.replayEncodedOutput(props.streamKey, encodeTerminalBytes(event.data));
+        dom.current?.replayEncodedOutput?.(props.streamKey, encodeTerminalBytes(event.data));
         return;
       }
-      dom.current?.replay(event);
+      dom.current?.replay?.(event);
     },
     [props.streamKey],
   );
@@ -55,20 +55,20 @@ export function PavraTerminalEmulator({
       writeOutput,
       replay,
       find: {
-        search: (query, direction) => dom.current?.findSearch(query, direction),
-        clear: () => dom.current?.findClear(),
-        setWidgetSize: ({ width, height }) => dom.current?.findSize(width, height),
+        search: (query, direction) => dom.current?.findSearch?.(query, direction),
+        clear: () => dom.current?.findClear?.(),
+        setWidgetSize: ({ width, height }) => dom.current?.findSize?.(width, height),
       },
-      paste: (text) => dom.current?.paste(text),
+      paste: (text) => dom.current?.paste?.(text),
       copySelection: async (clipboard) => {
-        const text = (await dom.current?.readSelection()) ?? "";
+        const text = (await dom.current?.readSelection?.()) ?? "";
         if (text) await clipboard.writeText(text);
         return text;
       },
-      clear: () => dom.current?.clear(),
-      claimSize: () => dom.current?.claimSize(),
-      showKeyboard: () => dom.current?.showKeyboard(),
-      blur: () => dom.current?.blur(),
+      clear: () => dom.current?.clear?.(),
+      claimSize: () => dom.current?.claimSize?.(),
+      showKeyboard: () => dom.current?.showKeyboard?.(),
+      blur: () => dom.current?.blur?.(),
     }),
     [replay, writeOutput],
   );
