@@ -20,11 +20,15 @@ export function returnToPavra(mode?: "chat" | "studio"): void {
 
 /** Open a specific Pavra section or conversation/thread (e.g. from a notification or link). */
 export function openPavraLocation(target: {
+  serverId?: string;
   section?: SidebarSection;
   chatId?: string;
   threadId?: string | null;
 }): void {
   const view = usePavraView.getState();
+  if (target.serverId && target.serverId !== view.coordinatorId) {
+    view.selectCoordinator(target.serverId);
+  }
   if (target.chatId) {
     view.selectChat(target.chatId);
   }

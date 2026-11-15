@@ -8,6 +8,7 @@ import { openHostOverview } from "@/navigation/settings-navigation";
 import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
 import type { Assistant, MachineInfo } from "../../../../extensions/pavra/shared/contracts";
 import { machineRoleLabel } from "./model";
+import { usePavraView } from "./store";
 import { AgentAvatar } from "./ui/avatars";
 import { ChevronIcon, PlusIcon, SettingsIcon } from "./ui/icons";
 import { SectionHeader } from "./ui/SidebarControls";
@@ -67,10 +68,35 @@ export function MachinesSection({
   onEditAssistant(assistantId: string): void;
   onCreateAssistant(serverId: string): void;
 }) {
+  const { palette: t, name } = useTheme();
   const hosts = useHosts();
-  const addHost = useAddHost();
+  const addHost = useAddHost({
+    onAdded: (serverId) => {
+      if (!coordinatorId) {
+        usePavraView.getState().selectCoordinator(serverId);
+      }
+    },
+  });
   const [open, setOpen] = useState(true);
   const toggle = useCallback(() => setOpen((value) => !value), []);
+  const addHostButtonStyle = useMemo(
+    () => [
+      {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 6,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: t.retroBorder,
+        backgroundColor: t.surfaceElevated,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        marginTop: 4,
+      },
+      ctrlShadow(t, name),
+    ],
+    [name, t],
+  );
   const entries = useMemo(() => {
     const savedIds = new Set(hosts.map((host) => host.serverId));
     return [
@@ -97,11 +123,12 @@ export function MachinesSection({
         count={entries.length}
         expanded={open}
         onToggle={toggle}
-        actionLabel="Add host"
+        actionLabel="Add / Pair host"
         onAction={addHost}
       />
-      {open
-        ? entries.map((entry) => {
+      {open ? (
+        <>
+          {entries.map((entry) => {
             const boundAssistants = assistants.filter(
               (assistant) => (assistant.serverId || coordinatorId) === entry.serverId,
             );
@@ -119,8 +146,18 @@ export function MachinesSection({
                 onCreateAssistant={onCreateAssistant}
               />
             );
-          })
-        : null}
+          })}
+          <PressHighlight
+            role="button"
+            accessibilityLabel="Add / Pair host"
+            onPress={addHost}
+            style={addHostButtonStyle}
+          >
+            <PlusIcon color={t.textSecondary} size={13} />
+            <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Add / Pair host</Text>
+          </PressHighlight>
+        </>
+      ) : null}
     </>
   );
 }

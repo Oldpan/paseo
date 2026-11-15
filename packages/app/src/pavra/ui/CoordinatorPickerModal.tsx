@@ -4,6 +4,7 @@ import { isWeb } from "@/constants/platform";
 import { useAddHost } from "@/hosts/add-host";
 import { readInitialDaemonConnectionHint, useHostMutations } from "@/runtime/host-runtime";
 import type { HostProfile } from "@/types/host-connection";
+import { parseConnectionUri } from "@/utils/daemon-endpoints";
 import { Chip } from "./ChatChrome";
 import { PavraField, PavraInput, FormFrame } from "./FormChrome";
 import { ResourceChoice } from "./ResourceChoice";
@@ -28,6 +29,16 @@ function resolveDefaultEndpoint(): { endpoint: string; useTls: boolean } {
   return { endpoint: "localhost:6778", useTls: false };
 }
 
+function isPairingOfferLink(value: string): boolean {
+  return (
+    value.includes("#offer=") ||
+    value.includes("#connect=") ||
+    value.startsWith("relay://") ||
+    /^paseo:\/\/.*(?:#offer=|#connect=|[?&]offer=)/i.test(value) ||
+    /^pavra:\/\/.*(?:#offer=|#connect=|[?&]offer=)/i.test(value)
+  );
+}
+
 export function CoordinatorPickerModal({
   hosts,
   onSelect,
@@ -38,7 +49,7 @@ export function CoordinatorPickerModal({
   onClose(): void;
 }) {
   const { palette: t } = useTheme();
-  const { probeAndUpsertDirectConnection } = useHostMutations();
+  const { probeAndUpsertDirectConnection, beginLinkPairing } = useHostMutations();
   const defaultTarget = useMemo(resolveDefaultEndpoint, []);
   const [endpoint, setEndpoint] = useState(defaultTarget.endpoint);
   const [password, setPassword] = useState("");
@@ -47,7 +58,14 @@ export function CoordinatorPickerModal({
   const [showConnectForm, setShowConnectForm] = useState(hosts.length === 0);
 
   const openAddHost = useAddHost({
-    method: "direct",
+    onAdded: (serverId) => {
+      onSelect(serverId);
+      onClose();
+    },
+  });
+
+  const openPairLink = useAddHost({
+    method: "link",
     onAdded: (serverId) => {
       onSelect(serverId);
       onClose();
@@ -57,12 +75,35 @@ export function CoordinatorPickerModal({
   const handleConnect = useCallback(async () => {
     const trimmed = endpoint.trim();
     if (!trimmed) {
-      setError("Enter a host address (for example 192.168.0.149:6778).");
+      setError("Enter a host address or pairing link (for example 192.168.0.149:6778).");
       return;
     }
     setBusy(true);
     setError(null);
     try {
+      if (isPairingOfferLink(trimmed)) {
+        const pairing = beginLinkPairing();
+        const result = await pairing.submit(trimmed, password || undefined);
+        if (result.status === "cancelled") return;
+        onSelect(result.serverId);
+        onClose();
+        return;
+      }
+      if (trimmed.startsWith("tcp://")) {
+        const parsed = parseConnectionUri(trimmed);
+        const hostPart = parsed.isIpv6
+          ? `[${parsed.host}]:${parsed.port}`
+          : `${parsed.host}:${parsed.port}`;
+        const resolvedPassword = password || parsed.password;
+        const result = await probeAndUpsertDirectConnection({
+          endpoint: hostPart,
+          useTls: parsed.useTls,
+          ...(resolvedPassword ? { password: resolvedPassword } : {}),
+        });
+        onSelect(result.serverId);
+        onClose();
+        return;
+      }
       const useTls =
         trimmed.startsWith("https://") ||
         trimmed.endsWith(":443") ||
@@ -84,7 +125,15 @@ export function CoordinatorPickerModal({
     } finally {
       setBusy(false);
     }
-  }, [defaultTarget, endpoint, onClose, onSelect, password, probeAndUpsertDirectConnection]);
+  }, [
+    beginLinkPairing,
+    defaultTarget,
+    endpoint,
+    onClose,
+    onSelect,
+    password,
+    probeAndUpsertDirectConnection,
+  ]);
 
   return (
     <FormFrame title="Chat coordinator" onClose={onClose}>
@@ -110,12 +159,12 @@ export function CoordinatorPickerModal({
             borderColor: t.retroBorder,
           }}
         >
-          <PavraField label="Host address (host:port)">
+          <PavraField label="Host address or pairing link">
             <PavraInput
               accessibilityLabel="Host address"
               initialValue={endpoint}
               onChangeText={setEndpoint}
-              placeholder="192.168.0.149:6778"
+              placeholder="192.168.0.149:6778 or https://app.paseo.sh/#offer=..."
               autoCapitalize="none"
               autoCorrect={false}
               editable={!busy}
@@ -152,13 +201,20 @@ export function CoordinatorPickerModal({
               {busy ? "Connecting…" : "Connect coordinator"}
             </Chip>
             <Chip onPress={openAddHost} disabled={busy}>
-              Advanced pairing…
+              Add / Pair host
+            </Chip>
+            <Chip onPress={openPairLink} disabled={busy}>
+              Paste pairing link
             </Chip>
           </View>
         </View>
       ) : (
-        <View style={{ flexDirection: "row", gap: 8, paddingTop: 4 }}>
-          <Chip onPress={() => setShowConnectForm(true)}>+ Connect another host</Chip>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingTop: 4 }}>
+          <Chip onPress={openAddHost} accent>
+            Add / Pair host
+          </Chip>
+          <Chip onPress={openPairLink}>Paste pairing link</Chip>
+          <Chip onPress={() => setShowConnectForm(true)}>+ Direct host</Chip>
         </View>
       )}
     </FormFrame>

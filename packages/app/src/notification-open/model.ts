@@ -6,6 +6,13 @@ export const WEB_NOTIFICATION_CLICK_EVENT = "paseo:web-notification-click";
 export type NotificationOpenTarget =
   | { kind: "agent"; serverId: string; agentId: string }
   | { kind: "terminal"; serverId: string; workspaceId: string; terminalId: string }
+  | {
+      kind: "pavra";
+      serverId: string;
+      section: "inbox" | "chat";
+      conversationId?: string;
+      threadId?: string | null;
+    }
   | { kind: "host"; serverId: string };
 
 function readId(data: object, key: string): string {
@@ -17,6 +24,18 @@ export function parseNotificationOpenTarget(data: unknown): NotificationOpenTarg
   if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
   const serverId = readId(data, "serverId");
   if (!serverId) return null;
+  const pavraSection = readId(data, "pavraSection");
+  const pavraConversationId = readId(data, "pavraConversationId");
+  const pavraThreadId = readId(data, "pavraThreadId");
+  if (pavraSection === "inbox" || pavraSection === "chat" || pavraConversationId) {
+    return {
+      kind: "pavra",
+      serverId,
+      section: pavraSection === "inbox" ? "inbox" : "chat",
+      ...(pavraConversationId ? { conversationId: pavraConversationId } : {}),
+      threadId: pavraThreadId || null,
+    };
+  }
   const workspaceId = readId(data, "workspaceId");
   const terminalId = readId(data, "terminalId");
   if (workspaceId && terminalId) return { kind: "terminal", serverId, workspaceId, terminalId };
@@ -25,11 +44,27 @@ export function parseNotificationOpenTarget(data: unknown): NotificationOpenTarg
   return { kind: "host", serverId };
 }
 
+export function buildPavraNotificationRoute(
+  target: Extract<NotificationOpenTarget, { kind: "pavra" }>,
+): string {
+  const params = new URLSearchParams();
+  params.set("serverId", target.serverId);
+  params.set("section", target.section);
+  if (target.conversationId) {
+    params.set("chatId", target.conversationId);
+  }
+  if (target.threadId) {
+    params.set("threadId", target.threadId);
+  }
+  return `/pavra?${params.toString()}`;
+}
+
 interface NotificationOpenRouterDeps {
   source: NotificationOpenSource;
   openAgent: (target: { serverId: string; agentId: string }) => void;
   openRoute: (route: string) => void;
   openTerminal: (target: Extract<NotificationOpenTarget, { kind: "terminal" }>) => void;
+  openPavra?: (target: Extract<NotificationOpenTarget, { kind: "pavra" }>) => void;
   whenReadyToNavigate: () => Promise<void>;
 }
 
@@ -45,6 +80,9 @@ export function createNotificationOpenRouter(deps: NotificationOpenRouterDeps) {
       deps.openAgent({ serverId: target.serverId, agentId: target.agentId });
     } else if (target?.kind === "terminal") {
       deps.openTerminal(target);
+    } else if (target?.kind === "pavra") {
+      deps.openPavra?.(target);
+      deps.openRoute(buildPavraNotificationRoute(target));
     } else if (target?.kind === "host") {
       deps.openRoute(buildHostRootRoute(target.serverId));
     }

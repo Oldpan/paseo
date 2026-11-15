@@ -6,6 +6,7 @@ import {
   useIsLastWorkspaceSelectionHydrated,
 } from "@/stores/navigation-active-workspace-store";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
+import { usePavraView } from "@/pavra/store";
 import { createNotificationOpenRouter } from "../model";
 import { createNotificationOpenSource } from "../source";
 
@@ -20,6 +21,20 @@ const notificationRouter = createNotificationOpenRouter({
       workspaceId,
       target: { kind: "terminal", terminalId },
     }),
+  openPavra: (target) => {
+    const view = usePavraView.getState();
+    if (target.serverId && target.serverId !== view.coordinatorId) {
+      view.selectCoordinator(target.serverId);
+    }
+    if (target.conversationId) {
+      view.selectChat(target.conversationId);
+    }
+    if (target.threadId !== undefined) {
+      view.setThread(target.threadId);
+    }
+    view.setSection(target.section);
+    view.setMode("chat");
+  },
   openRoute: (route) => router.navigate(route as Href),
   whenReadyToNavigate: () =>
     ready

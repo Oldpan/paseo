@@ -114,6 +114,7 @@ export function redactAppDiagnosticReport(report: string, hosts: HostProfile[]):
   }
   return redacted
     .replace(/paseo:\/\/\S+/gi, "paseo://[redacted]")
+    .replace(/pavra:\/\/\S+/gi, "pavra://[redacted]")
     .replace(
       /([?&](?:password|token|secret|key|publicKey|daemonPublicKeyB64)=)[^&\s"']+/gi,
       "$1[redacted]",

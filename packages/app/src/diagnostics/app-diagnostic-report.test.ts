@@ -166,6 +166,7 @@ describe("app diagnostics report", () => {
         "\\\\.\\pipe\\paseo-secret",
         "password=tcp-password",
         "paseo://pairing-secret",
+        "pavra://pavra-pairing-secret",
       ].join("\n"),
       [host],
     );
@@ -177,5 +178,6 @@ describe("app diagnostics report", () => {
     expect(redacted).not.toContain("\\\\.\\pipe\\paseo-secret");
     expect(redacted).not.toContain("tcp-password");
     expect(redacted).not.toContain("pairing-secret");
+    expect(redacted).not.toContain("pavra-pairing-secret");
   });
 });

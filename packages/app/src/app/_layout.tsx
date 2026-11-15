@@ -146,6 +146,7 @@ import { PluginCatalogSync } from "@/plugins";
 import { NotificationOpenRouter } from "@/notification-open/react";
 import { ensureOsNotificationPermission } from "@/utils/os-notifications";
 import { IS_PAVRA } from "@/pavra/build";
+import { usePavraView } from "@/pavra/store";
 
 polyfillCrypto();
 
@@ -696,7 +697,17 @@ function OfferLinkListener() {
         return;
       try {
         const result = await getHostRuntimeStore().importConnectionLink(url, "openProject");
-        if (!cancelled && result.status === "connected") router.replace(buildOpenProjectRoute());
+        if (!cancelled && result.status === "connected") {
+          if (IS_PAVRA) {
+            const view = usePavraView.getState();
+            if (!view.coordinatorId) {
+              view.selectCoordinator(result.serverId);
+            }
+            router.replace("/pavra");
+          } else {
+            router.replace(buildOpenProjectRoute());
+          }
+        }
       } catch (error) {
         console.warn("[OfferLinkListener] Pairing link failed", error);
       }

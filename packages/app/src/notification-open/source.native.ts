@@ -10,13 +10,21 @@ function toTap(response: Notifications.NotificationResponse): NotificationTap {
 
 export function createNotificationOpenSource(): NotificationOpenSource {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: false,
-      shouldShowBanner: false,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    }),
+    handleNotification: async (notification) => {
+      const data = notification.request.content.data;
+      const isPavra =
+        typeof data === "object" &&
+        data !== null &&
+        (typeof Reflect.get(data, "pavraSection") === "string" ||
+          typeof Reflect.get(data, "pavraConversationId") === "string");
+      return {
+        shouldShowAlert: isPavra,
+        shouldShowBanner: isPavra,
+        shouldShowList: true,
+        shouldPlaySound: isPavra,
+        shouldSetBadge: false,
+      };
+    },
   });
   return {
     subscribe(onTap) {

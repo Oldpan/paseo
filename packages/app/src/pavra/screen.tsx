@@ -37,6 +37,7 @@ import { AnimatedDrawer } from "./ui/AnimatedDrawer";
 import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
 import { InboxPane } from "./ui/InboxPane";
 import { Sidebar } from "./ui/Sidebar";
+import { usePavraNotifications } from "./use-pavra-notifications";
 
 const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
 const CONTENT = { flex: 1, minHeight: 0, flexDirection: "row" } as const;
@@ -126,6 +127,7 @@ const VALID_SECTIONS = new Set<SidebarSection>(["chat", "inbox", "members", "sea
 
 function usePavraUrlLocationSync(viewHydrated: boolean) {
   const searchParams = useLocalSearchParams<{
+    serverId?: string;
     section?: string;
     chatId?: string;
     threadId?: string;
@@ -133,21 +135,33 @@ function usePavraUrlLocationSync(viewHydrated: boolean) {
   const appliedParamsRef = useRef<string | null>(null);
   useEffect(() => {
     if (!viewHydrated) return;
+    const paramServerId =
+      typeof searchParams.serverId === "string" ? searchParams.serverId.trim() : "";
     const paramSection = typeof searchParams.section === "string" ? searchParams.section : "";
     const paramChatId = typeof searchParams.chatId === "string" ? searchParams.chatId : "";
     const paramThreadId = typeof searchParams.threadId === "string" ? searchParams.threadId : "";
-    if (!paramSection && !paramChatId && !paramThreadId) return;
-    const key = `${paramSection}\0${paramChatId}\0${paramThreadId}`;
+    if (!paramServerId && !paramSection && !paramChatId && !paramThreadId) return;
+    const key = `${paramServerId}\0${paramSection}\0${paramChatId}\0${paramThreadId}`;
     if (appliedParamsRef.current === key) return;
     appliedParamsRef.current = key;
     const view = usePavraView.getState();
+    if (paramServerId && paramServerId !== view.coordinatorId) {
+      view.selectCoordinator(paramServerId);
+    }
     if (paramChatId) view.selectChat(paramChatId);
     if (paramThreadId) view.setThread(paramThreadId);
+    else if (paramChatId) view.setThread(null);
     if (VALID_SECTIONS.has(paramSection as SidebarSection)) {
       view.setSection(paramSection as SidebarSection);
       view.setMode("chat");
     }
-  }, [searchParams.chatId, searchParams.section, searchParams.threadId, viewHydrated]);
+  }, [
+    searchParams.chatId,
+    searchParams.section,
+    searchParams.serverId,
+    searchParams.threadId,
+    viewHydrated,
+  ]);
 }
 
 function usePavraHydrationAndDefaults(
@@ -234,6 +248,7 @@ export function PavraScreen() {
   const palette = dark ? palettes.dark : palettes.light;
   const rawCoordinatorId = usePavraView((state) => state.coordinatorId);
   const rawChatId = usePavraView((state) => state.chatId);
+  const threadId = usePavraView((state) => state.threadId);
   const mode = usePavraView((state) => state.mode);
   const section = usePavraView((state) => state.section);
   const coordinatorId = resolveDefaultCoordinatorId(rawCoordinatorId, hosts);
@@ -247,6 +262,14 @@ export function PavraScreen() {
     rawChatId,
     selectCoordinator,
   );
+  usePavraNotifications({
+    coordinatorId,
+    state: data.state,
+    activeMode: mode,
+    activeSection: section,
+    activeChatId: chatId,
+    activeThreadId: threadId,
+  });
   const conversationTitle = data.state.conversations.find((item) => item.id === chatId)?.name;
   usePavraTitle(mode, conversationTitle, section);
   const [form, setForm] = useState<"assistant" | "group" | "task" | "workspaces" | "hosts" | null>(

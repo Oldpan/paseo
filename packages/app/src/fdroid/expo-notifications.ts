@@ -11,7 +11,11 @@ export const PermissionStatus = {
   UNDETERMINED: "undetermined",
 } as const;
 
-export const AndroidImportance = { DEFAULT: 3 } as const;
+export const AndroidImportance = { DEFAULT: 3, HIGH: 4 } as const;
+
+export async function scheduleNotificationAsync() {
+  return "";
+}
 
 export async function getPermissionsAsync() {
   return DENIED_NOTIFICATION_PERMISSION;

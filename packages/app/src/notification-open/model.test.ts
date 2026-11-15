@@ -52,6 +52,49 @@ describe("notification open", () => {
       { serverId: "h", workspaceId: "w", terminalId: "t", agentId: "a" },
       { kind: "terminal", serverId: "h", workspaceId: "w", terminalId: "t" },
     ],
+    [
+      {
+        serverId: "srv_spark",
+        pavraSection: "inbox",
+        pavraConversationId: "conv-1",
+        pavraThreadId: "task:t-1",
+      },
+      {
+        kind: "pavra",
+        serverId: "srv_spark",
+        section: "inbox",
+        conversationId: "conv-1",
+        threadId: "task:t-1",
+      },
+    ],
+    [
+      {
+        serverId: "srv_spark",
+        pavraSection: "chat",
+        pavraConversationId: "conv-2",
+        pavraThreadId: null,
+      },
+      {
+        kind: "pavra",
+        serverId: "srv_spark",
+        section: "chat",
+        conversationId: "conv-2",
+        threadId: null,
+      },
+    ],
+    [
+      {
+        serverId: "srv_spark",
+        pavraConversationId: "conv-3",
+      },
+      {
+        kind: "pavra",
+        serverId: "srv_spark",
+        section: "chat",
+        conversationId: "conv-3",
+        threadId: null,
+      },
+    ],
   ])("parses %j", (data, expected) => {
     expect(parseNotificationOpenTarget(data)).toEqual(expected);
   });
@@ -144,6 +187,35 @@ describe("notification open", () => {
     expect(routes).toEqual(["/h/host"]);
     expect(terminals).toEqual([
       { kind: "terminal", serverId: "host", workspaceId: "ws", terminalId: "term" },
+    ]);
+    stop();
+  });
+
+  it("dispatches pavra inbox and chat+thread notification targets to /pavra routes", async () => {
+    const { source, routes, router } = setup();
+    const stop = router.start();
+    source.tap({
+      id: "pavra-inbox",
+      data: {
+        serverId: "srv_spark",
+        pavraSection: "inbox",
+        pavraConversationId: "conv-1",
+        pavraThreadId: "task:t-1",
+      },
+    });
+    source.tap({
+      id: "pavra-chat",
+      data: {
+        serverId: "srv_spark",
+        pavraSection: "chat",
+        pavraConversationId: "conv-2",
+        pavraThreadId: null,
+      },
+    });
+    await flush();
+    expect(routes).toEqual([
+      "/pavra?serverId=srv_spark&section=inbox&chatId=conv-1&threadId=task%3At-1",
+      "/pavra?serverId=srv_spark&section=chat&chatId=conv-2",
     ]);
     stop();
   });
