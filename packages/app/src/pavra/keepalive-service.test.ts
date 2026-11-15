@@ -195,6 +195,7 @@ describe("withPavraForegroundService manifest configuration", () => {
       "android.permission.FOREGROUND_SERVICE",
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
       "android.permission.POST_NOTIFICATIONS",
+      "android.permission.REQUEST_INSTALL_PACKAGES",
     ]);
 
     expect(manifest.application[0].service).toEqual([
