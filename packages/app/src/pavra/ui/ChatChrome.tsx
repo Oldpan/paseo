@@ -11,12 +11,14 @@ import {
   ChatIcon,
   CopyIcon,
   MenuIcon,
+  MoreIcon,
   CloseIcon,
   ArrowLeftIcon,
   QuoteIcon,
   SettingsIcon,
 } from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { MessageSwipeReveal } from "./MessageSwipe";
 import { copyText } from "./clipboard";
 import { formatLiveTurnStatus } from "../live-turn";
 import { bubbleShadow, ctrlShadow, text as type, selectedFillProps, webTransition } from "./theme";
@@ -339,8 +341,44 @@ export function ProcessIconButton({
   );
 }
 
-function MessageActionBar({
-  actionsShown,
+function SideActionIcon({
+  label,
+  onPress,
+  children,
+}: {
+  label: string;
+  onPress(): void;
+  children(color: string): ReactNode;
+}) {
+  const { palette: t } = useTheme();
+  return (
+    <Pressable
+      role="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        return {
+          width: 26,
+          height: 26,
+          borderRadius: 6,
+          backgroundColor: hovered ? t.surfaceHover : "transparent",
+          alignItems: "center",
+          justifyContent: "center",
+          ...webTransition("background-color 120ms ease, opacity 120ms ease"),
+        };
+      }}
+    >
+      {(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        return children(hovered ? t.textPrimary : t.textMuted);
+      }}
+    </Pressable>
+  );
+}
+
+function MessageSideActions({
+  visible,
   copied,
   content,
   user,
@@ -348,8 +386,9 @@ function MessageActionBar({
   onQuote,
   onReply,
   onOpenProcess,
+  onToggleMenu,
 }: {
-  actionsShown: boolean;
+  visible: boolean;
   copied: boolean;
   content: string;
   user: boolean;
@@ -357,72 +396,53 @@ function MessageActionBar({
   onQuote?: () => void;
   onReply?: () => void;
   onOpenProcess?: () => void;
+  onToggleMenu(): void;
 }) {
-  const { palette: t, name } = useTheme();
-  if (!actionsShown) return null;
+  const { palette: t } = useTheme();
+  if (!isWeb) return null;
   return (
     <View
-      style={[
-        {
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 2,
-          borderRadius: 10,
-          borderWidth: 1,
-          borderColor: t.retroBorder,
-          backgroundColor: t.surfaceSecondary,
-          padding: 2,
-          alignSelf: user ? "flex-end" : "flex-start",
-        },
-        ctrlShadow(t, name),
-      ]}
+      testID="message-side-actions"
+      pointerEvents={visible ? "auto" : "none"}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 2,
+        opacity: visible ? 1 : 0,
+        flexShrink: 0,
+        ...webTransition("opacity 140ms ease"),
+      }}
     >
-      <Pressable
-        role="button"
-        accessibilityLabel={copied ? "Copied" : "Copy message"}
+      <SideActionIcon
+        label={copied ? "Copied" : "Copy message"}
         onPress={() => {
           void copyText(content).then((status) => {
             return onCopied(status === "copied");
           });
         }}
-        style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
       >
-        {copied ? (
-          <CheckIcon color={t.success} size={13} />
-        ) : (
-          <CopyIcon color={t.textSecondary} size={13} />
-        )}
-      </Pressable>
-      {onQuote ? (
-        <Pressable
-          role="button"
-          accessibilityLabel="Quote message"
-          onPress={onQuote}
-          style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
-        >
-          <QuoteIcon color={t.textSecondary} size={13} />
-        </Pressable>
-      ) : null}
+        {(color) =>
+          copied ? <CheckIcon color={t.success} size={14} /> : <CopyIcon color={color} size={14} />
+        }
+      </SideActionIcon>
       {onReply ? (
-        <Pressable
-          role="button"
-          accessibilityLabel="Reply in thread"
-          onPress={onReply}
-          style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
-        >
-          <ChatIcon color={t.textSecondary} size={13} />
-        </Pressable>
+        <SideActionIcon label="Reply in thread" onPress={onReply}>
+          {(color) => <ChatIcon color={color} size={14} />}
+        </SideActionIcon>
+      ) : null}
+      {onQuote ? (
+        <SideActionIcon label="Quote message" onPress={onQuote}>
+          {(color) => <QuoteIcon color={color} size={14} />}
+        </SideActionIcon>
       ) : null}
       {!user && onOpenProcess ? (
-        <Pressable
-          role="button"
-          accessibilityLabel="View process"
-          onPress={onOpenProcess}
-          style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
-        >
-          <ActivityIcon color={t.textSecondary} size={13} />
-        </Pressable>
+        <SideActionIcon label="View process" onPress={onOpenProcess}>
+          {(color) => <ActivityIcon color={color} size={14} />}
+        </SideActionIcon>
       ) : null}
+      <SideActionIcon label="More actions" onPress={onToggleMenu}>
+        {(color) => <MoreIcon color={color} size={14} />}
+      </SideActionIcon>
     </View>
   );
 }
@@ -543,31 +563,8 @@ function MessageContextMenu({
   );
 }
 
-function MessageFooterChips({
-  user,
-  replyCount,
-  hovered,
-  copied,
-  content,
-  onCopied,
-  onQuote,
-  onReply,
-  onOpenProcess,
-}: {
-  user: boolean;
-  replyCount: number;
-  hovered: boolean;
-  copied: boolean;
-  content: string;
-  onCopied(copied: boolean): void;
-  onQuote?: () => void;
-  onReply?: () => void;
-  onOpenProcess?: () => void;
-}) {
-  const showProcess = !user && Boolean(onOpenProcess);
-  const showReplies = Boolean(onReply && replyCount > 0);
-  const showHoverBar = isWeb && hovered;
-  if (!showProcess && !showReplies && !showHoverBar) return null;
+function MessageFooterChips({ replyCount, onReply }: { replyCount: number; onReply?: () => void }) {
+  if (!onReply || replyCount <= 0) return null;
   return (
     <View
       style={{
@@ -578,24 +575,9 @@ function MessageFooterChips({
         gap: 6,
       }}
     >
-      {showProcess && onOpenProcess ? <ProcessIconButton onPress={onOpenProcess} /> : null}
-      {showReplies && onReply ? (
-        <Chip onPress={onReply} label="Open thread">
-          {replyCount} {replyCount === 1 ? "reply" : "replies"}
-        </Chip>
-      ) : null}
-      {showHoverBar ? (
-        <MessageActionBar
-          actionsShown={showHoverBar}
-          copied={copied}
-          content={content}
-          user={user}
-          onCopied={onCopied}
-          onQuote={onQuote}
-          onReply={onReply}
-          onOpenProcess={onOpenProcess}
-        />
-      ) : null}
+      <Chip onPress={onReply} label="Open thread">
+        {replyCount} {replyCount === 1 ? "reply" : "replies"}
+      </Chip>
     </View>
   );
 }
@@ -667,126 +649,137 @@ export function ChatMessage({
         },
       } as Record<string, unknown>)
     : undefined;
+  const sideActions = (
+    <MessageSideActions
+      visible={hovered || menuOpen}
+      copied={copied}
+      content={content}
+      user={user}
+      onCopied={setCopied}
+      onQuote={onQuote}
+      onReply={onReply}
+      onOpenProcess={onOpenProcess}
+      onToggleMenu={() => setMenuOpen((prev) => !prev)}
+    />
+  );
   return (
-    <View
-      testID={`message-${id}`}
-      onPointerEnter={showChrome}
-      onPointerLeave={hideChrome}
-      style={{
-        position: "relative",
-        flexDirection: "row",
-        justifyContent: alignment,
-        alignItems: "flex-start",
-        gap: 10,
-        paddingHorizontal: 4,
-        paddingVertical: 6,
-        maxWidth: "100%",
-      }}
-    >
-      {!user ? avatar : null}
+    <MessageSwipeReveal createdAt={createdAt} side={user ? "start" : "end"}>
       <View
+        testID={`message-${id}`}
+        onPointerEnter={showChrome}
+        onPointerLeave={hideChrome}
         style={{
-          flex: 1,
-          minWidth: 0,
+          position: "relative",
+          flexDirection: "row",
+          justifyContent: alignment,
+          alignItems: "flex-start",
+          gap: 10,
+          paddingHorizontal: 4,
+          paddingVertical: 6,
           maxWidth: "100%",
-          alignItems: alignment,
         }}
       >
+        {!user ? avatar : null}
         <View
           style={{
-            flexDirection: "row",
-            flexWrap: "wrap",
-            alignItems: "center",
-            justifyContent: alignment,
-            gap: 6,
-            marginBottom: 4,
-            width: "100%",
+            flex: 1,
+            minWidth: 0,
+            maxWidth: "100%",
+            alignItems: alignment,
           }}
-        >
-          <Text style={type(t.textPrimary, 15, { fontWeight: "600", flexShrink: 1 })}>
-            {sender}
-          </Text>
-          {routineBadge ? (
-            <View
-              testID={`routine-badge-${id}`}
-              style={{
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: t.surfaceElevated,
-                paddingHorizontal: 7,
-                paddingVertical: 1,
-              }}
-            >
-              <Text style={type(t.textSecondary, 10, { fontWeight: "600" })}>{routineBadge}</Text>
-            </View>
-          ) : null}
-          <Text style={type(t.textSubtle, 10)}>
-            {new Date(createdAt).toLocaleTimeString(undefined, {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </Text>
-        </View>
-        <Pressable
-          accessibilityLabel={`Message from ${sender}`}
-          onPress={() => {
-            if (!isWeb || menuOpen) {
-              setMenuOpen((prev) => !prev);
-            }
-          }}
-          onLongPress={() => {
-            setMenuOpen(true);
-          }}
-          delayLongPress={280}
-          {...webContextMenuProps}
-          style={{ position: "relative", maxWidth: "100%" }}
         >
           <View
-            style={[
-              {
-                maxWidth: "100%",
-                borderRadius: 16,
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: user ? t.msgBubbleHighlight : t.msgBubble,
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-              },
-              bubbleShadow(t, name),
-            ]}
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: alignment,
+              gap: 6,
+              marginBottom: 4,
+              width: "100%",
+            }}
           >
-            <MessageBody id={id} content={content} user={user} quote={quote} />
+            <Text style={type(t.textPrimary, 15, { fontWeight: "600", flexShrink: 1 })}>
+              {sender}
+            </Text>
+            {routineBadge ? (
+              <View
+                testID={`routine-badge-${id}`}
+                style={{
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor: t.surfaceElevated,
+                  paddingHorizontal: 7,
+                  paddingVertical: 1,
+                }}
+              >
+                <Text style={type(t.textSecondary, 10, { fontWeight: "600" })}>{routineBadge}</Text>
+              </View>
+            ) : null}
           </View>
-        </Pressable>
-        {menuOpen ? (
-          <MessageContextMenu
-            id={id}
-            user={user}
-            copied={copied}
-            content={content}
-            onCopied={setCopied}
-            onQuote={onQuote}
-            onReply={onReply}
-            onOpenProcess={onOpenProcess}
-            onClose={() => setMenuOpen(false)}
-          />
-        ) : null}
-        {children}
-        <MessageFooterChips
-          user={user}
-          replyCount={replyCount}
-          hovered={hovered && !menuOpen}
-          copied={copied}
-          content={content}
-          onCopied={setCopied}
-          onQuote={onQuote}
-          onReply={onReply}
-          onOpenProcess={onOpenProcess}
-        />
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: alignment,
+              gap: 6,
+              maxWidth: "100%",
+            }}
+          >
+            {user ? sideActions : null}
+            <Pressable
+              accessibilityLabel={`Message from ${sender}`}
+              onPress={() => {
+                if (!isWeb || menuOpen) {
+                  setMenuOpen((prev) => !prev);
+                }
+              }}
+              onLongPress={() => {
+                setMenuOpen(true);
+              }}
+              delayLongPress={280}
+              {...webContextMenuProps}
+              style={{ position: "relative", flexShrink: 1, maxWidth: "100%" }}
+            >
+              <View
+                style={[
+                  {
+                    maxWidth: "100%",
+                    borderRadius: 16,
+                    borderWidth: 1,
+                    borderColor: t.retroBorder,
+                    backgroundColor: user ? t.msgBubbleHighlight : t.msgBubble,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                  },
+                  bubbleShadow(t, name),
+                ]}
+              >
+                <MessageBody id={id} content={content} user={user} quote={quote} />
+              </View>
+            </Pressable>
+            {!user ? sideActions : null}
+          </View>
+          {menuOpen ? (
+            <MessageContextMenu
+              id={id}
+              user={user}
+              copied={copied}
+              content={content}
+              onCopied={setCopied}
+              onQuote={onQuote}
+              onReply={onReply}
+              onOpenProcess={onOpenProcess}
+              onClose={() => setMenuOpen(false)}
+            />
+          ) : null}
+          {children}
+          <MessageFooterChips replyCount={replyCount} onReply={onReply} />
+        </View>
+        {user ? avatar : null}
       </View>
-      {user ? avatar : null}
-    </View>
+    </MessageSwipeReveal>
   );
 }
 /** The message a reply answers: sender and a short excerpt, set off by a rule on the left. */
@@ -875,6 +868,7 @@ export function LiveTurnBubble({
   activity,
   statusLabel,
   createdAt,
+  onOpenProcess,
   children,
 }: {
   id: string;
@@ -885,13 +879,21 @@ export function LiveTurnBubble({
   activity: string | null;
   statusLabel: string;
   createdAt: number;
+  onOpenProcess?: () => void;
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
-  const status = (
+  const statusText = (
     <Text numberOfLines={1} style={type(t.textMuted, 11, { marginTop: 6 })}>
       {formatLiveTurnStatus({ sender, activity, commentary, statusLabel })}
     </Text>
+  );
+  const status = onOpenProcess ? (
+    <Pressable role="button" accessibilityLabel="View process" onPress={onOpenProcess}>
+      {statusText}
+    </Pressable>
+  ) : (
+    statusText
   );
   if (text)
     return (
@@ -903,6 +905,7 @@ export function LiveTurnBubble({
         user={false}
         createdAt={createdAt}
         replyCount={0}
+        onOpenProcess={onOpenProcess}
       >
         {status}
         {children}

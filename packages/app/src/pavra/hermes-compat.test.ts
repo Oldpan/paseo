@@ -199,6 +199,10 @@ describe("Hermes runtime compatibility", () => {
     const chatChromeSource = readFileSync(path.join(pavraDir, "ui", "ChatChrome.tsx"), "utf8");
     expect(chatChromeSource).not.toContain("hovered || !isWeb || compact");
     expect(chatChromeSource).toContain("MessageContextMenu");
-    expect(chatChromeSource).toContain("ProcessIconButton");
+    expect(chatChromeSource).toContain("MessageSideActions");
+    expect(chatChromeSource).toContain("MessageSwipeReveal");
+    const swipeSource = readFileSync(path.join(pavraDir, "ui", "MessageSwipe.tsx"), "utf8");
+    expect(swipeSource).toContain("message-swipe-content");
+    expect(swipeSource).toContain("message-timestamp");
   });
 });

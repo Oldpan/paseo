@@ -9,12 +9,11 @@ import { useSessionStore } from "@/stores/session-store";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
 import type { Turn } from "../../../../extensions/pavra/shared/contracts";
-import { LiveTurnBubble, ProcessIconButton } from "./ui/ChatChrome";
+import { LiveTurnBubble } from "./ui/ChatChrome";
 import { isPassPrefix, isSilentAwareness, selectLiveTurn, TURN_STATUS_LABEL } from "./live-turn";
 
 const EMPTY_ITEMS: StreamItem[] = [];
 const EMPTY_PERMISSIONS: PendingPermission[] = [];
-const CHIP_ROW = { marginTop: 6, alignItems: "flex-start" } as const;
 const APPROVALS = { alignSelf: "stretch", marginTop: 8, maxWidth: 560 } as const;
 
 /**
@@ -76,6 +75,7 @@ export const LiveTurnItem = memo(function LiveTurnItem({
       activity={view.activity}
       statusLabel={TURN_STATUS_LABEL[turn.status] ?? turn.status}
       createdAt={startedAt.current}
+      onOpenProcess={onOpen}
     >
       {permissions.length > 0 ? (
         <View style={APPROVALS}>
@@ -84,9 +84,6 @@ export const LiveTurnItem = memo(function LiveTurnItem({
           ))}
         </View>
       ) : null}
-      <View style={CHIP_ROW}>
-        <ProcessIconButton onPress={onOpen} label="View process" />
-      </View>
     </LiveTurnBubble>
   );
 });
