@@ -3,6 +3,9 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import type { ChatState } from "../../../../extensions/pavra/shared/contracts";
 import { isNative, isWeb } from "@/constants/platform";
 import { WEB_NOTIFICATION_CLICK_EVENT } from "@/notification-open";
+import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
+import { IS_PAVRA } from "./build";
+import { createPavraKeepaliveController } from "./keepalive-service";
 import {
   createPavraNotificationTracker,
   type PavraNotificationEvent,
@@ -113,12 +116,35 @@ export function usePavraNotifications(input: {
   activeThreadId: string | null;
 }): void {
   const { coordinatorId, state, activeMode, activeSection, activeChatId, activeThreadId } = input;
+  const connected = useHostRuntimeIsConnected(coordinatorId);
+  const hosts = useHosts();
+  const coordinatorLabel = hosts.find((host) => host.serverId === coordinatorId)?.label;
   const trackerRef = useRef<ReturnType<typeof createPavraNotificationTracker> | null>(null);
   if (!trackerRef.current) {
     trackerRef.current = createPavraNotificationTracker();
   }
+  const keepaliveRef = useRef<ReturnType<typeof createPavraKeepaliveController> | null>(null);
+  if (!keepaliveRef.current) {
+    keepaliveRef.current = createPavraKeepaliveController();
+  }
 
   const [appActive, setAppActive] = useState<boolean>(() => isAppForeground(AppState.currentState));
+
+  useEffect(() => {
+    keepaliveRef.current?.update({
+      isPavra: IS_PAVRA,
+      platformOs: Platform.OS,
+      coordinatorId,
+      connected,
+      coordinatorLabel,
+    });
+  }, [connected, coordinatorId, coordinatorLabel]);
+
+  useEffect(() => {
+    return () => {
+      keepaliveRef.current?.stop();
+    };
+  }, []);
 
   useEffect(() => {
     if (isNative) {
