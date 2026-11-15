@@ -1571,7 +1571,11 @@ function buildConversationMessageRows(input: {
       provenance: lineage?.hasLineage ? lineage.provenance : undefined,
       workspaceCwd: ws.workspaceCwd,
       onPressFileRef: (ref: ParsedFileRef) => {
-        setPreviewTarget({ ref, ...ws });
+        setPreviewTarget({
+          ref,
+          ...ws,
+          workspaceCwd: resolvePreviewWorkspaceCwd(ref.filePath, ws.workspaceCwd, task?.directory),
+        });
       },
       saved: isMessageSaved(message),
       forwardedFrom: message.forwardedFrom,
@@ -1600,13 +1604,29 @@ function buildConversationMessageRows(input: {
   });
 }
 
+function resolvePreviewWorkspaceCwd(
+  filePath: string,
+  workspaceCwd: string | undefined,
+  taskDirectory: string | undefined,
+): string | undefined {
+  if (!filePath.startsWith("/")) return workspaceCwd;
+  if (taskDirectory) return taskDirectory;
+  if (!workspaceCwd) return undefined;
+  const normalizedCwd = workspaceCwd.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalizedFile = filePath.trim().replace(/\\/g, "/");
+  if (normalizedFile === normalizedCwd || normalizedFile.startsWith(`${normalizedCwd}/`)) {
+    return workspaceCwd;
+  }
+  return undefined;
+}
+
 async function readPreviewFileWithAgentFallback(
   targetMachineId: string,
   filePath: string,
   previewTarget: PreviewTargetState | null,
 ) {
   let resolvedCwd = previewTarget?.workspaceCwd;
-  if (!resolvedCwd && previewTarget?.agentId) {
+  if (!resolvedCwd && !filePath.startsWith("/") && previewTarget?.agentId) {
     const host = getHostRuntimeStore().getClient(targetMachineId);
     const fetched = await host?.fetchAgent({ agentId: previewTarget.agentId }).catch(() => null);
     if (fetched?.agent.cwd) {
