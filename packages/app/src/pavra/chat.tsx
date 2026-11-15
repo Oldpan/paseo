@@ -26,6 +26,7 @@ import { useShallow } from "zustand/shallow";
 import {
   sendMessage,
   reactToMessage,
+  saveMessage,
   cancelTakeover,
   cancelTask,
   cancelTurn,
@@ -37,6 +38,7 @@ import {
   type Task,
   type Turn,
 } from "../../../../extensions/pavra/shared/contracts";
+import { buildSaveMessageRequest, isMessageSaved } from "./chat-actions";
 import type { PavraData } from "./data";
 import {
   clampThreadWidth,
@@ -51,11 +53,21 @@ import { BrowserTakeoverModal, TakeoverCard } from "./ui/BrowserTakeoverModal";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
 import type { ComposerSendExtras } from "./ui/Composer";
+import type { ParsedFileRef } from "./ui/fileRefParser";
+import {
+  FileRefPreviewModal,
+  openFileRefInStudio,
+  readWorkspaceFileForPreview,
+} from "./ui/FileRefPreviewModal";
+import { ForwardMessageModal } from "./ui/ForwardMessageModal";
+import { GlobalSearchModal } from "./ui/GlobalSearchModal";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
+import { PromoteToTaskModal } from "./ui/PromoteToTaskModal";
+import { SavePlaybookModal } from "./ui/SavePlaybookModal";
 import { ColResizeHandle } from "./ui/ColResizeHandle";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
 import { LiveTurnItem } from "./live-turn-item";
-import { openExchanges } from "./peer-activity";
+import { buildTurnLineage, openExchanges } from "./peer-activity";
 import { PeerActivity } from "./ui/PeerActivity";
 import { useAssistantMemory } from "./memory";
 import { useAssistantPlaybooks } from "./playbooks";
@@ -93,6 +105,7 @@ interface ChatProps {
   onOpenTurn(turn: Turn): void;
   onOpenStudio?(conversationId: string, threadId: string | null): void;
   onEditAssistant(id: string): void;
+  onOpenAssistant?(assistantId: string): void;
   onSidebar?(): void;
 }
 /** What task cards and receipt rows need from the screen: navigation and the task RPCs. */
@@ -414,6 +427,10 @@ export function PavraChat(props: ChatProps) {
   const setThreadWidth = usePavraView((state) => state.setThreadWidth);
   const [containerWidth, setContainerWidth] = useState(0);
   const [tab, setTab] = useState("chat");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+  const toggleSearch = useCallback(() => setSearchOpen((prev) => !prev), []);
   const { activeId: renderedThreadId, open: threadOpen } = usePresenceId(threadId, 190);
   const conversation = data.state.conversations.find((item) => item.id === chatId);
   const assistant = data.state.assistants.find((item) => item.id === conversation?.members[0]);
@@ -502,6 +519,7 @@ export function PavraChat(props: ChatProps) {
           onSidebar={onSidebar}
           onEdit={editHandler}
           onOpenStudio={onOpenStudioRootProp}
+          onOpenSearch={openSearch}
         />
         {tab === "chat" ? (
           <ConversationPane
@@ -549,7 +567,143 @@ export function PavraChat(props: ChatProps) {
           {threadContent}
         </CompactThreadDrawer>
       ) : null}
+      <PavraGlobalSearchHost
+        open={searchOpen}
+        onOpen={openSearch}
+        onClose={closeSearch}
+        onToggle={toggleSearch}
+        data={data}
+        chatId={chatId}
+        hostLabels={props.hostLabels}
+        onSetTab={setTab}
+        onOpenTask={props.onOpenTask}
+        onOpenAssistant={props.onOpenAssistant}
+      />
     </View>
+  );
+}
+
+function PavraGlobalSearchHost({
+  open,
+  onOpen,
+  onClose,
+  onToggle,
+  data,
+  chatId,
+  hostLabels,
+  onSetTab,
+  onOpenTask,
+  onOpenAssistant,
+}: {
+  open: boolean;
+  onOpen(): void;
+  onClose(): void;
+  onToggle(): void;
+  data: PavraData;
+  chatId: string;
+  hostLabels?: Record<string, string>;
+  onSetTab(tab: string): void;
+  onOpenTask(task: Task): void;
+  onOpenAssistant?(assistantId: string): void;
+}) {
+  const handleSelectConversation = useCallback(
+    (targetConversationId: string, _messageId?: string, targetThreadId?: string | null) => {
+      usePavraView.getState().selectChat(targetConversationId);
+      usePavraView.getState().setThread(targetThreadId ?? null);
+      onSetTab("chat");
+    },
+    [onSetTab],
+  );
+  const handleSelectTask = useCallback(
+    (targetConversationId: string, targetTaskId: string) => {
+      const targetTask = data.state.tasks.find((item) => item.id === targetTaskId);
+      if (targetTask?.execution) {
+        onOpenTask(targetTask);
+      } else {
+        usePavraView.getState().selectChat(targetConversationId);
+        usePavraView.getState().setThread(taskThreadId(targetTaskId));
+        onSetTab("chat");
+      }
+    },
+    [data.state.tasks, onOpenTask, onSetTab],
+  );
+  const handleSelectRoutine = useCallback(
+    (_routineId: string, targetConversationId?: string, targetAssistantId?: string) => {
+      const convId =
+        targetConversationId ??
+        data.state.conversations.find(
+          (item) =>
+            item.kind === "dm" &&
+            Boolean(targetAssistantId && item.members.includes(targetAssistantId)),
+        )?.id;
+      if (convId && convId !== chatId) usePavraView.getState().selectChat(convId);
+      onSetTab("routines");
+    },
+    [chatId, data.state.conversations, onSetTab],
+  );
+  const handleSelectPlaybook = useCallback(
+    (_slug: string, targetAssistantId?: string, targetConversationId?: string) => {
+      const convId =
+        targetConversationId ??
+        data.state.conversations.find(
+          (item) =>
+            item.kind === "dm" &&
+            Boolean(targetAssistantId && item.members.includes(targetAssistantId)),
+        )?.id;
+      if (convId && convId !== chatId) usePavraView.getState().selectChat(convId);
+      onSetTab("playbooks");
+    },
+    [chatId, data.state.conversations, onSetTab],
+  );
+  const handleSelectStudio = useCallback(
+    (studioId: string) => {
+      const targetStudio = (data.state.studios ?? []).find((item) => item.id === studioId);
+      const firstWorkspace = targetStudio?.workspaces?.[0];
+      if (targetStudio && firstWorkspace) {
+        usePavraView.getState().openColumn({
+          serverId: firstWorkspace.serverId,
+          workspaceId: firstWorkspace.workspaceId,
+          name: targetStudio.name,
+          group: targetStudio.name,
+        });
+      }
+      usePavraView.getState().setMode("studio");
+    },
+    [data.state.studios],
+  );
+  const handleSelectAssistant = useCallback(
+    (targetAssistantId: string) => {
+      if (onOpenAssistant) {
+        onOpenAssistant(targetAssistantId);
+        return;
+      }
+      const dm = data.state.conversations.find(
+        (item) => item.kind === "dm" && item.members.includes(targetAssistantId),
+      );
+      if (dm) {
+        usePavraView.getState().selectChat(dm.id);
+        onSetTab("chat");
+      }
+    },
+    [data.state.conversations, onOpenAssistant, onSetTab],
+  );
+  return (
+    <GlobalSearchModal
+      open={open}
+      onOpen={onOpen}
+      onClose={onClose}
+      onToggle={onToggle}
+      state={data.state}
+      routines={data.state.routines}
+      studios={data.state.studios}
+      hostLabels={hostLabels}
+      onSelectConversation={handleSelectConversation}
+      onSelectTask={handleSelectTask}
+      onSelectRoutine={handleSelectRoutine}
+      onSelectPlaybook={handleSelectPlaybook}
+      onSelectStudio={handleSelectStudio}
+      onSelectAssistant={handleSelectAssistant}
+    />
   );
 }
 function MemoryTab({
@@ -723,6 +877,22 @@ function ConversationPane({
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quoteId, setQuoteId] = useState<string | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<{
+    ref: ParsedFileRef;
+    machineId?: string;
+    agentId?: string;
+    workspaceCwd?: string;
+    workspaceId?: string;
+    workspaceName?: string;
+    group?: string;
+  } | null>(null);
+  const [forwardModalMessage, setForwardModalMessage] = useState<Message | null>(null);
+  const [promoteTaskMessage, setPromoteTaskMessage] = useState<Message | null>(null);
+  const [playbookModalSource, setPlaybookModalSource] = useState<{
+    message?: Message | null;
+    takeover?: Takeover | null;
+    takeoverNote?: string;
+  } | null>(null);
   // The toggle starts from the group's default; the user's own choice wins until the next send.
   const [roundtableChoice, setRoundtableChoice] = useState<boolean | null>(null);
   const changeDraft = useCallback(
@@ -839,6 +1009,17 @@ function ConversationPane({
     },
     [chatId, data],
   );
+  const toggleSaveMessage = useCallback(
+    async (message: Message) => {
+      setError(null);
+      try {
+        await data.call(saveMessage, buildSaveMessageRequest({ message }));
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      }
+    },
+    [data],
+  );
   const send = useCallback(
     async (extras?: ComposerSendExtras) => {
       const content = extras?.contentOverride ?? draft;
@@ -913,86 +1094,48 @@ function ConversationPane({
     },
     [send],
   );
-  const rows = useMemo(() => {
-    const replyCounts = new Map<string, number>();
-    for (const message of data.state.messages) {
-      if (message.threadId && !isNoteMessage(message))
-        replyCounts.set(message.threadId, (replyCounts.get(message.threadId) ?? 0) + 1);
-    }
-    const nameOf = (senderId: string) => {
-      if (senderId === "user") return "You";
-      if (senderId === "system") return "System";
-      return assistantsById.get(senderId)?.name ?? "Assistant";
-    };
-    return sortMessages(
-      data.state.messages.filter(
-        (message) =>
-          message.conversationId === chatId &&
-          (message.threadId === threadId || message.id === threadId),
-      ),
-    ).map((message) => {
-      const task = message.taskId ? tasksById.get(message.taskId) : undefined;
-      const assistant = assistantsById.get(message.senderId);
-      const original = message.quoteOf ? messagesById.get(message.quoteOf) : undefined;
-      const taskId = message.taskId;
-      const inTaskThread = threadId !== null && message.id === threadId;
-      const turn = resolveMessageTurn(message, turnsByFinalMessageId, turnsById);
-      return {
-        message,
-        sender: nameOf(message.senderId),
-        seed: `${assistant?.id}:${assistant?.name}`,
-        replyCount: replyCounts.get(message.id) ?? 0,
-        reactions: message.reactions,
-        onReact: (emoji: string) => {
-          void toggleReaction(message.id, emoji);
-        },
-        reply: threadId ? undefined : () => setThread(message.id),
-        onQuote: canQuote(message, conversation) ? () => setQuoteId(message.id) : undefined,
-        onOpenProcess: turn ? () => onOpenTurn(turn) : undefined,
-        quote: message.quoteOf
-          ? {
-              sender: original ? nameOf(original.senderId) : "Quoted message",
-              text: original ? quotePreview(original.content) : "No longer available",
-            }
-          : undefined,
-        routineBadge: formatMessageRoutineBadge(message, turn),
-        note: message.kind === "system" ? noteLabel(message) : undefined,
-        event:
-          message.kind === "task_event" && taskId
-            ? {
-                note: taskEventNote(message, task),
-                onOpen: task ? () => wiring.openThread(taskId) : undefined,
-                respond: (requestId: string, behavior: "allow" | "deny") =>
-                  wiring.respond(taskId, requestId, behavior),
-              }
-            : undefined,
-        taskCard:
-          task && isTaskRoot(message)
-            ? {
-                task,
-                assistantName: assistantsById.get(task.assistantId)?.name,
-                hostLabel: wiring.hostLabel(task.serverId),
-                inThread: inTaskThread,
-                actions: wiring.actionsFor(task, inTaskThread),
-              }
-            : undefined,
-      };
-    });
-  }, [
-    assistantsById,
-    chatId,
-    conversation,
-    data.state.messages,
-    messagesById,
-    onOpenTurn,
-    setThread,
-    tasksById,
-    threadId,
-    toggleReaction,
-    turnsByFinalMessageId,
-    turnsById,
-    wiring,
-  ]);
+  const rows = useMemo(
+    () =>
+      buildConversationMessageRows({
+        state: data.state,
+        chatId,
+        threadId,
+        coordinatorId,
+        conversation,
+        assistantsById,
+        messagesById,
+        tasksById,
+        turnsById,
+        turnsByFinalMessageId,
+        wiring,
+        onOpenTurn,
+        setThread,
+        setQuoteId,
+        setPreviewTarget,
+        setForwardModalMessage,
+        setPromoteTaskMessage,
+        setPlaybookModalSource,
+        toggleReaction,
+        toggleSaveMessage,
+      }),
+    [
+      assistantsById,
+      chatId,
+      conversation,
+      coordinatorId,
+      data.state,
+      messagesById,
+      onOpenTurn,
+      setThread,
+      tasksById,
+      threadId,
+      toggleReaction,
+      toggleSaveMessage,
+      turnsByFinalMessageId,
+      turnsById,
+      wiring,
+    ],
+  );
   useLiveTurnDemand(
     `pavra:${draftKey}`,
     useMemo(
@@ -1201,12 +1344,448 @@ function ConversationPane({
         onStop={stopPress}
         cancelling={cancelling}
       />
+      <ConversationActionModals
+        data={data}
+        chatId={chatId}
+        conversation={conversation}
+        assistantsById={assistantsById}
+        wiring={wiring}
+        activeTakeover={activeTakeover}
+        onCloseTakeover={closeTakeoverModal}
+        previewTarget={previewTarget}
+        setPreviewTarget={setPreviewTarget}
+        forwardModalMessage={forwardModalMessage}
+        setForwardModalMessage={setForwardModalMessage}
+        promoteTaskMessage={promoteTaskMessage}
+        setPromoteTaskMessage={setPromoteTaskMessage}
+        playbookModalSource={playbookModalSource}
+        setPlaybookModalSource={setPlaybookModalSource}
+      />
+    </>
+  );
+}
+
+interface PreviewTargetState {
+  ref: ParsedFileRef;
+  machineId?: string;
+  agentId?: string;
+  workspaceCwd?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  group?: string;
+}
+
+interface PlaybookModalSourceState {
+  message?: Message | null;
+  takeover?: Takeover | null;
+  takeoverNote?: string;
+}
+
+function resolveRowMachineId(
+  task: Task | undefined,
+  turn: Turn | undefined,
+  assistant: Assistant | undefined,
+  coordinatorId: string,
+): string {
+  const execServer = task ? task.execution?.serverId : undefined;
+  return execServer ?? task?.serverId ?? turn?.serverId ?? assistant?.serverId ?? coordinatorId;
+}
+
+function lookupSessionAgent(machineId: string | undefined, agentId: string | undefined) {
+  if (!machineId || !agentId) return undefined;
+  const session = useSessionStore.getState().sessions[machineId];
+  if (!session) return undefined;
+  return session.agents.get(agentId) ?? session.agentDetails.get(agentId);
+}
+
+function resolveAssistantDefaultDir(assistant: Assistant | undefined): string | undefined {
+  if (!assistant || !assistant.autonomy) return undefined;
+  return assistant.autonomy.targets[0]?.directory;
+}
+
+function resolveRowWorkspace(input: {
+  task: Task | undefined;
+  turn: Turn | undefined;
+  assistant: Assistant | undefined;
+  coordinatorId: string;
+  conversation: PavraData["state"]["conversations"][number] | undefined;
+}) {
+  const { task, turn, assistant, coordinatorId, conversation } = input;
+  const machineId = resolveRowMachineId(task, turn, assistant, coordinatorId);
+  const agentId = (task ? task.execution?.agentId : undefined) ?? turn?.agentId;
+  const sessionAgent = lookupSessionAgent(machineId, agentId);
+  const workspaceId = (task ? task.execution?.workspaceId : undefined) ?? sessionAgent?.workspaceId;
+  const workspaceCwd =
+    task?.directory ?? sessionAgent?.cwd ?? resolveAssistantDefaultDir(assistant);
+  const workspaceName = assistant?.name ?? conversation?.name ?? "Workspace";
+  const group = conversation?.kind === "group" ? conversation.name : "Chat";
+  return { machineId, agentId, workspaceId, workspaceCwd, workspaceName, group };
+}
+
+function buildRowEventAndTask(input: {
+  message: Message;
+  task: Task | undefined;
+  threadId: string | null;
+  assistantsById: ReadonlyMap<string, Assistant>;
+  wiring: TaskWiring;
+}) {
+  const { message, task, threadId, assistantsById, wiring } = input;
+  const taskId = message.taskId;
+  const inTaskThread = threadId !== null && message.id === threadId;
+  const event =
+    message.kind === "task_event" && taskId
+      ? {
+          note: taskEventNote(message, task),
+          onOpen: task ? () => wiring.openThread(taskId) : undefined,
+          respond: (requestId: string, behavior: "allow" | "deny") =>
+            wiring.respond(taskId, requestId, behavior),
+        }
+      : undefined;
+  const taskCard =
+    task && isTaskRoot(message)
+      ? {
+          task,
+          assistantName: assistantsById.get(task.assistantId)?.name,
+          hostLabel: wiring.hostLabel(task.serverId),
+          inThread: inTaskThread,
+          actions: wiring.actionsFor(task, inTaskThread),
+        }
+      : undefined;
+  return { event, taskCard };
+}
+
+function resolveSavePlaybookAction(
+  message: Message,
+  lineage: ReturnType<typeof buildTurnLineage> | undefined,
+  takeovers: readonly Takeover[] | undefined,
+  setPlaybookModalSource: (next: PlaybookModalSourceState | null) => void,
+) {
+  if (message.senderId === "user" || message.senderId === "system") return undefined;
+  return () => {
+    const firstTakeoverId = lineage?.takeovers[0]?.id;
+    const turnTakeover = firstTakeoverId
+      ? ((takeovers ?? []).find((item) => item.id === firstTakeoverId) ?? null)
+      : null;
+    setPlaybookModalSource({ message, takeover: turnTakeover });
+  };
+}
+
+function buildConversationMessageRows(input: {
+  state: PavraData["state"];
+  chatId: string;
+  threadId: string | null;
+  coordinatorId: string;
+  conversation: PavraData["state"]["conversations"][number] | undefined;
+  assistantsById: ReadonlyMap<string, Assistant>;
+  messagesById: ReadonlyMap<string, Message>;
+  tasksById: ReadonlyMap<string, Task>;
+  turnsById: ReadonlyMap<string, Turn>;
+  turnsByFinalMessageId: ReadonlyMap<string, Turn>;
+  wiring: TaskWiring;
+  onOpenTurn(turn: Turn): void;
+  setThread(id: string | null): void;
+  setQuoteId(id: string | null): void;
+  setPreviewTarget(target: PreviewTargetState | null): void;
+  setForwardModalMessage(message: Message | null): void;
+  setPromoteTaskMessage(message: Message | null): void;
+  setPlaybookModalSource(source: PlaybookModalSourceState | null): void;
+  toggleReaction(messageId: string, emoji: string): Promise<void>;
+  toggleSaveMessage(message: Message): Promise<void>;
+}) {
+  const {
+    state,
+    chatId,
+    threadId,
+    coordinatorId,
+    conversation,
+    assistantsById,
+    messagesById,
+    tasksById,
+    turnsById,
+    turnsByFinalMessageId,
+    wiring,
+    onOpenTurn,
+    setThread,
+    setQuoteId,
+    setPreviewTarget,
+    setForwardModalMessage,
+    setPromoteTaskMessage,
+    setPlaybookModalSource,
+    toggleReaction,
+    toggleSaveMessage,
+  } = input;
+  const replyCounts = new Map<string, number>();
+  for (const message of state.messages) {
+    if (message.threadId && !isNoteMessage(message)) {
+      replyCounts.set(message.threadId, (replyCounts.get(message.threadId) ?? 0) + 1);
+    }
+  }
+  const nameOf = (senderId: string) => {
+    if (senderId === "user") return "You";
+    if (senderId === "system") return "System";
+    return assistantsById.get(senderId)?.name ?? "Assistant";
+  };
+  return sortMessages(
+    state.messages.filter(
+      (message) =>
+        message.conversationId === chatId &&
+        (message.threadId === threadId || message.id === threadId),
+    ),
+  ).map((message) => {
+    const task = message.taskId ? tasksById.get(message.taskId) : undefined;
+    const assistant = assistantsById.get(message.senderId);
+    const original = message.quoteOf ? messagesById.get(message.quoteOf) : undefined;
+    const turn = resolveMessageTurn(message, turnsByFinalMessageId, turnsById);
+    const lineage = turn
+      ? buildTurnLineage({
+          turn,
+          message,
+          turns: state.turns,
+          messages: state.messages,
+          peerMessages: state.peerMessages,
+          tasks: state.tasks,
+          takeovers: state.takeovers,
+          assistants: state.assistants,
+        })
+      : undefined;
+    const ws = resolveRowWorkspace({ task, turn, assistant, coordinatorId, conversation });
+    const { event, taskCard } = buildRowEventAndTask({
+      message,
+      task,
+      threadId,
+      assistantsById,
+      wiring,
+    });
+    return {
+      message,
+      sender: nameOf(message.senderId),
+      seed: `${assistant?.id}:${assistant?.name}`,
+      replyCount: replyCounts.get(message.id) ?? 0,
+      reactions: message.reactions,
+      onReact: (emoji: string) => {
+        void toggleReaction(message.id, emoji);
+      },
+      reply: threadId ? undefined : () => setThread(message.id),
+      onQuote: canQuote(message, conversation) ? () => setQuoteId(message.id) : undefined,
+      onOpenProcess: turn ? () => onOpenTurn(turn) : undefined,
+      provenance: lineage?.hasLineage ? lineage.provenance : undefined,
+      workspaceCwd: ws.workspaceCwd,
+      onPressFileRef: (ref: ParsedFileRef) => {
+        setPreviewTarget({ ref, ...ws });
+      },
+      saved: isMessageSaved(message),
+      forwardedFrom: message.forwardedFrom,
+      onToggleSave: () => {
+        void toggleSaveMessage(message);
+      },
+      onForward: () => setForwardModalMessage(message),
+      onPromoteToTask: () => setPromoteTaskMessage(message),
+      onSavePlaybook: resolveSavePlaybookAction(
+        message,
+        lineage,
+        state.takeovers,
+        setPlaybookModalSource,
+      ),
+      quote: message.quoteOf
+        ? {
+            sender: original ? nameOf(original.senderId) : "Quoted message",
+            text: original ? quotePreview(original.content) : "No longer available",
+          }
+        : undefined,
+      routineBadge: formatMessageRoutineBadge(message, turn),
+      note: message.kind === "system" ? noteLabel(message) : undefined,
+      event,
+      taskCard,
+    };
+  });
+}
+
+async function readPreviewFileWithAgentFallback(
+  targetMachineId: string,
+  filePath: string,
+  previewTarget: PreviewTargetState | null,
+) {
+  let resolvedCwd = previewTarget?.workspaceCwd;
+  if (!resolvedCwd && previewTarget?.agentId) {
+    const host = getHostRuntimeStore().getClient(targetMachineId);
+    const fetched = await host?.fetchAgent({ agentId: previewTarget.agentId }).catch(() => null);
+    if (fetched?.agent.cwd) {
+      resolvedCwd = fetched.agent.cwd;
+    }
+  }
+  return readWorkspaceFileForPreview(targetMachineId, filePath, resolvedCwd);
+}
+
+function openPreviewTargetInStudio(
+  ref: ParsedFileRef,
+  previewTarget: PreviewTargetState | null,
+): void {
+  if (!previewTarget?.machineId) return;
+  const targetMachineId = previewTarget.machineId;
+  if (previewTarget.workspaceId) {
+    openFileRefInStudio({
+      ref,
+      serverId: targetMachineId,
+      workspaceId: previewTarget.workspaceId,
+      workspaceName: previewTarget.workspaceName ?? "Workspace",
+      workspaceCwd: previewTarget.workspaceCwd,
+      group: previewTarget.group,
+    });
+    return;
+  }
+  if (!previewTarget.agentId) return;
+  const host = getHostRuntimeStore().getClient(targetMachineId);
+  void host
+    ?.fetchAgent({ agentId: previewTarget.agentId })
+    .then((result) => {
+      if (!result?.agent.workspaceId) return null;
+      openFileRefInStudio({
+        ref,
+        serverId: targetMachineId,
+        workspaceId: result.agent.workspaceId,
+        workspaceName: previewTarget.workspaceName ?? "Workspace",
+        workspaceCwd: result.agent.cwd ?? previewTarget.workspaceCwd,
+        group: previewTarget.group,
+      });
+      return null;
+    })
+    .catch(() => null);
+}
+
+function resolvePromoteDefaultDirectory(
+  promoteTaskMessage: Message,
+  conversation: PavraData["state"]["conversations"][number],
+  assistantsById: ReadonlyMap<string, Assistant>,
+): string | undefined {
+  return (
+    resolveAssistantDefaultDir(assistantsById.get(promoteTaskMessage.senderId)) ??
+    resolveAssistantDefaultDir(assistantsById.get(conversation.members[0] ?? ""))
+  );
+}
+
+function ConversationActionModals({
+  data,
+  chatId,
+  conversation,
+  assistantsById,
+  wiring,
+  activeTakeover,
+  onCloseTakeover,
+  previewTarget,
+  setPreviewTarget,
+  forwardModalMessage,
+  setForwardModalMessage,
+  promoteTaskMessage,
+  setPromoteTaskMessage,
+  playbookModalSource,
+  setPlaybookModalSource,
+}: {
+  data: PavraData;
+  chatId: string;
+  conversation: PavraData["state"]["conversations"][number] | undefined;
+  assistantsById: ReadonlyMap<string, Assistant>;
+  wiring: TaskWiring;
+  activeTakeover: { takeover: Takeover; assistantName: string } | null;
+  onCloseTakeover(): void;
+  previewTarget: PreviewTargetState | null;
+  setPreviewTarget(target: PreviewTargetState | null): void;
+  forwardModalMessage: Message | null;
+  setForwardModalMessage(message: Message | null): void;
+  promoteTaskMessage: Message | null;
+  setPromoteTaskMessage(message: Message | null): void;
+  playbookModalSource: PlaybookModalSourceState | null;
+  setPlaybookModalSource(source: PlaybookModalSourceState | null): void;
+}) {
+  const handleClosePreview = useCallback(() => setPreviewTarget(null), [setPreviewTarget]);
+  const handleReadFile = useCallback(
+    (targetMachineId: string, filePath: string) =>
+      readPreviewFileWithAgentFallback(targetMachineId, filePath, previewTarget),
+    [previewTarget],
+  );
+  const handleOpenInStudio = useCallback(
+    (ref: ParsedFileRef) => openPreviewTargetInStudio(ref, previewTarget),
+    [previewTarget],
+  );
+  const handleForwarded = useCallback(
+    (targetConversationId: string) => {
+      if (targetConversationId !== chatId) {
+        usePavraView.getState().selectChat(targetConversationId);
+        usePavraView.getState().setThread(null);
+      }
+    },
+    [chatId],
+  );
+  const handleCloseForward = useCallback(
+    () => setForwardModalMessage(null),
+    [setForwardModalMessage],
+  );
+  const handleTaskCreated = useCallback(
+    (createdTaskId: string) => {
+      wiring.openThread(createdTaskId);
+    },
+    [wiring],
+  );
+  const handleClosePromoteTask = useCallback(
+    () => setPromoteTaskMessage(null),
+    [setPromoteTaskMessage],
+  );
+  const handleClosePlaybook = useCallback(
+    () => setPlaybookModalSource(null),
+    [setPlaybookModalSource],
+  );
+
+  return (
+    <>
       {activeTakeover ? (
         <BrowserTakeoverModal
           takeover={activeTakeover.takeover}
           assistantName={activeTakeover.assistantName}
           data={data}
-          onClose={closeTakeoverModal}
+          onClose={onCloseTakeover}
+        />
+      ) : null}
+      <FileRefPreviewModal
+        fileRef={previewTarget?.ref ?? null}
+        machineId={previewTarget?.machineId}
+        workspaceCwd={previewTarget?.workspaceCwd}
+        onClose={handleClosePreview}
+        onReadFile={handleReadFile}
+        onOpenInStudio={handleOpenInStudio}
+      />
+      {forwardModalMessage ? (
+        <ForwardMessageModal
+          message={forwardModalMessage}
+          conversations={data.state.conversations}
+          assistants={data.state.assistants}
+          data={data}
+          onForwarded={handleForwarded}
+          onClose={handleCloseForward}
+        />
+      ) : null}
+      {promoteTaskMessage && conversation ? (
+        <PromoteToTaskModal
+          message={promoteTaskMessage}
+          conversation={conversation}
+          assistants={data.state.assistants}
+          defaultDirectory={resolvePromoteDefaultDirectory(
+            promoteTaskMessage,
+            conversation,
+            assistantsById,
+          )}
+          data={data}
+          onTaskCreated={handleTaskCreated}
+          onClose={handleClosePromoteTask}
+        />
+      ) : null}
+      {playbookModalSource ? (
+        <SavePlaybookModal
+          message={playbookModalSource.message}
+          takeover={playbookModalSource.takeover}
+          takeoverNote={playbookModalSource.takeoverNote}
+          conversation={conversation ?? null}
+          assistants={data.state.assistants}
+          data={data}
+          onClose={handleClosePlaybook}
         />
       ) : null}
     </>

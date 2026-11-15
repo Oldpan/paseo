@@ -781,6 +781,7 @@ export function PavraScreen() {
                   onOpenTurn={openTurn}
                   onOpenStudio={openChatStudio}
                   onEditAssistant={editAssistant}
+                  onOpenAssistant={openAssistantChat}
                   onSidebar={compact ? showSidebar : undefined}
                 />
               </RetainedPanel>
@@ -815,6 +816,7 @@ export function PavraScreen() {
                 compact={compact}
                 onClose={closeProcessDrawer}
                 onOpenStudio={openTurnInStudio}
+                onSelectTask={openTask}
               />
               {showCoordinatorModal ? (
                 <CoordinatorPickerModal

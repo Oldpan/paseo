@@ -13,6 +13,7 @@ import {
   createConversation,
   sendMessage,
   reactToMessage,
+  saveMessage,
   cancelTurn,
   startTask,
   cancelTask,
@@ -165,6 +166,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(createConversation, (input) => chat().createConversation(input));
   server.handle(sendMessage, (input) => chat().send(input));
   server.handle(reactToMessage, (input) => chat().reactToMessage(input));
+  server.handle(saveMessage, (input) => chat().saveMessage(input));
   server.handle(cancelTurn, (input) => chat().cancelTurn(input));
   server.handle(startTask, (input) => chat().task(input));
   server.handle(cancelTask, (input) => chat().cancel(input.id));

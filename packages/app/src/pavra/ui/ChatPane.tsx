@@ -3,6 +3,7 @@ import { FlatList, ScrollView, Text, View, type ListRenderItemInfo } from "react
 import { isNoteMessage } from "../model";
 import { PavraInput } from "./FormChrome";
 import type {
+  ForwardedFrom,
   Message,
   Task,
   Turn,
@@ -11,8 +12,10 @@ import type {
   Routine,
   RoutineCadence,
 } from "../../../../../extensions/pavra/shared/contracts";
+import type { TurnProvenanceSummary } from "../peer-activity";
 import { formatRoutineCadence, formatRoutineOutcome, routineKindLabel } from "../routines";
 import { Composer, type ComposerSendExtras } from "./Composer";
+import type { ParsedFileRef } from "./fileRefParser";
 import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
 import { PendingQueueBar, type PendingQueueItem } from "./PendingQueueBar";
@@ -33,6 +36,24 @@ export interface MessageRow {
   onQuote?: () => void;
   /** Opens the process drawer for the turn that produced this assistant message. */
   onOpenProcess?: () => void;
+  /** Compact collaboration & evidence lineage summary for assistant messages. */
+  provenance?: TurnProvenanceSummary;
+  /** Workspace root directory used to resolve relative file refs in assistant messages. */
+  workspaceCwd?: string;
+  /** Opens the file-ref preview modal when a file path chip in the message is clicked. */
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  /** Forwarded message provenance pill metadata. */
+  forwardedFrom?: ForwardedFrom;
+  /** Whether this message is bookmarked/saved. */
+  saved?: boolean;
+  /** Toggles saved/bookmarked status on this message. */
+  onToggleSave?: () => void;
+  /** Opens ForwardMessageModal for this message. */
+  onForward?: () => void;
+  /** Opens PromoteToTaskModal for this message. */
+  onPromoteToTask?: () => void;
+  /** Opens SavePlaybookModal for this assistant message. */
+  onSavePlaybook?: () => void;
   /** The message this one quotes, resolved to a sender name and a short text. */
   quote?: { sender: string; text: string };
   /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
@@ -83,6 +104,7 @@ export function ChatPane({
   onRemoveQueued,
   onStop,
   cancelling = false,
+  onPressFileRef,
 }: {
   rows: MessageRow[];
   turns: LiveTurn[];
@@ -109,6 +131,7 @@ export function ChatPane({
   onRemoveQueued?(id: string): void;
   onStop?(): void;
   cancelling?: boolean;
+  onPressFileRef?(ref: ParsedFileRef, row: MessageRow): void;
 }) {
   const { palette: t } = useTheme();
   const list = useRef<FlatList<MessageRow>>(null);
@@ -121,45 +144,59 @@ export function ChatPane({
     if (atBottom.current) list.current?.scrollToEnd({ animated: false });
   }, []);
   const keyExtractor = useCallback((row: MessageRow) => row.message.id, []);
-  const renderRow = useCallback(({ item: row }: ListRenderItemInfo<MessageRow>) => {
-    if (row.event)
+  const renderRow = useCallback(
+    ({ item: row }: ListRenderItemInfo<MessageRow>) => {
+      if (row.event)
+        return (
+          <TaskEventRow
+            id={row.message.id}
+            note={row.event.note}
+            onOpen={row.event.onOpen}
+            respond={row.event.respond}
+          />
+        );
+      if (isNoteMessage(row.message))
+        return <NoteRow id={row.message.id} content={row.note ?? row.message.content} />;
+      if (row.taskCard?.inThread)
+        return (
+          <View testID={`message-${row.message.id}`} style={{ padding: 4 }}>
+            <TaskCard {...row.taskCard} />
+          </View>
+        );
       return (
-        <TaskEventRow
+        <ChatMessage
           id={row.message.id}
-          note={row.event.note}
-          onOpen={row.event.onOpen}
-          respond={row.event.respond}
-        />
+          content={row.message.content}
+          sender={row.sender}
+          seed={row.seed}
+          user={row.message.senderId === "user"}
+          createdAt={row.message.createdAt}
+          replyCount={row.replyCount}
+          reactions={row.reactions}
+          onReact={row.onReact}
+          onReply={row.reply}
+          onQuote={row.onQuote}
+          onOpenProcess={row.onOpenProcess}
+          onToggleSave={row.onToggleSave}
+          onForward={row.onForward}
+          onPromoteToTask={row.onPromoteToTask}
+          onSavePlaybook={row.onSavePlaybook}
+          saved={row.saved}
+          forwardedFrom={row.forwardedFrom ?? row.message.forwardedFrom}
+          provenance={row.provenance}
+          workspaceCwd={row.workspaceCwd}
+          onPressFileRef={
+            row.onPressFileRef ?? (onPressFileRef ? (ref) => onPressFileRef(ref, row) : undefined)
+          }
+          quote={row.quote}
+          routineBadge={row.routineBadge}
+        >
+          {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
+        </ChatMessage>
       );
-    if (isNoteMessage(row.message))
-      return <NoteRow id={row.message.id} content={row.note ?? row.message.content} />;
-    if (row.taskCard?.inThread)
-      return (
-        <View testID={`message-${row.message.id}`} style={{ padding: 4 }}>
-          <TaskCard {...row.taskCard} />
-        </View>
-      );
-    return (
-      <ChatMessage
-        id={row.message.id}
-        content={row.message.content}
-        sender={row.sender}
-        seed={row.seed}
-        user={row.message.senderId === "user"}
-        createdAt={row.message.createdAt}
-        replyCount={row.replyCount}
-        reactions={row.reactions}
-        onReact={row.onReact}
-        onReply={row.reply}
-        onQuote={row.onQuote}
-        onOpenProcess={row.onOpenProcess}
-        quote={row.quote}
-        routineBadge={row.routineBadge}
-      >
-        {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
-      </ChatMessage>
-    );
-  }, []);
+    },
+    [onPressFileRef],
+  );
   const footer = useMemo(
     () =>
       turns.length > 0 || peers || takeovers ? (

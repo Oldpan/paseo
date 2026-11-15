@@ -3,13 +3,21 @@ import { isWeb } from "@/constants/platform";
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
 import { useRef, useEffect, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
+import type { ForwardedFrom } from "../../../../../extensions/pavra/shared/contracts";
+import { formatForwardedBadge } from "../chat-actions";
 import { AgentAvatar, StatusDot, UserAvatar } from "./avatars";
+import type { ParsedFileRef } from "./fileRefParser";
+import { GlobalSearchButton } from "./GlobalSearchModal";
 import {
   ActivityIcon,
+  BookmarkIcon,
   BoxesIcon,
+  BriefcaseIcon,
   CheckIcon,
   ChatIcon,
   CopyIcon,
+  FileTextIcon,
+  ForwardIcon,
   MenuIcon,
   MoreIcon,
   CloseIcon,
@@ -20,6 +28,7 @@ import {
 } from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { MessageSwipeReveal } from "./MessageSwipe";
+import { ProvenanceChip, type TurnProvenanceSummary } from "./ProvenanceChip";
 import { copyText } from "./clipboard";
 import { formatLiveTurnStatus } from "../live-turn";
 import { usePavraApkUpdaterStore } from "../use-pavra-apk-updater";
@@ -111,6 +120,7 @@ export function ChatHeader({
   onSidebar,
   onEdit,
   onOpenStudio,
+  onOpenSearch,
 }: {
   label: string;
   seed: string;
@@ -122,6 +132,7 @@ export function ChatHeader({
   onSidebar?: () => void;
   onEdit?: () => void;
   onOpenStudio?: () => void;
+  onOpenSearch?: () => void;
 }) {
   const { palette: t, name } = useTheme();
   const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
@@ -265,7 +276,7 @@ export function ChatHeader({
               </Pressable>
             );
           })}
-          {onOpenStudio || onEdit ? (
+          {onOpenSearch || onOpenStudio || onEdit ? (
             <View
               style={{
                 width: 1,
@@ -275,6 +286,7 @@ export function ChatHeader({
               }}
             />
           ) : null}
+          {onOpenSearch ? <GlobalSearchButton onPress={onOpenSearch} /> : null}
           {onOpenStudio ? <StudioButton label="Open in Studio" onPress={onOpenStudio} /> : null}
           {onEdit ? (
             <HeaderIconButton label={`Edit ${label}`} onPress={onEdit} size={32}>
@@ -405,22 +417,32 @@ function MessageSideActions({
   copied,
   content,
   user,
+  saved,
   onCopied,
   onReact,
   onQuote,
   onReply,
   onOpenProcess,
+  onToggleSave,
+  onForward,
+  onPromoteToTask,
+  onSavePlaybook,
   onToggleMenu,
 }: {
   visible: boolean;
   copied: boolean;
   content: string;
   user: boolean;
+  saved?: boolean;
   onCopied(copied: boolean): void;
   onReact?: (emoji: string) => void;
   onQuote?: () => void;
   onReply?: () => void;
   onOpenProcess?: () => void;
+  onToggleSave?: () => void;
+  onForward?: () => void;
+  onPromoteToTask?: () => void;
+  onSavePlaybook?: () => void;
   onToggleMenu(): void;
 }) {
   const { palette: t } = useTheme();
@@ -465,6 +487,28 @@ function MessageSideActions({
           {(color) => <QuoteIcon color={color} size={14} />}
         </SideActionIcon>
       ) : null}
+      {onToggleSave ? (
+        <SideActionIcon label={saved ? "Remove bookmark" : "Save message"} onPress={onToggleSave}>
+          {(color) => (
+            <BookmarkIcon color={saved ? t.brandAccent : color} size={14} filled={saved} />
+          )}
+        </SideActionIcon>
+      ) : null}
+      {onForward ? (
+        <SideActionIcon label="Forward message" onPress={onForward}>
+          {(color) => <ForwardIcon color={color} size={14} />}
+        </SideActionIcon>
+      ) : null}
+      {onPromoteToTask ? (
+        <SideActionIcon label="Promote to task" onPress={onPromoteToTask}>
+          {(color) => <BriefcaseIcon color={color} size={14} />}
+        </SideActionIcon>
+      ) : null}
+      {!user && onSavePlaybook ? (
+        <SideActionIcon label="Save as playbook" onPress={onSavePlaybook}>
+          {(color) => <FileTextIcon color={color} size={14} />}
+        </SideActionIcon>
+      ) : null}
       {!user && onOpenProcess ? (
         <SideActionIcon label="View process" onPress={onOpenProcess}>
           {(color) => <ActivityIcon color={color} size={14} />}
@@ -483,11 +527,16 @@ export function MessageContextMenu({
   copied,
   content,
   reactions,
+  saved,
   onCopied,
   onReact,
   onQuote,
   onReply,
   onOpenProcess,
+  onToggleSave,
+  onForward,
+  onPromoteToTask,
+  onSavePlaybook,
   onClose,
 }: {
   id: string;
@@ -495,11 +544,16 @@ export function MessageContextMenu({
   copied: boolean;
   content: string;
   reactions?: Record<string, string[]>;
+  saved?: boolean;
   onCopied(copied: boolean): void;
   onReact?: (emoji: string) => void;
   onQuote?: () => void;
   onReply?: () => void;
   onOpenProcess?: () => void;
+  onToggleSave?: () => void;
+  onForward?: () => void;
+  onPromoteToTask?: () => void;
+  onSavePlaybook?: () => void;
   onClose(): void;
 }) {
   const { palette: t, name } = useTheme();
@@ -624,6 +678,68 @@ export function MessageContextMenu({
           <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Quote message</Text>
         </Pressable>
       ) : null}
+      {onToggleSave ? (
+        <Pressable
+          testID={`message-save-${id}`}
+          role="menuitem"
+          accessibilityLabel={saved ? "Remove bookmark" : "Save message"}
+          onPress={() => {
+            onClose();
+            onToggleSave();
+          }}
+          style={itemStyle}
+        >
+          <BookmarkIcon color={saved ? t.brandAccent : t.textSecondary} size={14} filled={saved} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>
+            {saved ? "Remove bookmark" : "Save message"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {onForward ? (
+        <Pressable
+          testID={`message-forward-${id}`}
+          role="menuitem"
+          accessibilityLabel="Forward message"
+          onPress={() => {
+            onClose();
+            onForward();
+          }}
+          style={itemStyle}
+        >
+          <ForwardIcon color={t.textSecondary} size={14} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Forward message</Text>
+        </Pressable>
+      ) : null}
+      {onPromoteToTask ? (
+        <Pressable
+          testID={`message-promote-task-${id}`}
+          role="menuitem"
+          accessibilityLabel="Promote to task"
+          onPress={() => {
+            onClose();
+            onPromoteToTask();
+          }}
+          style={itemStyle}
+        >
+          <BriefcaseIcon color={t.textSecondary} size={14} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Promote to task</Text>
+        </Pressable>
+      ) : null}
+      {!user && onSavePlaybook ? (
+        <Pressable
+          testID={`message-save-playbook-${id}`}
+          role="menuitem"
+          accessibilityLabel="Save as playbook"
+          onPress={() => {
+            onClose();
+            onSavePlaybook();
+          }}
+          style={itemStyle}
+        >
+          <FileTextIcon color={t.textSecondary} size={14} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Save as playbook</Text>
+        </Pressable>
+      ) : null}
       {!user && onOpenProcess ? (
         <Pressable
           role="menuitem"
@@ -727,6 +843,92 @@ function MessageFooterChips({ replyCount, onReply }: { replyCount: number; onRep
   );
 }
 
+function MessageHeaderRow({
+  id,
+  sender,
+  alignment,
+  routineBadge,
+  forwardedLabel,
+  saved,
+}: {
+  id: string;
+  sender: string;
+  alignment: "flex-start" | "flex-end";
+  routineBadge?: string;
+  forwardedLabel: string | null;
+  saved?: boolean;
+}) {
+  const { palette: t } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        flexWrap: "wrap",
+        alignItems: "center",
+        justifyContent: alignment,
+        gap: 6,
+        marginBottom: 4,
+        width: "100%",
+      }}
+    >
+      <Text style={type(t.textPrimary, 15, { fontWeight: "600", flexShrink: 1 })}>{sender}</Text>
+      {routineBadge ? (
+        <View
+          testID={`routine-badge-${id}`}
+          style={{
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: t.surfaceElevated,
+            paddingHorizontal: 7,
+            paddingVertical: 1,
+          }}
+        >
+          <Text style={type(t.textSecondary, 10, { fontWeight: "600" })}>{routineBadge}</Text>
+        </View>
+      ) : null}
+      {forwardedLabel ? (
+        <View
+          testID={`forwarded-badge-${id}`}
+          style={{
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: t.surfaceElevated,
+            paddingHorizontal: 7,
+            paddingVertical: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <ForwardIcon color={t.textSecondary} size={10} />
+          <Text style={type(t.textSecondary, 10, { fontWeight: "600" })}>{forwardedLabel}</Text>
+        </View>
+      ) : null}
+      {saved ? (
+        <View
+          testID={`saved-badge-${id}`}
+          style={{
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: t.brandAccentSoft,
+            paddingHorizontal: 6,
+            paddingVertical: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 3,
+          }}
+        >
+          <BookmarkIcon color={t.textPrimary} size={10} filled />
+          <Text style={type(t.textPrimary, 10, { fontWeight: "700" })}>Saved</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export function ChatMessage({
   id,
   content,
@@ -740,6 +942,15 @@ export function ChatMessage({
   onReply,
   onQuote,
   onOpenProcess,
+  onToggleSave,
+  onForward,
+  onPromoteToTask,
+  onSavePlaybook,
+  saved,
+  forwardedFrom,
+  provenance,
+  workspaceCwd,
+  onPressFileRef,
   quote,
   routineBadge,
   children,
@@ -758,6 +969,15 @@ export function ChatMessage({
   onQuote?: () => void;
   /** Opens the process drawer for the turn that produced this assistant message. */
   onOpenProcess?: () => void;
+  onToggleSave?: () => void;
+  onForward?: () => void;
+  onPromoteToTask?: () => void;
+  onSavePlaybook?: () => void;
+  saved?: boolean;
+  forwardedFrom?: ForwardedFrom;
+  provenance?: TurnProvenanceSummary;
+  workspaceCwd?: string;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
   /** The message this one answers, shown as a compact block above its text. */
   quote?: { sender: string; text: string };
   /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
@@ -785,6 +1005,7 @@ export function ChatMessage({
   );
 
   const alignment = user ? "flex-end" : "flex-start";
+  const forwardedLabel = formatForwardedBadge(forwardedFrom);
   const avatar = user ? (
     <UserAvatar label="You" size={32} theme={t} name={name} />
   ) : (
@@ -804,11 +1025,16 @@ export function ChatMessage({
       copied={copied}
       content={content}
       user={user}
+      saved={saved}
       onCopied={setCopied}
       onReact={onReact}
       onQuote={onQuote}
       onReply={onReply}
       onOpenProcess={onOpenProcess}
+      onToggleSave={onToggleSave}
+      onForward={onForward}
+      onPromoteToTask={onPromoteToTask}
+      onSavePlaybook={onSavePlaybook}
       onToggleMenu={() => setMenuOpen((prev) => !prev)}
     />
   );
@@ -838,36 +1064,14 @@ export function ChatMessage({
             alignItems: alignment,
           }}
         >
-          <View
-            style={{
-              flexDirection: "row",
-              flexWrap: "wrap",
-              alignItems: "center",
-              justifyContent: alignment,
-              gap: 6,
-              marginBottom: 4,
-              width: "100%",
-            }}
-          >
-            <Text style={type(t.textPrimary, 15, { fontWeight: "600", flexShrink: 1 })}>
-              {sender}
-            </Text>
-            {routineBadge ? (
-              <View
-                testID={`routine-badge-${id}`}
-                style={{
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor: t.surfaceElevated,
-                  paddingHorizontal: 7,
-                  paddingVertical: 1,
-                }}
-              >
-                <Text style={type(t.textSecondary, 10, { fontWeight: "600" })}>{routineBadge}</Text>
-              </View>
-            ) : null}
-          </View>
+          <MessageHeaderRow
+            id={id}
+            sender={sender}
+            alignment={alignment}
+            routineBadge={routineBadge}
+            forwardedLabel={forwardedLabel}
+            saved={saved}
+          />
           <View
             style={{
               flexDirection: "row",
@@ -912,12 +1116,26 @@ export function ChatMessage({
                   bubbleShadow(t, name),
                 ]}
               >
-                <MessageBody id={id} content={content} user={user} quote={quote} />
+                <MessageBody
+                  id={id}
+                  content={content}
+                  user={user}
+                  quote={quote}
+                  workspaceCwd={workspaceCwd}
+                  onPressFileRef={onPressFileRef}
+                />
               </View>
             </Pressable>
             {!user ? sideActions : null}
           </View>
           <MessageReactionPills id={id} user={user} reactions={reactions} onReact={onReact} />
+          {!user && provenance ? (
+            <ProvenanceChip
+              testID={`provenance-chip-${id}`}
+              provenance={provenance}
+              onPress={onOpenProcess}
+            />
+          ) : null}
           {menuOpen ? (
             <MessageContextMenu
               id={id}
@@ -925,11 +1143,16 @@ export function ChatMessage({
               copied={copied}
               content={content}
               reactions={reactions}
+              saved={saved}
               onCopied={setCopied}
               onReact={onReact}
               onQuote={onQuote}
               onReply={onReply}
               onOpenProcess={onOpenProcess}
+              onToggleSave={onToggleSave}
+              onForward={onForward}
+              onPromoteToTask={onPromoteToTask}
+              onSavePlaybook={onSavePlaybook}
               onClose={() => setMenuOpen(false)}
             />
           ) : null}
@@ -947,11 +1170,15 @@ function MessageBody({
   content,
   user,
   quote,
+  workspaceCwd,
+  onPressFileRef,
 }: {
   id: string;
   content: string;
   user: boolean;
   quote?: { sender: string; text: string };
+  workspaceCwd?: string;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
 }) {
   const { palette: t } = useTheme();
   return (
@@ -962,7 +1189,13 @@ function MessageBody({
           {content}
         </Text>
       ) : (
-        <MessageMarkdown content={content} color={t.textPrimary} narrow={false} />
+        <MessageMarkdown
+          content={content}
+          color={t.textPrimary}
+          narrow={false}
+          workspaceCwd={workspaceCwd}
+          onPressFileRef={onPressFileRef}
+        />
       )}
     </>
   );
