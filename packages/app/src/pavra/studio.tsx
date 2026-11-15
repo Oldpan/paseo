@@ -10,7 +10,7 @@ import { getHostRuntimeStore, useHosts, useHostRuntimeIsConnected } from "@/runt
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { usePavraView } from "./store";
 import { StudioBar, WorkspaceChrome } from "./ui/StudioChrome";
-import { studioKey, type StudioColumn } from "./model";
+import { resolveActiveStudioKey, studioKey, type StudioColumn } from "./model";
 import type { Palette } from "./palette";
 import type { PavraData } from "./data";
 import { Collaboration } from "./collaboration";
@@ -60,6 +60,7 @@ export function Studio({
   const closeCollaboration = useCallback(() => setCollaborating(false), []);
   const columns = usePavraView((state) => state.columns);
   const activeKey = usePavraView((state) => state.activeColumn);
+  const resolvedActiveKey = resolveActiveStudioKey(columns, activeKey);
   const compact = useIsCompactFormFactor();
   const frame = useMemo(
     () => ({ flex: 1, minHeight: 0, backgroundColor: palette.surfacePrimary }),
@@ -67,12 +68,33 @@ export function Studio({
   );
   const focus = useCallback((key: string) => usePavraView.getState().focusColumn(key), []);
   const close = useCallback((key: string) => usePavraView.getState().removeColumn(key), []);
-  const activeGroup = columns.find((column) => studioKey(column) === activeKey)?.group ?? "General";
+  const activeGroup =
+    columns.find((column) => studioKey(column) === resolvedActiveKey)?.group ?? "General";
+  const columnViews = columns.map((column) => {
+    const selected = studioKey(column) === resolvedActiveKey;
+    return (
+      <StudioWorkspace
+        key={studioKey(column)}
+        column={column}
+        palette={palette}
+        compact={compact}
+        selected={selected}
+        visible={active && (compact ? selected : column.group === activeGroup)}
+      />
+    );
+  });
+  const columnsContainer = compact ? (
+    <View style={FILL}>{columnViews}</View>
+  ) : (
+    <ScrollView horizontal style={FILL} contentContainerStyle={SCROLL_CONTENT}>
+      <View style={HORIZONTAL}>{columnViews}</View>
+    </ScrollView>
+  );
   return (
     <View style={frame}>
       <StudioBar
         columns={columns}
-        active={activeKey}
+        active={resolvedActiveKey}
         onFocus={focus}
         onClose={close}
         onAdd={onAdd}
@@ -81,23 +103,7 @@ export function Studio({
       />
       <View style={HORIZONTAL}>
         {columns.length ? (
-          <ScrollView horizontal style={FILL} contentContainerStyle={SCROLL_CONTENT}>
-            <View style={HORIZONTAL}>
-              {columns.map((column) => (
-                <StudioWorkspace
-                  key={studioKey(column)}
-                  column={column}
-                  palette={palette}
-                  compact={compact}
-                  selected={studioKey(column) === activeKey}
-                  visible={
-                    active &&
-                    (compact ? studioKey(column) === activeKey : column.group === activeGroup)
-                  }
-                />
-              ))}
-            </View>
-          </ScrollView>
+          columnsContainer
         ) : (
           <StudioHomePanel
             group={group}

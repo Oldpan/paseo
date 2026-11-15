@@ -78,6 +78,17 @@ export function addStudioColumn(columns: StudioColumn[], column: StudioColumn): 
   return next;
 }
 
+export function resolveActiveStudioKey(
+  columns: readonly StudioColumn[],
+  activeKey: string | null,
+): string | null {
+  if (!columns.length) return null;
+  if (activeKey && columns.some((column) => studioKey(column) === activeKey)) {
+    return activeKey;
+  }
+  return studioKey(columns[0]!);
+}
+
 /**
  * Ledger order. Rows written before the ledger assigned `seq` have none; they predate every row
  * that does, so they come first by `createdAt`, then the rest by `seq`. A strict total order
