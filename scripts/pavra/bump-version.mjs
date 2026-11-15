@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const versionFilePath = path.join(root, "packages/app/src/pavra/version.json");
+const extensionPkgPath = path.join(root, "extensions/pavra/package.json");
 
 function parseArgs(argv) {
   let mode = "";
@@ -57,14 +58,21 @@ const currentVersion = String(currentData.version ?? "0.15.3").trim();
 const nextVersion = bumpSemver(currentVersion, mode);
 
 writeFileSync(versionFilePath, `${JSON.stringify({ version: nextVersion }, null, 2)}\n`, "utf8");
+const extensionPkg = JSON.parse(readFileSync(extensionPkgPath, "utf8"));
+extensionPkg.version = nextVersion;
+writeFileSync(extensionPkgPath, `${JSON.stringify(extensionPkg, null, 2)}\n`, "utf8");
 console.log(`Bumped Pavra version: ${currentVersion} -> ${nextVersion}`);
 
 if (commitAndTag) {
   const tagName = `pavra-v${nextVersion}`;
-  execFileSync("git", ["add", "packages/app/src/pavra/version.json"], {
-    cwd: root,
-    stdio: "inherit",
-  });
+  execFileSync(
+    "git",
+    ["add", "packages/app/src/pavra/version.json", "extensions/pavra/package.json"],
+    {
+      cwd: root,
+      stdio: "inherit",
+    },
+  );
   execFileSync("git", ["commit", "-m", `chore(pavra): release v${nextVersion}`], {
     cwd: root,
     stdio: "inherit",

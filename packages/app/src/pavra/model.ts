@@ -1,7 +1,7 @@
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
 import type {
-  ChatState,
+  ChatStatePayload as ChatState,
   MachineInfo,
   Message,
 } from "../../../../extensions/pavra/shared/contracts";
@@ -35,9 +35,11 @@ export function mergeChatState(previous: ChatState, incoming: ChatState): ChatSt
     for (const item of right) entries.set(item.id, item);
     return [...entries.values()];
   };
+  const coordinatorVersion = incoming.coordinatorVersion ?? previous.coordinatorVersion;
   return {
     generation: incoming.generation,
     cursor: incoming.cursor,
+    ...(coordinatorVersion ? { coordinatorVersion } : {}),
     assistants: merge(previous.assistants, incoming.assistants),
     conversations: merge(previous.conversations, incoming.conversations),
     messages: merge(previous.messages, incoming.messages),

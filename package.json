@@ -139,6 +139,7 @@
     "pavra:release:patch": "node scripts/pavra/bump-version.mjs --mode patch --commit-and-tag --push",
     "pavra:release:minor": "node scripts/pavra/bump-version.mjs --mode minor --commit-and-tag --push",
     "pavra:release:major": "node scripts/pavra/bump-version.mjs --mode major --commit-and-tag --push",
+    "pavra:rollback": "node scripts/pavra/rollback-release.mjs",
     "pavra:build:web": "cross-env EXPO_PUBLIC_PAVRA=true APP_VARIANT=pavra npm run build:web --workspace=@getpaseo/app",
     "pavra:build:daemon-web-ui": "cross-env EXPO_PUBLIC_PAVRA=true APP_VARIANT=pavra node scripts/build-daemon-web-ui.mjs",
     "pavra:build:desktop": "cross-env PASEO_WEB_PLATFORM=electron npm run pavra:build:web && cross-env PASEO_PAVRA_BUILD=1 npm run build:pavra --workspace=@getpaseo/desktop"

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
@@ -75,10 +76,46 @@ import { hostDirectory } from "./server/member/hosts";
 import { MemberRelay } from "./server/member/relay";
 
 const STARTING = "Pavra Chat is starting. Try again in a moment.";
+const DEFAULT_COORDINATOR_VERSION = "0.16.0";
+
+export function readCoordinatorVersion(paseoHome: string): string {
+  const candidates = [
+    path.resolve(process.cwd(), "extensions/pavra/package.json"),
+    path.resolve(paseoHome, "../../../extensions/pavra/package.json"),
+    path.resolve(paseoHome, "../../extensions/pavra/package.json"),
+  ];
+  try {
+    const configPath = path.join(paseoHome, "config.json");
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+        plugins?: { pavra?: { path?: unknown } };
+      };
+      const pluginPath = config.plugins?.pavra?.path;
+      if (typeof pluginPath === "string" && pluginPath.trim().length > 0) {
+        candidates.unshift(path.resolve(pluginPath.trim(), "package.json"));
+      }
+    }
+  } catch {
+    // Fall back to default candidate locations.
+  }
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue;
+      const pkg = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown };
+      if (typeof pkg.version === "string" && pkg.version.trim().length > 0) {
+        return pkg.version.trim();
+      }
+    } catch {
+      // Try next candidate.
+    }
+  }
+  return DEFAULT_COORDINATOR_VERSION;
+}
 
 export default function contribute(server: PluginServerContext) {
   if (!process.env.PASEO_HOME) throw new Error("Pavra requires an explicit PASEO_HOME.");
   const home = path.join(process.env.PASEO_HOME, "pavra");
+  const coordinatorVersion = readCoordinatorVersion(process.env.PASEO_HOME);
   // Assistants act on their own through agent tools, which need a daemon that offers them.
   if (
     typeof server.registerAgentTool !== "function" ||
@@ -113,7 +150,10 @@ export default function contribute(server: PluginServerContext) {
     throw new Error(STARTING);
   };
 
-  server.handle(readState, (input) => chat().readState(input));
+  server.handle(readState, async (input) => ({
+    ...(await chat().readState(input)),
+    coordinatorVersion,
+  }));
   server.handle(saveAssistant, (input) => chat().saveAssistant(input));
   server.handle(readAssistantMemory, (input) => chat().readAssistantMemory(input));
   server.handle(writeAssistantMemory, (input) => chat().writeAssistantMemory(input));

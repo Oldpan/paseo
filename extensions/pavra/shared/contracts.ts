@@ -316,6 +316,9 @@ export const stateSchema = z.object({
   routines: z.array(routineSchema).optional(),
   takeovers: z.array(takeoverSchema).optional(),
 });
+export const readStateOutputSchema = stateSchema.extend({
+  coordinatorVersion: z.string().optional(),
+});
 export type Studio = z.infer<typeof studioSchema>;
 export type PeerMessage = z.infer<typeof peerMessageSchema>;
 export type Peer = z.infer<typeof peerSchema>;
@@ -325,6 +328,7 @@ export type Message = z.infer<typeof messageSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type Turn = z.infer<typeof turnSchema>;
 export type ChatState = z.infer<typeof stateSchema>;
+export type ChatStatePayload = z.infer<typeof readStateOutputSchema>;
 
 export const readState = defineRpc({
   name: "chat.state",
@@ -336,7 +340,7 @@ export const readState = defineRpc({
     // Optional per-conversation message window on a full (after=0) snapshot.
     messageLimit: z.number().int().min(1).max(2000).optional(),
   }),
-  output: stateSchema,
+  output: readStateOutputSchema,
 });
 export const readAssistantMemory = defineRpc({
   name: "chat.assistant.memory.read",

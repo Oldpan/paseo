@@ -146,7 +146,10 @@ import { returnFromSettings, type SettingsView } from "@/navigation/settings-nav
 import { isNative, isWeb } from "@/constants/platform";
 import { useOpenOnboarding } from "@/onboarding";
 import { IS_PAVRA } from "@/pavra/build";
+import { usePavraData } from "@/pavra/data";
+import { resolveDefaultCoordinatorId } from "@/pavra/model";
 import { PavraPage } from "@/pavra/page-frame";
+import { usePavraView } from "@/pavra/store";
 import {
   isAndroidApkUpdateSupported,
   usePavraApkUpdater,
@@ -494,6 +497,7 @@ function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSection
             </View>
             <Text style={styles.aboutValue}>{appVersionText}</Text>
           </View>
+          {IS_PAVRA ? <PavraVersionStatusRow appVersion={appVersion} /> : null}
           <WhatsNewRow />
           {isDesktopApp ? <DesktopAppUpdateRow /> : null}
           {isAndroidApkUpdateSupported() ? <AndroidApkUpdateRow /> : null}
@@ -758,6 +762,106 @@ function DesktopAppUpdateRow() {
   );
 }
 
+function usePavraCoordinatorVersion() {
+  const hosts = useHosts();
+  const savedCoordinatorId = usePavraView((state) => state.coordinatorId);
+  const coordinatorId = resolveDefaultCoordinatorId(savedCoordinatorId, hosts);
+  const { state, connected } = usePavraData(IS_PAVRA ? coordinatorId : "");
+  const coordinatorHost = hosts.find((host) => host.serverId === coordinatorId) ?? null;
+  const coordinatorVersion = normalizeVersion(
+    (state as { coordinatorVersion?: string }).coordinatorVersion,
+  );
+  return {
+    coordinatorHostLabel: coordinatorHost?.label ?? null,
+    coordinatorVersion,
+    connected,
+  };
+}
+
+function formatPavraCoordinatorSummary(input: {
+  clientVersion: string;
+  coordinatorHostLabel: string | null;
+  coordinatorVersion: string | null;
+  connected: boolean;
+}): { hintText: string; valueText: string; isMismatch: boolean } {
+  const clientText = formatVersionWithPrefix(input.clientVersion);
+  const hostPrefix = input.coordinatorHostLabel ? `${input.coordinatorHostLabel} · ` : "";
+  if (!input.connected) {
+    return {
+      hintText: `Client ${clientText} · Coordinator ${hostPrefix}offline`,
+      valueText: `${clientText} / offline`,
+      isMismatch: false,
+    };
+  }
+  if (!input.coordinatorVersion) {
+    return {
+      hintText: `Client ${clientText} · Coordinator ${hostPrefix}connected`,
+      valueText: clientText,
+      isMismatch: false,
+    };
+  }
+  const coordinatorText = formatVersionWithPrefix(input.coordinatorVersion);
+  const isMismatch = input.coordinatorVersion !== input.clientVersion;
+  const alignmentSuffix = isMismatch ? " · Version mismatch" : " · Aligned";
+  return {
+    hintText: `Client ${clientText} · Coordinator ${hostPrefix}${coordinatorText}${alignmentSuffix}`,
+    valueText: `${clientText} / ${coordinatorText}`,
+    isMismatch,
+  };
+}
+
+function PavraVersionStatusRow({ appVersion }: { appVersion: string | null }) {
+  const clientVersion = normalizeVersion(appVersion ?? resolveAppVersion()) ?? "0.16.0";
+  const { coordinatorHostLabel, coordinatorVersion, connected } = usePavraCoordinatorVersion();
+  const { hintText, valueText, isMismatch } = formatPavraCoordinatorSummary({
+    clientVersion,
+    coordinatorHostLabel,
+    coordinatorVersion,
+    connected,
+  });
+  const rowStyle = useMemo(() => [settingsStyles.row, settingsStyles.rowBorder], []);
+  const hintStyle = useMemo(
+    () => [settingsStyles.rowHint, isMismatch && styles.aboutVersionMismatch],
+    [isMismatch],
+  );
+  const valueStyle = useMemo(
+    () => [styles.aboutValue, isMismatch && styles.aboutVersionMismatch],
+    [isMismatch],
+  );
+
+  return (
+    <View style={rowStyle} testID="settings-pavra-version-status">
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>Pavra Coordinator & Client</Text>
+        <Text style={hintStyle}>{hintText}</Text>
+      </View>
+      <Text style={valueStyle}>{valueText}</Text>
+    </View>
+  );
+}
+
+function formatAndroidApkUpdateHint(input: {
+  statusMessage: string | null;
+  hasUpdate: boolean;
+  availableRelease: { version: string; revision: string | null } | null;
+  installedLabel: string;
+  coordinatorVersion: string | null;
+}): string {
+  const coordinatorSuffix = input.coordinatorVersion
+    ? ` · Coordinator ${formatVersionWithPrefix(input.coordinatorVersion)}`
+    : "";
+  if (input.statusMessage) {
+    return `${input.statusMessage}${coordinatorSuffix}`;
+  }
+  if (input.hasUpdate && input.availableRelease) {
+    const releaseRevision = input.availableRelease.revision
+      ? ` · ${input.availableRelease.revision}`
+      : "";
+    return `New APK available: v${input.availableRelease.version}${releaseRevision} (Client ${input.installedLabel}${coordinatorSuffix})`;
+  }
+  return `Client: ${input.installedLabel}${coordinatorSuffix}`;
+}
+
 function AndroidApkUpdateRow() {
   const {
     installed,
@@ -768,28 +872,38 @@ function AndroidApkUpdateRow() {
     checkForApkUpdate,
     downloadAvailableRelease,
   } = usePavraApkUpdater();
+  const { coordinatorVersion } = usePavraCoordinatorVersion();
 
   const handleCheckForUpdates = useCallback(() => {
     void checkForApkUpdate({ manual: true });
   }, [checkForApkUpdate]);
 
-  const installedLabel = `v${installed.version}${installed.revision ? ` · ${installed.revision}` : ""}`;
-  const hintText =
-    statusMessage ??
-    (hasUpdate && availableRelease
-      ? `New APK available: v${availableRelease.version}${availableRelease.revision ? ` · ${availableRelease.revision}` : ""}`
-      : `Installed build: ${installedLabel}`);
+  const resolvedClientVersion = normalizeVersion(resolveAppVersion()) ?? installed.version;
+  const revisionSuffix = installed.revision ? ` · ${installed.revision}` : "";
+  const installedLabel = `v${resolvedClientVersion}${revisionSuffix}`;
+  const hintText = formatAndroidApkUpdateHint({
+    statusMessage,
+    hasUpdate,
+    availableRelease,
+    installedLabel,
+    coordinatorVersion,
+  });
+  const isCoordinatorMismatch =
+    coordinatorVersion !== null && coordinatorVersion !== resolvedClientVersion;
+  const rowStyle = useMemo(() => [settingsStyles.row, settingsStyles.rowBorder], []);
+  const hintStyle = useMemo(
+    () => [
+      settingsStyles.rowHint,
+      (hasUpdate || isCoordinatorMismatch) && styles.aboutVersionMismatch,
+    ],
+    [hasUpdate, isCoordinatorMismatch],
+  );
 
   return (
-    <View
-      style={[settingsStyles.row, settingsStyles.rowBorder]}
-      testID="settings-android-apk-update"
-    >
+    <View style={rowStyle} testID="settings-android-apk-update">
       <View style={settingsStyles.rowContent}>
         <Text style={settingsStyles.rowTitle}>Android APK Updates</Text>
-        <Text style={[settingsStyles.rowHint, hasUpdate && styles.aboutVersionMismatch]}>
-          {hintText}
-        </Text>
+        <Text style={hintStyle}>{hintText}</Text>
       </View>
       <View style={styles.aboutUpdateActions}>
         <Button variant="outline" onPress={handleCheckForUpdates} disabled={checking}>
