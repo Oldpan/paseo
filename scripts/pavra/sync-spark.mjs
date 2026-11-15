@@ -58,9 +58,7 @@ function run(command, args, options = {}) {
 
 async function syncOnce({ all, reloadPlugin, rebuildWebUi }) {
   const target = `${defaultHost}:${defaultRemoteDir.replace(/\/$/, "")}/`;
-  const stagedUpdates = rebuildWebUi
-    ? stageLocalUpdateManifestsForWebUi()
-    : { webUiUpdatesDir: "", copiedFiles: [] };
+  const stagedUpdates = stageLocalUpdateManifestsForWebUi();
   const excludes = [
     "--exclude=.git/",
     "--exclude=.dev/",
@@ -102,13 +100,15 @@ async function syncOnce({ all, reloadPlugin, rebuildWebUi }) {
       defaultHost,
       `cd ${defaultRemoteDir} && PATH="${sparkNodeBin}:$PATH" npm run pavra:build:daemon-web-ui`,
     ]);
-    if (stagedUpdates.copiedFiles.length > 0) {
-      await run("rsync", [
-        "-az",
-        "packages/server/dist/server/web-ui/updates/",
-        `${target}packages/server/dist/server/web-ui/updates/`,
-      ]);
-    }
+    stageLocalUpdateManifestsForWebUi();
+  }
+
+  if (stagedUpdates.copiedFiles.length > 0) {
+    await run("rsync", [
+      "-az",
+      "packages/server/dist/server/web-ui/updates/",
+      `${target}packages/server/dist/server/web-ui/updates/`,
+    ]);
   }
 }
 
