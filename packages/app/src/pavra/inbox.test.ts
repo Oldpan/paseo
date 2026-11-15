@@ -6,6 +6,7 @@ import type {
   Message,
   Routine,
   RoutineRun,
+  Takeover,
   Task,
   Turn,
 } from "../../../../extensions/pavra/shared/contracts";
@@ -255,6 +256,64 @@ describe("deriveInboxState", () => {
     );
 
     expect(inbox.needsAction).toEqual([]);
+  });
+
+  it("includes pending takeovers in needsAction and removes them immediately when resolved or cancelled", () => {
+    const pendingTakeover: Takeover = {
+      id: "to-1",
+      kind: "browser",
+      status: "pending",
+      assistantId: SKY.id,
+      conversationId: "conv-sky",
+      threadId: null,
+      turnId: "turn-1",
+      serverId: "srv_tGAs1l4XHjbH",
+      reason: "Please complete 2FA verification",
+      url: "https://github.com/sessions/two-factor",
+      title: "Two-factor authentication · GitHub",
+      screenshotDataUrl: "data:image/jpeg;base64,abc",
+      createdAt: 5_000,
+      updatedAt: 5_000,
+    };
+
+    const withPending = deriveInboxState(
+      baseState({
+        takeovers: [pendingTakeover],
+      }),
+      6_000,
+    );
+
+    expect(withPending.needsAction).toHaveLength(1);
+    expect(withPending.needsAction[0]).toMatchObject({
+      id: "takeover:to-1",
+      kind: "takeover",
+      takeoverId: "to-1",
+      title: "Two-factor authentication · GitHub",
+      reason: "Please complete 2FA verification",
+      conversationId: "conv-sky",
+      conversationName: "Sky",
+      threadId: null,
+      assistantId: SKY.id,
+      assistantName: "Sky",
+      createdAt: 5_000,
+      takeover: pendingTakeover,
+    });
+
+    const withResolved = deriveInboxState(
+      baseState({
+        takeovers: [{ ...pendingTakeover, status: "resolved", updatedAt: 7_000 }],
+      }),
+      8_000,
+    );
+    expect(withResolved.needsAction).toEqual([]);
+
+    const withCancelled = deriveInboxState(
+      baseState({
+        takeovers: [{ ...pendingTakeover, status: "cancelled", updatedAt: 7_000 }],
+      }),
+      8_000,
+    );
+    expect(withCancelled.needsAction).toEqual([]);
   });
 
   it("merges finished routine runs and task lifecycle receipts in descending timestamp order", () => {

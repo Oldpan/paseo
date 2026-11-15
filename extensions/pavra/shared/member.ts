@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { assistantBrowserSchema, browserPageStateOutputSchema } from "./contracts";
 
 // A member daemon runs the plugin without a ledger: its agents' tool calls and lifecycle events
 // wait in a relay that the coordinator long-polls over the host link it already uses to run
@@ -182,4 +183,52 @@ export const memberTaskOutcomeSync = defineRpc({
   name: "member.task_outcome.sync",
   input: assistantHomeInput.extend({ outcome: taskOutcomeInputSchema }),
   output: z.object({ ok: z.literal(true) }),
+});
+
+export const memberBrowserOperationSchema = z.enum([
+  "open",
+  "tabs",
+  "close",
+  "observe",
+  "click",
+  "fill",
+  "press",
+  "scroll",
+  "wait",
+  "steps",
+]);
+export type MemberBrowserOperation = z.output<typeof memberBrowserOperationSchema>;
+
+export const memberBrowserCall = defineRpc({
+  name: "member.browser.call",
+  input: assistantHomeInput.extend({
+    operation: memberBrowserOperationSchema,
+    policy: assistantBrowserSchema.optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
+  }),
+  output: z.object({ result: z.unknown() }),
+});
+
+export const memberBrowserState = defineRpc({
+  name: "member.browser.state",
+  input: assistantHomeInput.extend({
+    policy: assistantBrowserSchema.optional(),
+  }),
+  output: browserPageStateOutputSchema,
+});
+
+export const memberBrowserAction = defineRpc({
+  name: "member.browser.action",
+  input: assistantHomeInput.extend({
+    policy: assistantBrowserSchema.optional(),
+    action: z.enum(["goto", "click", "fill", "press", "scroll", "reload"]),
+    url: z.string().optional(),
+    ref: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    value: z.string().optional(),
+    key: z.string().optional(),
+    deltaY: z.number().optional(),
+  }),
+  output: browserPageStateOutputSchema,
 });

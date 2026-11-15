@@ -9,8 +9,12 @@ import {
   type Message,
   type Routine,
   type RoutineRun,
+  type Takeover,
   type Task,
   type Turn,
+  browserPageState,
+  browserRemoteAction,
+  cancelTakeover,
   cancelTurn,
   deleteAssistantPlaybook,
   deleteRoutine,
@@ -19,6 +23,7 @@ import {
   readAssistantMemory,
   readAssistantPlaybook,
   readState,
+  resolveTakeover,
   respondTaskPermission,
   resumeRoutine,
   runRoutineOnce,
@@ -30,6 +35,10 @@ import {
 } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS, type TaskLimits } from "../shared/settings";
 import {
+  type MemberBrowserOperation,
+  memberBrowserAction,
+  memberBrowserCall,
+  memberBrowserState,
   memberHomePrepare,
   memberMemoryRead,
   memberMemoryWrite,
@@ -93,6 +102,8 @@ import {
   updateRoutineRun,
   validateRoutineCadence,
 } from "./routines";
+import { AssistantBrowserManager } from "./browser";
+import { executeMemberBrowserOperation } from "./member";
 
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const TURN_LIVE = new Set(["running", "attention", "unknown"]);
@@ -142,6 +153,8 @@ export interface CoordinatorOptions {
   limits?: TaskLimits;
   /** Member machines; without it, every assistant runs on this daemon. */
   machines?: MachinePort;
+  /** Optional custom browser session manager (used in tests). */
+  browserManager?: AssistantBrowserManager;
 }
 interface Finish {
   outcome?: TurnEndedEvent["outcome"];
@@ -190,6 +203,7 @@ export class Coordinator {
   private readonly roundtable: Roundtable;
   readonly mailbox: Mailbox;
   readonly studio: Studio;
+  readonly browserManager: AssistantBrowserManager;
   private mailboxTimer: ReturnType<typeof setInterval> | null = null;
   private routineTimer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
@@ -215,6 +229,15 @@ export class Coordinator {
     this.now = options.now ?? Date.now;
     this.limits = options.limits ?? DEFAULT_TASK_LIMITS;
     this.machines = options.machines;
+    this.browserManager =
+      options.browserManager ??
+      new AssistantBrowserManager({
+        now: this.now,
+        hasPendingTakeover: (assistantId) =>
+          (this.store.snapshot().takeovers ?? []).some(
+            (item) => item.assistantId === assistantId && item.status === "pending",
+          ),
+      });
     this.fanout = new Fanout(store, this.now);
     this.roundtable = new Roundtable(store, this.now);
     this.studio = new Studio(store, {
@@ -351,7 +374,13 @@ export class Coordinator {
     if (!this.machineOf(input)) prepareHome(this.assistantDirectory(input.id), input.memory ?? "");
     // The agent owns its memory file afterwards; a later save never overwrites it. A remote
     // assistant's MEMORY.md is seeded from this ledger copy when its home is first prepared.
-    const assistant: Assistant = existing ? { ...input, memory: existing.memory } : input;
+    const assistant: Assistant = existing
+      ? {
+          ...input,
+          memory: existing.memory,
+          ...(input.browser === undefined && existing.browser ? { browser: existing.browser } : {}),
+        }
+      : input;
     this.store.transaction(() => this.store.put("assistants", assistant));
     return assistant;
   }
@@ -635,6 +664,206 @@ export class Coordinator {
   deleteRoutine(input: RpcInput<typeof deleteRoutine>): RpcOutput<typeof deleteRoutine> {
     const deleted = this.store.transaction(() => this.store.delete("routines", input.id));
     return { deleted, id: input.id };
+  }
+
+  async callAssistantBrowser(
+    assistantId: string,
+    operation: MemberBrowserOperation,
+    payload?: Record<string, unknown>,
+  ): Promise<unknown> {
+    const assistant = this.store.get("assistants", assistantId);
+    if (!assistant) throw new Error("Assistant no longer exists.");
+    const { serverId, subdirectory } = await this.memoryTarget(assistantId);
+    if (!serverId) {
+      return executeMemberBrowserOperation(this.browserManager, {
+        assistantId,
+        homeDir: this.assistantDirectory(assistantId),
+        operation,
+        policy: assistant.browser,
+        payload,
+      });
+    }
+    const { result } = await this.member().call(serverId, memberBrowserCall, {
+      assistantId,
+      subdirectory,
+      operation,
+      ...(assistant.browser ? { policy: assistant.browser } : {}),
+      ...(payload ? { payload } : {}),
+    });
+    return result;
+  }
+
+  async browserPageState(
+    input: RpcInput<typeof browserPageState>,
+  ): Promise<RpcOutput<typeof browserPageState>> {
+    const assistant = this.store.get("assistants", input.assistantId);
+    if (!assistant) throw new Error("Assistant no longer exists.");
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    const liveState = !serverId
+      ? await this.browserManager.getPageState({
+          assistantId: input.assistantId,
+          homeDir: this.assistantDirectory(input.assistantId),
+          policy: assistant.browser,
+        })
+      : await this.member().call(serverId, memberBrowserState, {
+          assistantId: input.assistantId,
+          subdirectory,
+          ...(assistant.browser ? { policy: assistant.browser } : {}),
+        });
+    if (liveState.active) return liveState;
+    const pending = (this.store.snapshot().takeovers ?? []).findLast(
+      (item) => item.assistantId === input.assistantId && item.status === "pending",
+    );
+    if (pending && (pending.url || pending.title || pending.screenshotDataUrl)) {
+      return {
+        active: false,
+        url: pending.url ?? null,
+        title: pending.title ?? null,
+        screenshotDataUrl: pending.screenshotDataUrl ?? null,
+        elements: [],
+      };
+    }
+    return liveState;
+  }
+
+  async browserRemoteAction(
+    input: RpcInput<typeof browserRemoteAction>,
+  ): Promise<RpcOutput<typeof browserRemoteAction>> {
+    const assistant = this.store.get("assistants", input.assistantId);
+    if (!assistant) throw new Error("Assistant no longer exists.");
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    const updatedState = !serverId
+      ? await this.browserManager.remoteAction({
+          assistantId: input.assistantId,
+          homeDir: this.assistantDirectory(input.assistantId),
+          policy: assistant.browser,
+          action: input.action,
+          url: input.url,
+          ref: input.ref,
+          x: input.x,
+          y: input.y,
+          value: input.value,
+          key: input.key,
+          deltaY: input.deltaY,
+        })
+      : await this.member().call(serverId, memberBrowserAction, {
+          assistantId: input.assistantId,
+          subdirectory,
+          ...(assistant.browser ? { policy: assistant.browser } : {}),
+          action: input.action,
+          ...(input.url !== undefined ? { url: input.url } : {}),
+          ...(input.ref !== undefined ? { ref: input.ref } : {}),
+          ...(input.x !== undefined ? { x: input.x } : {}),
+          ...(input.y !== undefined ? { y: input.y } : {}),
+          ...(input.value !== undefined ? { value: input.value } : {}),
+          ...(input.key !== undefined ? { key: input.key } : {}),
+          ...(input.deltaY !== undefined ? { deltaY: input.deltaY } : {}),
+        });
+
+    const pendingTakeovers = (this.store.snapshot().takeovers ?? []).filter(
+      (item) => item.assistantId === input.assistantId && item.status === "pending",
+    );
+    if (pendingTakeovers.length > 0) {
+      const now = this.now();
+      this.store.transaction(() => {
+        for (const pending of pendingTakeovers) {
+          this.store.put("takeovers", {
+            ...pending,
+            url: updatedState.url ?? pending.url ?? null,
+            title: updatedState.title ?? pending.title ?? null,
+            screenshotDataUrl: updatedState.screenshotDataUrl ?? pending.screenshotDataUrl ?? null,
+            updatedAt: now,
+          });
+        }
+      });
+    }
+    return updatedState;
+  }
+
+  async requestBrowserTakeover(input: {
+    assistant: Assistant;
+    conversationId: string;
+    threadId: string | null;
+    turnId: string | null;
+    reason: string;
+  }): Promise<Takeover> {
+    let pageState: RpcOutput<typeof browserPageState> | null = null;
+    try {
+      pageState = await this.browserPageState({ assistantId: input.assistant.id });
+    } catch {}
+    const now = this.now();
+    const takeover: Takeover = {
+      id: randomUUID(),
+      kind: "browser",
+      status: "pending",
+      assistantId: input.assistant.id,
+      conversationId: input.conversationId,
+      threadId: input.threadId,
+      turnId: input.turnId,
+      serverId: input.assistant.serverId ?? this.selfId(),
+      reason: input.reason.trim(),
+      url: pageState?.url ?? null,
+      title: pageState?.title ?? null,
+      screenshotDataUrl: pageState?.screenshotDataUrl ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.transaction(() => this.store.put("takeovers", takeover));
+    return takeover;
+  }
+
+  resolveTakeover(input: RpcInput<typeof resolveTakeover>): Takeover {
+    const existing = this.store.get("takeovers", input.id);
+    if (!existing) throw new Error("Takeover no longer exists.");
+    if (existing.status === "resolved") return existing;
+    if (existing.status === "cancelled") {
+      throw new Error("This takeover was already cancelled.");
+    }
+    const assistant = this.store.get("assistants", existing.assistantId);
+    const conversation = this.store.get("conversations", existing.conversationId);
+    if (!assistant || !conversation?.members.includes(assistant.id)) {
+      throw new Error("Assistant or chat membership no longer exists.");
+    }
+    const now = this.now();
+    const resolved: Takeover = {
+      ...existing,
+      status: "resolved",
+      updatedAt: now,
+    };
+    const basePrompt =
+      "The user completed the requested takeover action. Observe the current state first and continue.";
+    const prompt = input.note?.trim()
+      ? `${basePrompt}\n\nUser note: ${input.note.trim()}`
+      : basePrompt;
+    const triggerId = `takeover:${resolved.id}`;
+    this.store.transaction(() => {
+      this.store.put("takeovers", resolved);
+      queueTurn(this.store, {
+        conversationId: resolved.conversationId,
+        threadId: resolved.threadId,
+        assistant,
+        kind: "reply",
+        triggerId,
+        rootTriggerId: triggerId,
+        prompt,
+      });
+    });
+    this.kick();
+    return resolved;
+  }
+
+  cancelTakeover(input: RpcInput<typeof cancelTakeover>): Takeover {
+    const existing = this.store.get("takeovers", input.id);
+    if (!existing) throw new Error("Takeover no longer exists.");
+    if (existing.status === "cancelled") return existing;
+    const now = this.now();
+    const cancelled: Takeover = {
+      ...existing,
+      status: "cancelled",
+      updatedAt: now,
+    };
+    this.store.transaction(() => this.store.put("takeovers", cancelled));
+    return cancelled;
   }
 
   async runRoutineOnce(input: RpcInput<typeof runRoutineOnce>): Promise<Routine> {
@@ -1945,6 +2174,7 @@ export class Coordinator {
     for (const stop of this.watches.values()) stop();
     this.watches.clear();
     await this.queue.idle();
+    await this.browserManager.stopAll().catch(() => undefined);
     await this.port?.dispose().catch(() => undefined);
   }
 }

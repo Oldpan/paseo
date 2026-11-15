@@ -75,6 +75,7 @@ export function ChatPane({
   group,
   locked = false,
   peers,
+  takeovers,
   queue,
   onSteerQueued,
   onRemoveQueued,
@@ -98,6 +99,8 @@ export function ChatPane({
   locked?: boolean;
   /** Peer requests this lane has open (Paseo-hosted mailbox and Studio traffic). */
   peers?: ReactNode;
+  /** Active browser/phone takeovers waiting on the user in this lane. */
+  takeovers?: ReactNode;
   /** Messages queued while a turn is active in this lane. */
   queue?: readonly PendingQueueItem[];
   onSteerQueued?(id: string): void;
@@ -155,15 +158,16 @@ export function ChatPane({
   }, []);
   const footer = useMemo(
     () =>
-      turns.length > 0 || peers ? (
+      turns.length > 0 || peers || takeovers ? (
         <>
           {turns.map((item) => (
             <View key={item.turn.id}>{item.node}</View>
           ))}
+          {takeovers}
           {peers}
         </>
       ) : null,
-    [peers, turns],
+    [peers, takeovers, turns],
   );
   const empty = useMemo(
     () =>

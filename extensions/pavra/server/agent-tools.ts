@@ -24,6 +24,30 @@ import {
   routineSaveTool,
 } from "./routine-tools";
 import {
+  browserClickHandler,
+  browserClickTool,
+  browserCloseHandler,
+  browserCloseTool,
+  browserFillHandler,
+  browserFillTool,
+  browserHandToUserHandler,
+  browserHandToUserTool,
+  browserObserveHandler,
+  browserObserveTool,
+  browserOpenHandler,
+  browserOpenTool,
+  browserPressHandler,
+  browserPressTool,
+  browserScrollHandler,
+  browserScrollTool,
+  browserStepsHandler,
+  browserStepsTool,
+  browserTabsHandler,
+  browserTabsTool,
+  browserWaitHandler,
+  browserWaitTool,
+} from "./browser-tools";
+import {
   deterministicTaskId,
   excerpt,
   resultMessageId,
@@ -279,6 +303,17 @@ export const agentTools: readonly AgentToolEntry[] = [
   toolEntry(routineListTool, routineListHandler),
   toolEntry(routineSaveTool, routineSaveHandler),
   toolEntry(routineDeleteTool, routineDeleteHandler),
+  toolEntry(browserOpenTool, browserOpenHandler),
+  toolEntry(browserTabsTool, browserTabsHandler),
+  toolEntry(browserCloseTool, browserCloseHandler),
+  toolEntry(browserObserveTool, browserObserveHandler),
+  toolEntry(browserClickTool, browserClickHandler),
+  toolEntry(browserFillTool, browserFillHandler),
+  toolEntry(browserPressTool, browserPressHandler),
+  toolEntry(browserScrollTool, browserScrollHandler),
+  toolEntry(browserWaitTool, browserWaitHandler),
+  toolEntry(browserStepsTool, browserStepsHandler),
+  toolEntry(browserHandToUserTool, browserHandToUserHandler),
 ];
 
 /** Runs a tool call a member relayed; the member's daemon already verified the agent. */

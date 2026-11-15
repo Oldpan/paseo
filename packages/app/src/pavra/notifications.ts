@@ -4,6 +4,7 @@ import type {
   Conversation,
   Message,
   Routine,
+  Takeover,
   Task,
   Turn,
 } from "../../../../extensions/pavra/shared/contracts";
@@ -21,7 +22,13 @@ export interface PavraNotificationTarget {
 
 export interface PavraNotificationEvent {
   key: string;
-  kind: "task_permission" | "turn_attention" | "task_event" | "routine_reply" | "chat_reply";
+  kind:
+    | "task_permission"
+    | "turn_attention"
+    | "takeover"
+    | "task_event"
+    | "routine_reply"
+    | "chat_reply";
   title: string;
   body: string;
   target: PavraNotificationTarget;
@@ -48,6 +55,11 @@ export function collectPavraNotificationKeys(state: ChatState): Set<string> {
   for (const turn of state.turns) {
     if (turn.status === "attention") {
       keys.add(`turn-attn:${turn.id}`);
+    }
+  }
+  for (const takeover of state.takeovers ?? []) {
+    if (takeover.status === "pending") {
+      keys.add(`takeover:${takeover.id}`);
     }
   }
   for (const message of state.messages) {
@@ -195,6 +207,35 @@ function collectTurnAttentionEvents(
   return events;
 }
 
+function collectTakeoverEvents(
+  takeovers: readonly Takeover[],
+  seenKeys: Set<string>,
+  lookups: NotificationLookups,
+  coordinatorId: string,
+): PavraNotificationEvent[] {
+  const events: PavraNotificationEvent[] = [];
+  for (const takeover of takeovers) {
+    if (takeover.status !== "pending") continue;
+    const key = `takeover:${takeover.id}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const assistantName = lookups.assistantsById.get(takeover.assistantId)?.name ?? "Assistant";
+    events.push({
+      key,
+      kind: "takeover",
+      title: `Takeover needed · ${assistantName}`,
+      body: takeover.reason,
+      target: {
+        serverId: coordinatorId,
+        pavraSection: "inbox",
+        pavraConversationId: takeover.conversationId,
+        pavraThreadId: takeover.threadId,
+      },
+    });
+  }
+  return events;
+}
+
 function toTaskEventNotification(
   key: string,
   message: Message,
@@ -299,6 +340,7 @@ export function diffPavraNotifications(
   const events: PavraNotificationEvent[] = [
     ...collectTaskPermissionEvents(next.tasks, seenKeys, lookups, context.coordinatorId),
     ...collectTurnAttentionEvents(next.turns, seenKeys, lookups, context.coordinatorId),
+    ...collectTakeoverEvents(next.takeovers ?? [], seenKeys, lookups, context.coordinatorId),
   ];
 
   for (const message of next.messages) {

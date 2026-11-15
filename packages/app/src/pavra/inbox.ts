@@ -8,6 +8,7 @@ import type {
   Routine,
   RoutineRun,
   RoutineRunOutcome,
+  Takeover,
   Task,
   Turn,
 } from "../../../../extensions/pavra/shared/contracts";
@@ -81,10 +82,26 @@ export interface InboxTaskBudgetItem {
   task: Task;
 }
 
+export interface InboxTakeoverItem {
+  id: string;
+  kind: "takeover";
+  takeoverId: string;
+  title: string;
+  reason: string;
+  conversationId: string;
+  conversationName: string;
+  threadId: string | null;
+  assistantId: string;
+  assistantName: string;
+  createdAt: number;
+  takeover: Takeover;
+}
+
 export type InboxActionItem =
   | InboxTaskPermissionItem
   | InboxTurnAttentionItem
-  | InboxTaskBudgetItem;
+  | InboxTaskBudgetItem
+  | InboxTakeoverItem;
 
 export interface InboxRoutineRunActivityItem {
   id: string;
@@ -360,6 +377,32 @@ function formatStaleTaskReason(task: Task, isStaleActive: boolean, now: number):
   return "Task connection state is unknown with no follow-up in thread.";
 }
 
+function collectTakeoverNeedsAction(
+  takeovers: readonly Takeover[],
+  lookups: LedgerLookups,
+): InboxTakeoverItem[] {
+  const { assistantsById, conversationsById } = lookups;
+  const items: InboxTakeoverItem[] = [];
+  for (const takeover of takeovers) {
+    if (takeover.status !== "pending") continue;
+    items.push({
+      id: `takeover:${takeover.id}`,
+      kind: "takeover",
+      takeoverId: takeover.id,
+      title: takeover.title || takeover.url || "Browser takeover",
+      reason: takeover.reason,
+      conversationId: takeover.conversationId,
+      conversationName: resolveConversationName(conversationsById, takeover.conversationId),
+      threadId: takeover.threadId,
+      assistantId: takeover.assistantId,
+      assistantName: resolveAssistantName(assistantsById, takeover.assistantId),
+      createdAt: takeover.createdAt,
+      takeover,
+    });
+  }
+  return items;
+}
+
 function deriveNeedsAction(state: ChatState, lookups: LedgerLookups): InboxActionItem[] {
   const { assistantsById, conversationsById, messagesById, messagesByLane } = lookups;
   const needsAction: InboxActionItem[] = [];
@@ -420,6 +463,7 @@ function deriveNeedsAction(state: ChatState, lookups: LedgerLookups): InboxActio
     });
   }
 
+  needsAction.push(...collectTakeoverNeedsAction(state.takeovers ?? [], lookups));
   needsAction.sort((a, b) => b.createdAt - a.createdAt);
   return needsAction;
 }

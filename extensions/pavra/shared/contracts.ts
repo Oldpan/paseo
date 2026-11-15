@@ -1,6 +1,15 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
+export const assistantBrowserSchema = z.object({
+  enabled: z.boolean(),
+  allowDomains: z.array(z.string()).optional(),
+  askDomains: z.array(z.string()).optional(),
+  denyDomains: z.array(z.string()).optional(),
+  allowPrivateHosts: z.array(z.string()).optional(),
+});
+export type AssistantBrowserConfig = z.infer<typeof assistantBrowserSchema>;
+
 export const assistantSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
@@ -27,6 +36,7 @@ export const assistantSchema = z.object({
       ),
     })
     .optional(),
+  browser: assistantBrowserSchema.optional(),
 });
 export const conversationSchema = z.object({
   id: z.string(),
@@ -273,6 +283,26 @@ export const routineSchema = z.object({
 });
 export type Routine = z.infer<typeof routineSchema>;
 
+export const takeoverStatusSchema = z.enum(["pending", "resolved", "cancelled"]);
+export type TakeoverStatus = z.infer<typeof takeoverStatusSchema>;
+export const takeoverSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["browser", "phone"]),
+  status: takeoverStatusSchema,
+  assistantId: z.string().uuid(),
+  conversationId: z.string().min(1),
+  threadId: z.string().nullable(),
+  turnId: z.string().nullable(),
+  serverId: z.string().min(1),
+  reason: z.string().min(1),
+  url: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  screenshotDataUrl: z.string().nullable().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type Takeover = z.infer<typeof takeoverSchema>;
+
 export const stateSchema = z.object({
   generation: z.string(),
   cursor: z.number(),
@@ -284,6 +314,7 @@ export const stateSchema = z.object({
   studios: z.array(studioSchema).optional(),
   peerMessages: z.array(peerMessageSchema).optional(),
   routines: z.array(routineSchema).optional(),
+  takeovers: z.array(takeoverSchema).optional(),
 });
 export type Studio = z.infer<typeof studioSchema>;
 export type PeerMessage = z.infer<typeof peerMessageSchema>;
@@ -526,4 +557,60 @@ export const deleteRoutine = defineRpc({
   name: "chat.routine.delete",
   input: z.object({ id: z.string().min(1) }),
   output: z.object({ deleted: z.boolean(), id: z.string() }),
+});
+
+export const resolveTakeover = defineRpc({
+  name: "chat.takeover.resolve",
+  input: z.object({
+    id: z.string().min(1),
+    note: z.string().optional(),
+  }),
+  output: takeoverSchema,
+});
+
+export const cancelTakeover = defineRpc({
+  name: "chat.takeover.cancel",
+  input: z.object({
+    id: z.string().min(1),
+  }),
+  output: takeoverSchema,
+});
+
+export const browserElementSchema = z.object({
+  ref: z.string(),
+  role: z.string(),
+  name: z.string(),
+  value: z.string().optional(),
+});
+export type BrowserElement = z.infer<typeof browserElementSchema>;
+
+export const browserPageStateOutputSchema = z.object({
+  active: z.boolean(),
+  url: z.string().nullable(),
+  title: z.string().nullable(),
+  screenshotDataUrl: z.string().nullable(),
+  elements: z.array(browserElementSchema),
+});
+export type BrowserPageState = z.infer<typeof browserPageStateOutputSchema>;
+
+export const browserPageState = defineRpc({
+  name: "chat.browser.state",
+  input: z.object({ assistantId: z.string().uuid() }),
+  output: browserPageStateOutputSchema,
+});
+
+export const browserRemoteAction = defineRpc({
+  name: "chat.browser.action",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    action: z.enum(["goto", "click", "fill", "press", "scroll", "reload"]),
+    url: z.string().optional(),
+    ref: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    value: z.string().optional(),
+    key: z.string().optional(),
+    deltaY: z.number().optional(),
+  }),
+  output: browserPageStateOutputSchema,
 });

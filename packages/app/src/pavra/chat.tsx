@@ -25,11 +25,14 @@ import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { useShallow } from "zustand/shallow";
 import {
   sendMessage,
+  cancelTakeover,
   cancelTask,
   cancelTurn,
+  resolveTakeover,
   respondTaskPermission,
   type Assistant,
   type Message,
+  type Takeover,
   type Task,
   type Turn,
 } from "../../../../extensions/pavra/shared/contracts";
@@ -43,6 +46,7 @@ import {
 import { usePavraView } from "./store";
 import type { Palette } from "./palette";
 import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
+import { BrowserTakeoverModal, TakeoverCard } from "./ui/BrowserTakeoverModal";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
@@ -107,6 +111,7 @@ const SPLIT = {
 const THREAD_CLIP = { height: "100%", minHeight: 0, overflow: "hidden", flexShrink: 0 } as const;
 const THREAD_INNER = { flex: 1, minHeight: 0 } as const;
 const TASKS = { padding: 20, gap: 12 } as const;
+const TAKEOVERS_CONTAINER = { gap: 8, paddingVertical: 6 } as const;
 const THREAD_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 const LIVE = new Set(["queued", "creating", "running", "attention", "unknown"]);
 const HINT_DEBOUNCE_MS = 150;
@@ -973,6 +978,100 @@ function ConversationPane({
     () => (exchanges.length > 0 ? <PeerActivity items={exchanges} /> : null),
     [exchanges],
   );
+  const [activeTakeover, setActiveTakeover] = useState<{
+    takeover: Takeover;
+    assistantName: string;
+  } | null>(null);
+  const [takeoverBusyId, setTakeoverBusyId] = useState<string | null>(null);
+  const laneTakeovers = useMemo(
+    () =>
+      (data.state.takeovers ?? []).filter(
+        (item) =>
+          item.status === "pending" &&
+          item.conversationId === chatId &&
+          (item.threadId ?? null) === (threadId ?? null),
+      ),
+    [chatId, data.state.takeovers, threadId],
+  );
+  const handleResolveTakeover = useCallback(
+    async (takeoverId: string) => {
+      setTakeoverBusyId(takeoverId);
+      setError(null);
+      try {
+        await data.call(resolveTakeover, { id: takeoverId });
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setTakeoverBusyId((current) => (current === takeoverId ? null : current));
+      }
+    },
+    [data],
+  );
+  const handleCancelTakeover = useCallback(
+    async (takeoverId: string) => {
+      setTakeoverBusyId(takeoverId);
+      setError(null);
+      try {
+        await data.call(cancelTakeover, { id: takeoverId });
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setTakeoverBusyId((current) => (current === takeoverId ? null : current));
+      }
+    },
+    [data],
+  );
+  const handleOpenTakeover = useCallback(
+    (takeover: Takeover) => {
+      const assistantName = assistantsById.get(takeover.assistantId)?.name ?? "Assistant";
+      setActiveTakeover({ takeover, assistantName });
+    },
+    [assistantsById],
+  );
+  const handleResolveTakeoverPress = useCallback(
+    (id: string) => {
+      void handleResolveTakeover(id);
+    },
+    [handleResolveTakeover],
+  );
+  const handleCancelTakeoverPress = useCallback(
+    (id: string) => {
+      void handleCancelTakeover(id);
+    },
+    [handleCancelTakeover],
+  );
+  const closeTakeoverModal = useCallback(() => {
+    setActiveTakeover(null);
+  }, []);
+  const takeoversNode = useMemo(
+    () =>
+      laneTakeovers.length > 0 ? (
+        <View style={TAKEOVERS_CONTAINER}>
+          {laneTakeovers.map((item) => {
+            const assistantName = assistantsById.get(item.assistantId)?.name ?? "Assistant";
+            return (
+              <TakeoverCard
+                key={item.id}
+                takeover={item}
+                assistantName={assistantName}
+                busy={takeoverBusyId === item.id}
+                onOpenTakeover={handleOpenTakeover}
+                onResolve={handleResolveTakeoverPress}
+                onCancel={handleCancelTakeoverPress}
+              />
+            );
+          })}
+        </View>
+      ) : null,
+    [
+      assistantsById,
+      handleCancelTakeoverPress,
+      handleOpenTakeover,
+      handleResolveTakeoverPress,
+      laneTakeovers,
+      takeoverBusyId,
+    ],
+  );
   const hintDraft = useDebouncedValue(draft, HINT_DEBOUNCE_MS);
   const hint = useMemo(
     () =>
@@ -1044,27 +1143,38 @@ function ConversationPane({
     roundtableOn,
   ]);
   return (
-    <ChatPane
-      rows={rows}
-      turns={turns}
-      draft={draft}
-      setDraft={changeDraft}
-      draftKey={draftKey}
-      pending={pending}
-      error={error}
-      phone={phone}
-      connected={data.connected}
-      onSend={sendPress}
-      onTask={onTask}
-      group={group}
-      locked={followUp ? !followUp.allowed : false}
-      peers={peers}
-      queue={queue}
-      onSteerQueued={handleSteerQueued}
-      onRemoveQueued={handleRemoveQueued}
-      onStop={stopPress}
-      cancelling={cancelling}
-    />
+    <>
+      <ChatPane
+        rows={rows}
+        turns={turns}
+        draft={draft}
+        setDraft={changeDraft}
+        draftKey={draftKey}
+        pending={pending}
+        error={error}
+        phone={phone}
+        connected={data.connected}
+        onSend={sendPress}
+        onTask={onTask}
+        group={group}
+        locked={followUp ? !followUp.allowed : false}
+        peers={peers}
+        takeovers={takeoversNode}
+        queue={queue}
+        onSteerQueued={handleSteerQueued}
+        onRemoveQueued={handleRemoveQueued}
+        onStop={stopPress}
+        cancelling={cancelling}
+      />
+      {activeTakeover ? (
+        <BrowserTakeoverModal
+          takeover={activeTakeover.takeover}
+          assistantName={activeTakeover.assistantName}
+          data={data}
+          onClose={closeTakeoverModal}
+        />
+      ) : null}
+    </>
   );
 }
 

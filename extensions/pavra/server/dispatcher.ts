@@ -376,32 +376,30 @@ export class Dispatcher {
     if (turn.mailboxId) return turn.prompt;
     const store = this.deps.store;
     const conversation = store.get("conversations", turn.conversationId);
+    const wrapGroup = (content: string) =>
+      conversation?.kind === "group"
+        ? `${groupPreamble({
+            turn,
+            assistant,
+            conversation,
+            assistants: store.snapshot().assistants,
+            epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
+          })}\n\n${content}`
+        : content;
     if (turn.kind === "routine") {
       const header = routinePromptHeader({
         routineName: turn.routineName,
         prompt: turn.prompt,
       });
-      const body = messages ? `${messages}\n\n${header}` : header;
-      if (conversation?.kind === "group") {
-        return `${groupPreamble({
-          turn,
-          assistant,
-          conversation,
-          assistants: store.snapshot().assistants,
-          epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
-        })}\n\n${body}`;
-      }
-      return body;
+      return wrapGroup(messages ? `${messages}\n\n${header}` : header);
+    }
+    if (turn.triggerId?.startsWith("takeover:")) {
+      return wrapGroup(messages ? `${messages}\n\n${turn.prompt}` : turn.prompt);
     }
     const body = turn.kind === "task_receipt" ? messages || `[${turn.prompt}]` : messages;
-    if (conversation?.kind === "group")
-      return `${groupPreamble({
-        turn,
-        assistant,
-        conversation,
-        assistants: store.snapshot().assistants,
-        epoch: turn.epochId ? store.getEpoch(turn.epochId) : null,
-      })}\n\n${body || "(no new messages)"}`;
+    if (conversation?.kind === "group") {
+      return wrapGroup(body || "(no new messages)");
+    }
     const prompt = body || "Continue this roundtable discussion with another useful contribution.";
     return turn.kind === "task_receipt" ? `${TASK_RECEIPT_LEAD}\n\n${prompt}` : prompt;
   }

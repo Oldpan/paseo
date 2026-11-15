@@ -27,6 +27,10 @@ import {
   resumeRoutine,
   runRoutineOnce,
   deleteRoutine,
+  resolveTakeover,
+  cancelTakeover,
+  browserPageState,
+  browserRemoteAction,
 } from "./shared/contracts";
 import {
   MEMBER_PROTOCOL,
@@ -40,6 +44,9 @@ import {
   memberPlaybookWrite,
   memberPlaybookDelete,
   memberTaskOutcomeSync,
+  memberBrowserCall,
+  memberBrowserState,
+  memberBrowserAction,
   memberPoll,
   memberRespond,
 } from "./shared/member";
@@ -59,8 +66,10 @@ import type { MachinePort } from "./server/machines";
 import { callPluginRpc } from "./server/member/rpc";
 import { roleSettings, taskSettings, type RoleSettings, type TaskLimits } from "./shared/settings";
 import { agentTools, callAgentTool } from "./server/agent-tools";
+import { AssistantBrowserManager } from "./server/browser";
 import { ChatStore } from "./server/store";
 import { Coordinator } from "./server/coordinator";
+import { executeMemberBrowserOperation } from "./server/member";
 import { MemberLinks } from "./server/member/link";
 import { hostDirectory } from "./server/member/hosts";
 import { MemberRelay } from "./server/member/relay";
@@ -90,6 +99,7 @@ export default function contribute(server: PluginServerContext) {
   let hostLinks: ReturnType<typeof hostDirectory> | null = null;
   let limits: TaskLimits | null = null;
   let closed = false;
+  const memberBrowsers = new AssistantBrowserManager();
   const relay = new MemberRelay({
     coordinatorServerId: () =>
       role?.mode === "member" ? (role.coordinatorServerId ?? null) : null,
@@ -137,6 +147,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(resumeRoutine, (input) => chat().resumeRoutine(input));
   server.handle(runRoutineOnce, (input) => chat().runRoutineOnce(input));
   server.handle(deleteRoutine, (input) => chat().deleteRoutine(input));
+  server.handle(resolveTakeover, (input) => chat().resolveTakeover(input));
+  server.handle(cancelTakeover, (input) => chat().cancelTakeover(input));
+  server.handle(browserPageState, (input) => chat().browserPageState(input));
+  server.handle(browserRemoteAction, (input) => chat().browserRemoteAction(input));
   server.handle(listStudioMembers, async (input) => {
     const listing = await chat().studio.members(input.studioId);
     return {
@@ -179,6 +193,39 @@ export default function contribute(server: PluginServerContext) {
     syncTaskOutcomeToNotes(memberHome(input), input.outcome);
     return { ok: true as const };
   });
+  server.handle(memberBrowserCall, async (input) => {
+    const homeDir = memberHome(input);
+    const result = await executeMemberBrowserOperation(memberBrowsers, {
+      assistantId: input.assistantId,
+      homeDir,
+      operation: input.operation,
+      policy: input.policy,
+      payload: input.payload,
+    });
+    return { result };
+  });
+  server.handle(memberBrowserState, (input) =>
+    memberBrowsers.getPageState({
+      assistantId: input.assistantId,
+      homeDir: memberHome(input),
+      policy: input.policy,
+    }),
+  );
+  server.handle(memberBrowserAction, (input) =>
+    memberBrowsers.remoteAction({
+      assistantId: input.assistantId,
+      homeDir: memberHome(input),
+      policy: input.policy,
+      action: input.action,
+      url: input.url,
+      ref: input.ref,
+      x: input.x,
+      y: input.y,
+      value: input.value,
+      key: input.key,
+      deltaY: input.deltaY,
+    }),
+  );
   server.handle(memberRespond, (input) => relay.respond(input.callId, input.result));
 
   // Every agent on a Pavra daemon lists the tools: providers list MCP tools once per session, so
@@ -329,6 +376,7 @@ export default function contribute(server: PluginServerContext) {
     unsubscribeRoles();
     relay.close();
     links?.close();
+    await memberBrowsers.stopAll().catch(() => undefined);
     await coordinator?.close();
     await hostLinks?.dispose();
     store?.close();
