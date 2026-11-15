@@ -451,7 +451,8 @@ async function createPlaywrightDriver(options: {
   profileDir: string;
   downloadsDir: string;
 }): Promise<BrowserSessionDriver> {
-  const pw = await import("playwright-core");
+  const playwrightModuleName = "playwright-core";
+  const pw = (await import(playwrightModuleName)) as typeof import("playwright-core");
   let executablePath: string | undefined;
   try {
     const defaultExec = pw.chromium.executablePath();

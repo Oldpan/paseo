@@ -1,6 +1,6 @@
 # Pavra 浏览器控制与人机接管方案
 
-状态：方案，未实施（2026-11-08）。与 [手机控制方案](pavra-phone.md) 共用插件工具图片返回合同与账本接管（Takeover）机制。
+状态：B0–B2 已实现并在 Spark :6778 与 Web／Android 16 ARM64 实测通过（2026-11-15，见 [验收记录](pavra-acceptance.md#2026-11-15)）。与 [手机控制方案](pavra-phone.md) 共用插件工具图片返回合同与账本接管（Takeover）机制。
 
 ## 目标
 
