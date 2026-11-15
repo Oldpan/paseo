@@ -3,6 +3,7 @@ import { useAddHost } from "@/hosts/add-host";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -80,6 +81,7 @@ import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-
 import { EditorSection } from "@/screens/settings/editor-section";
 import { FilesSection } from "@/screens/settings/files-section";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { CommunityLinks } from "@/components/community-links";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -151,10 +153,13 @@ import { resolveDefaultCoordinatorId } from "@/pavra/model";
 import { PavraPage } from "@/pavra/page-frame";
 import { usePavraView } from "@/pavra/store";
 import {
+  type ApkUpdateCheckPhase,
+  type ApkUpdateTaskPhase,
   isAndroidApkUpdateSupported,
   usePavraApkUpdater,
   usePavraApkUpdaterStore,
 } from "@/pavra/use-pavra-apk-updater";
+import { ApkUpdateSheet } from "@/pavra/ui/ApkUpdateSheet";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -862,21 +867,84 @@ function formatAndroidApkUpdateHint(input: {
   return `Client: ${input.installedLabel}${coordinatorSuffix}`;
 }
 
+function renderAndroidApkUpdateRightStatus(input: {
+  checking: boolean;
+  checkPhase: ApkUpdateCheckPhase;
+  taskPhase: ApkUpdateTaskPhase;
+  progress: number | null;
+  availableRelease: { version: string } | null;
+  isSkipped: boolean;
+  spinnerColor: string;
+}): ReactNode {
+  if (input.checking || input.checkPhase === "checking") {
+    return <ActivityIndicator size="small" color={input.spinnerColor} />;
+  }
+  if (
+    input.taskPhase === "ready" ||
+    input.taskPhase === "installing" ||
+    input.taskPhase === "needsPermission"
+  ) {
+    return (
+      <View style={styles.apkUpdateBadge}>
+        <Text style={styles.apkUpdateBadgeText}>Ready to install</Text>
+      </View>
+    );
+  }
+  if (input.taskPhase === "downloading" || input.taskPhase === "verifying") {
+    const pct =
+      typeof input.progress === "number" && Number.isFinite(input.progress)
+        ? Math.round(Math.max(0, Math.min(1, input.progress)) * 100)
+        : 0;
+    return <Text style={styles.aboutValue}>{`Downloading ${pct}%`}</Text>;
+  }
+  if (input.availableRelease && input.isSkipped) {
+    return <Text style={styles.aboutValue}>{`Skipped v${input.availableRelease.version}`}</Text>;
+  }
+  if (input.availableRelease) {
+    return (
+      <View style={styles.apkUpdateBadge}>
+        <Text style={styles.apkUpdateBadgeText}>{`● New v${input.availableRelease.version}`}</Text>
+      </View>
+    );
+  }
+  if (input.checkPhase === "unavailable") {
+    return <Text style={styles.aboutValue}>Unavailable</Text>;
+  }
+  return <Text style={styles.aboutValue}>Up to date</Text>;
+}
+
 function AndroidApkUpdateRow() {
+  const { theme } = useUnistyles();
   const {
     installed,
     availableRelease,
     hasUpdate,
+    isSkipped,
+    autoCheck,
+    checkPhase,
+    taskPhase,
+    progress,
     checking,
     statusMessage,
+    setAutoCheck,
+    openUpdateSheet,
     checkForApkUpdate,
-    downloadAvailableRelease,
   } = usePavraApkUpdater();
   const { coordinatorVersion } = usePavraCoordinatorVersion();
 
-  const handleCheckForUpdates = useCallback(() => {
+  const handlePressCheckRow = useCallback(() => {
+    const hasActiveTask =
+      taskPhase === "downloading" ||
+      taskPhase === "verifying" ||
+      taskPhase === "ready" ||
+      taskPhase === "needsPermission" ||
+      taskPhase === "installing";
+    if (availableRelease && (hasActiveTask || !isSkipped)) {
+      openUpdateSheet();
+      return;
+    }
     void checkForApkUpdate({ manual: true });
-  }, [checkForApkUpdate]);
+  }, [availableRelease, checkForApkUpdate, isSkipped, openUpdateSheet, taskPhase]);
 
   const resolvedClientVersion = normalizeVersion(resolveAppVersion()) ?? installed.version;
   const revisionSuffix = installed.revision ? ` · ${installed.revision}` : "";
@@ -898,24 +966,47 @@ function AndroidApkUpdateRow() {
     ],
     [hasUpdate, isCoordinatorMismatch],
   );
+  const rightStatus = renderAndroidApkUpdateRightStatus({
+    checking,
+    checkPhase,
+    taskPhase,
+    progress,
+    availableRelease,
+    isSkipped,
+    spinnerColor: theme.colors.foregroundMuted,
+  });
 
   return (
-    <View style={rowStyle} testID="settings-android-apk-update">
-      <View style={settingsStyles.rowContent}>
-        <Text style={settingsStyles.rowTitle}>Android APK Updates</Text>
-        <Text style={hintStyle}>{hintText}</Text>
+    <>
+      <Pressable
+        style={rowStyle}
+        onPress={handlePressCheckRow}
+        disabled={checking}
+        accessibilityRole="button"
+        testID="settings-android-apk-update"
+      >
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>Check for updates</Text>
+          <Text style={hintStyle}>{hintText}</Text>
+        </View>
+        <View style={styles.aboutUpdateActions}>{rightStatus}</View>
+      </Pressable>
+      <View style={rowStyle} testID="settings-android-apk-auto-check">
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>Automatic update check</Text>
+          <Text style={settingsStyles.rowHint}>
+            Check for new Pavra APK releases once every 24 hours
+          </Text>
+        </View>
+        <Switch
+          value={autoCheck}
+          onValueChange={setAutoCheck}
+          accessibilityLabel="Automatic update check"
+          testID="settings-android-apk-auto-check-switch"
+        />
       </View>
-      <View style={styles.aboutUpdateActions}>
-        <Button variant="outline" onPress={handleCheckForUpdates} disabled={checking}>
-          {checking ? "Checking…" : "Check for updates"}
-        </Button>
-        {hasUpdate ? (
-          <Button variant="default" onPress={downloadAvailableRelease}>
-            Upgrade APK
-          </Button>
-        ) : null}
-      </View>
-    </View>
+      <ApkUpdateSheet />
+    </>
   );
 }
 
@@ -1159,7 +1250,10 @@ function SettingsSidebar({
   const hasHosts = sortedHosts.length > 0;
   const enableBuiltInDaemonOption = useEnableBuiltInDaemonOption();
   const isDesktopApp = isElectronRuntime();
-  const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
+  const hasApkUpdate = usePavraApkUpdaterStore(
+    (state) =>
+      Boolean(state.availableRelease) && state.availableRelease?.version !== state.skippedVersion,
+  );
   const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   const items = SIDEBAR_SECTION_ITEMS.filter((item) =>
     isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent),
@@ -1655,6 +1749,17 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
+  },
+  apkUpdateBadge: {
+    borderRadius: 999,
+    backgroundColor: theme.colors.palette.amber[500],
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  apkUpdateBadgeText: {
+    color: "#111114",
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.bold,
   },
   placeholder: {
     flex: 1,

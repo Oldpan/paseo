@@ -1,9 +1,15 @@
 export const PAVRA_GITHUB_REPO = "Oldpan/paseo";
 
+export const AUTO_UPDATE_CHECK_INTERVAL_MS = 24 * 3600_000;
+export const AUTO_UPDATE_RETRY_AFTER_FAILURE_MS = 4 * 3600_000;
+
+export type PavraUpdateSource = "spark" | "github-manifest" | "gh-proxy-manifest" | "github-api";
+
 export interface GitHubReleaseAssetPayload {
   name?: unknown;
   browser_download_url?: unknown;
   size?: unknown;
+  digest?: unknown;
 }
 
 export interface GitHubReleasePayload {
@@ -17,6 +23,27 @@ export interface GitHubReleasePayload {
   assets?: unknown;
 }
 
+export interface PavraUpdateManifestAssetPayload {
+  name?: unknown;
+  size?: unknown;
+  sha256?: unknown;
+  url?: unknown;
+}
+
+export interface PavraUpdateManifestPayload {
+  schema?: unknown;
+  version?: unknown;
+  tag?: unknown;
+  title?: unknown;
+  publishedAt?: unknown;
+  notes?: unknown;
+  page?: unknown;
+  revision?: unknown;
+  assets?: {
+    arm64?: PavraUpdateManifestAssetPayload;
+  } | null;
+}
+
 export interface PavraApkReleaseInfo {
   tagName: string;
   title: string;
@@ -27,6 +54,7 @@ export interface PavraApkReleaseInfo {
   apkDownloadUrl: string;
   apkFileName: string;
   apkSizeBytes: number | null;
+  sha256: string | null;
   htmlUrl: string;
 }
 
@@ -55,15 +83,27 @@ export function compareSemver(a: string, b: string): number {
 }
 
 function extractVersionFromTag(tag: string): string | null {
-  const match = tag.trim().match(/^(?:pavra-v|android-v|v)(\d+\.\d+\.\d+)/i);
+  const match = tag.trim().match(/^(?:pavra-v|android-v|v)?(\d+\.\d+\.\d+)/i);
   return match ? match[1] : null;
 }
 
 function extractRevision(tag: string, body: string): string | null {
   const tagMatch = tag.trim().match(/^(?:pavra-v|android-v|v)\d+\.\d+\.\d+-([0-9a-f]{7,40})$/i);
   if (tagMatch) return tagMatch[1].slice(0, 9);
-  const bodyMatch = body.match(/(?:commit|revision|sha)\s*[:=]\s*`?([0-9a-f]{7,40})`?/i);
+  const bodyMatch = body.match(/(?:commit|revision|sha)\**\s*[:=]\s*\**`?([0-9a-f]{7,40})`?/i);
   if (bodyMatch) return bodyMatch[1].slice(0, 9);
+  return null;
+}
+
+export function extractSha256(assetDigest: string | null | undefined, body: string): string | null {
+  if (typeof assetDigest === "string") {
+    const digestMatch = assetDigest.trim().match(/^(?:sha256:)?([0-9a-f]{6,64})$/i);
+    if (digestMatch) return digestMatch[1].toLowerCase();
+  }
+  if (typeof body === "string" && body.length > 0) {
+    const bodyMatch = body.match(/sha-?256\**\s*[:=]\s*\**`?([0-9a-f]{6,64})`?/i);
+    if (bodyMatch) return bodyMatch[1].toLowerCase();
+  }
   return null;
 }
 
@@ -73,10 +113,30 @@ function nonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function positiveFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function normalizeHttpOrigin(origin: string | null | undefined): string | null {
+  const raw = nonEmptyString(origin);
+  if (!raw) return null;
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+  return withScheme.replace(/\/+$/, "");
+}
+
 function findApkAsset(rawAssets: unknown): {
   name: string;
   downloadUrl: string;
   sizeBytes: number | null;
+  digest: string | null;
 } | null {
   if (!Array.isArray(rawAssets)) return null;
   const assets = rawAssets as GitHubReleaseAssetPayload[];
@@ -97,7 +157,65 @@ function findApkAsset(rawAssets: unknown): {
   return {
     name: nonEmptyString(picked.name) ?? "pavra-arm64.apk",
     downloadUrl: picked.browser_download_url.trim(),
-    sizeBytes: typeof picked.size === "number" && Number.isFinite(picked.size) ? picked.size : null,
+    sizeBytes: positiveFiniteNumber(picked.size),
+    digest: nonEmptyString(picked.digest),
+  };
+}
+
+function resolveManifestVersionAndTag(record: PavraUpdateManifestPayload): {
+  version: string;
+  tagName: string;
+} | null {
+  const rawVersion = nonEmptyString(record.version);
+  const rawTag = nonEmptyString(record.tag);
+  const versionFromField = rawVersion ? extractVersionFromTag(rawVersion) : null;
+  const versionFromTag = rawTag ? extractVersionFromTag(rawTag) : null;
+  const version = versionFromField ?? versionFromTag;
+  if (!version) return null;
+  return {
+    version,
+    tagName: rawTag ?? `pavra-v${version}`,
+  };
+}
+
+function resolveManifestArm64Asset(
+  record: PavraUpdateManifestPayload,
+): PavraUpdateManifestAssetPayload | null {
+  if (!isPlainRecord(record.assets)) return null;
+  const arm64 = record.assets.arm64;
+  return isPlainRecord(arm64) ? (arm64 as PavraUpdateManifestAssetPayload) : null;
+}
+
+export function parsePavraUpdateManifest(payload: unknown): PavraApkReleaseInfo | null {
+  if (!isPlainRecord(payload) || payload.schema !== 1) return null;
+  const record = payload as PavraUpdateManifestPayload;
+
+  const identity = resolveManifestVersionAndTag(record);
+  const arm64 = resolveManifestArm64Asset(record);
+  if (!identity || !arm64) return null;
+
+  const downloadUrl = nonEmptyString(arm64.url);
+  if (!downloadUrl) return null;
+
+  const notes = nonEmptyString(record.notes) ?? "";
+  const sha256 = extractSha256(nonEmptyString(arm64.sha256), notes);
+  const revision =
+    nonEmptyString(record.revision)?.slice(0, 9) ?? extractRevision(identity.tagName, notes);
+
+  return {
+    tagName: identity.tagName,
+    title: nonEmptyString(record.title) ?? `Pavra v${identity.version}`,
+    version: identity.version,
+    revision,
+    publishedAt: nonEmptyString(record.publishedAt),
+    notes,
+    apkDownloadUrl: downloadUrl,
+    apkFileName: nonEmptyString(arm64.name) ?? "pavra-arm64.apk",
+    apkSizeBytes: positiveFiniteNumber(arm64.size),
+    sha256,
+    htmlUrl:
+      nonEmptyString(record.page) ??
+      `https://github.com/${PAVRA_GITHUB_REPO}/releases/tag/${encodeURIComponent(identity.tagName)}`,
   };
 }
 
@@ -106,7 +224,7 @@ export function parsePavraReleasePayload(
 ): PavraApkReleaseInfo | null {
   if (!payload || typeof payload !== "object" || payload.draft === true) return null;
   const tagName = nonEmptyString(payload.tag_name);
-  if (!tagName) return null;
+  if (!tagName || !/^(?:pavra-v|android-v|v)\d+\.\d+\.\d+/i.test(tagName)) return null;
 
   const apkAsset = findApkAsset(payload.assets);
   const version = extractVersionFromTag(tagName);
@@ -123,6 +241,7 @@ export function parsePavraReleasePayload(
     apkDownloadUrl: apkAsset.downloadUrl,
     apkFileName: apkAsset.name,
     apkSizeBytes: apkAsset.sizeBytes,
+    sha256: extractSha256(apkAsset.digest, body),
     htmlUrl:
       nonEmptyString(payload.html_url) ??
       `https://github.com/${PAVRA_GITHUB_REPO}/releases/tag/${encodeURIComponent(tagName)}`,
@@ -136,26 +255,298 @@ export function isReleaseNewerThanInstalled(
   return compareSemver(release.version, installed.version) > 0;
 }
 
-export async function fetchLatestPavraApkRelease(options?: {
-  repo?: string;
-  fetchImpl?: typeof fetch;
-}): Promise<PavraApkReleaseInfo | null> {
-  const repo = options?.repo ?? PAVRA_GITHUB_REPO;
-  const fetchFn = options?.fetchImpl ?? fetch;
-  const response = await fetchFn(`https://api.github.com/repos/${repo}/releases?per_page=10`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`GitHub release check failed (${response.status})`);
-  }
-  const items = (await response.json()) as unknown;
-  if (!Array.isArray(items)) return null;
+export interface AutoUpdateCheckDueInput {
+  nowMs?: number;
+  lastCheckedAtMs: number | null | undefined;
+  lastAttemptAtMs?: number | null | undefined;
+  intervalMs?: number;
+  retryAfterFailureMs?: number;
+}
 
+export function isAutoUpdateCheckDue(input: AutoUpdateCheckDueInput): boolean {
+  const nowMs = finiteNumber(input.nowMs) ?? Date.now();
+  const intervalMs = positiveFiniteNumber(input.intervalMs) ?? AUTO_UPDATE_CHECK_INTERVAL_MS;
+  const retryAfterFailureMs =
+    positiveFiniteNumber(input.retryAfterFailureMs) ?? AUTO_UPDATE_RETRY_AFTER_FAILURE_MS;
+
+  const checkedAt = finiteNumber(input.lastCheckedAtMs);
+  const attemptAt = finiteNumber(input.lastAttemptAtMs);
+
+  // Backwards clock is always treated as due immediately.
+  if ((checkedAt !== null && nowMs < checkedAt) || (attemptAt !== null && nowMs < attemptAt)) {
+    return true;
+  }
+
+  // If the most recent attempt failed (or no check has succeeded yet), apply failure backoff.
+  if (attemptAt !== null && (checkedAt === null || attemptAt > checkedAt)) {
+    if (nowMs - attemptAt < retryAfterFailureMs) {
+      return false;
+    }
+  }
+
+  // If a check succeeded within the throttle interval, it is not due yet.
+  if (checkedAt !== null && nowMs - checkedAt < intervalMs) {
+    return false;
+  }
+
+  return true;
+}
+
+export interface UpdateCheckSourceDescriptor {
+  source: PavraUpdateSource;
+  url: string;
+}
+
+export function resolveUpdateCheckSources(options?: {
+  repo?: string;
+  coordinatorHttpOrigin?: string | null;
+  lastWorkingSource?: PavraUpdateSource | string | null;
+  preferredSource?: PavraUpdateSource | string | null;
+}): UpdateCheckSourceDescriptor[] {
+  const repo = nonEmptyString(options?.repo) ?? PAVRA_GITHUB_REPO;
+  const cleanOrigin = normalizeHttpOrigin(options?.coordinatorHttpOrigin);
+  const preferred = nonEmptyString(options?.lastWorkingSource ?? options?.preferredSource);
+
+  const manifestCandidates: UpdateCheckSourceDescriptor[] = [];
+  if (cleanOrigin) {
+    manifestCandidates.push({
+      source: "spark",
+      url: `${cleanOrigin}/updates/update.json`,
+    });
+  }
+  manifestCandidates.push(
+    {
+      source: "github-manifest",
+      url: `https://github.com/${repo}/releases/latest/download/update.json`,
+    },
+    {
+      source: "gh-proxy-manifest",
+      url: `https://gh-proxy.com/https://github.com/${repo}/releases/latest/download/update.json`,
+    },
+  );
+
+  // Prioritize the last working manifest source first while keeping github-api strictly last.
+  const orderedManifests: UpdateCheckSourceDescriptor[] = [];
+  if (preferred && preferred !== "github-api") {
+    const matched = manifestCandidates.find((entry) => entry.source === preferred);
+    if (matched) {
+      orderedManifests.push(matched);
+    }
+  }
+  for (const entry of manifestCandidates) {
+    if (!orderedManifests.some((existing) => existing.source === entry.source)) {
+      orderedManifests.push(entry);
+    }
+  }
+
+  return [
+    ...orderedManifests,
+    {
+      source: "github-api",
+      url: `https://api.github.com/repos/${repo}/releases?per_page=10`,
+    },
+  ];
+}
+
+function parseFirstReleaseFromArray(items: unknown[]): PavraApkReleaseInfo | null {
   for (const item of items) {
     const parsed = parsePavraReleasePayload(item as GitHubReleasePayload);
     if (parsed) return parsed;
   }
   return null;
+}
+
+export interface FetchPavraApkReleaseOptions {
+  repo?: string;
+  coordinatorHttpOrigin?: string | null;
+  lastWorkingSource?: PavraUpdateSource | string | null;
+  preferredSource?: PavraUpdateSource | string | null;
+  fetchImpl?: typeof fetch;
+  onSourceSuccess?: (source: PavraUpdateSource) => void;
+}
+
+export async function fetchLatestPavraApkRelease(
+  options?: FetchPavraApkReleaseOptions,
+): Promise<PavraApkReleaseInfo | null> {
+  const fetchFn = options?.fetchImpl ?? fetch;
+  const sources = resolveUpdateCheckSources(options);
+
+  let lastError: Error | null = null;
+  let sawValidEmptyReleaseList = false;
+
+  for (const entry of sources) {
+    try {
+      const response = await fetchFn(entry.url, {
+        headers: {
+          Accept:
+            entry.source === "github-api" ? "application/vnd.github+json" : "application/json",
+        },
+      });
+      if (!response.ok) {
+        lastError = new Error(
+          entry.source === "github-api"
+            ? `GitHub release check failed (${response.status})`
+            : `Update manifest check failed from ${entry.source} (${response.status})`,
+        );
+        continue;
+      }
+
+      const payload = (await response.json()) as unknown;
+      if (entry.source === "github-api") {
+        if (!Array.isArray(payload)) continue;
+        sawValidEmptyReleaseList = true;
+        const parsed = parseFirstReleaseFromArray(payload);
+        if (parsed) {
+          options?.onSourceSuccess?.("github-api");
+          return parsed;
+        }
+        continue;
+      }
+
+      const parsedManifest = parsePavraUpdateManifest(payload);
+      if (parsedManifest) {
+        options?.onSourceSuccess?.(entry.source);
+        return parsedManifest;
+      }
+    } catch (failure) {
+      lastError =
+        failure instanceof Error ? failure : new Error(`Update check failed from ${entry.source}`);
+    }
+  }
+
+  if (sawValidEmptyReleaseList) {
+    return null;
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  return null;
+}
+
+export interface BuildCandidateApkDownloadUrlsOptions {
+  preferredSource?: PavraUpdateSource | string | null;
+  lastWorkingSource?: PavraUpdateSource | string | null;
+  coordinatorHttpOrigin?: string | null;
+}
+
+function resolveDownloadUrlOptions(
+  releaseOrigin: string | null | undefined,
+  preferredSourceOrOptions:
+    | PavraUpdateSource
+    | string
+    | null
+    | BuildCandidateApkDownloadUrlsOptions
+    | undefined,
+  coordinatorHttpOriginArg: string | null | undefined,
+): { preferredSource: string | null; cleanOrigin: string | null } {
+  if (typeof preferredSourceOrOptions === "string") {
+    return {
+      preferredSource: nonEmptyString(preferredSourceOrOptions),
+      cleanOrigin: normalizeHttpOrigin(coordinatorHttpOriginArg ?? releaseOrigin),
+    };
+  }
+  const preferredSource = nonEmptyString(
+    preferredSourceOrOptions?.preferredSource ?? preferredSourceOrOptions?.lastWorkingSource,
+  );
+  const cleanOrigin = normalizeHttpOrigin(
+    coordinatorHttpOriginArg ?? preferredSourceOrOptions?.coordinatorHttpOrigin ?? releaseOrigin,
+  );
+  return { preferredSource, cleanOrigin };
+}
+
+function deduplicateStrings(items: ReadonlyArray<string | null>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    const trimmed = nonEmptyString(item);
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
+export function buildCandidateApkDownloadUrls(
+  release: Pick<PavraApkReleaseInfo, "apkDownloadUrl"> & {
+    apkFileName?: string | null;
+    tagName?: string | null;
+    coordinatorHttpOrigin?: string | null;
+  },
+  preferredSourceOrOptions?:
+    | PavraUpdateSource
+    | string
+    | null
+    | BuildCandidateApkDownloadUrlsOptions,
+  coordinatorHttpOriginArg?: string | null,
+): string[] {
+  const { preferredSource, cleanOrigin } = resolveDownloadUrlOptions(
+    release.coordinatorHttpOrigin,
+    preferredSourceOrOptions,
+    coordinatorHttpOriginArg,
+  );
+
+  const fileName = nonEmptyString(release.apkFileName) ?? "pavra-arm64.apk";
+  const rawDownloadUrl = nonEmptyString(release.apkDownloadUrl) ?? "";
+  const directUrl = rawDownloadUrl.startsWith("https://gh-proxy.com/")
+    ? rawDownloadUrl.slice("https://gh-proxy.com/".length)
+    : rawDownloadUrl;
+  const proxyUrl =
+    directUrl.startsWith("https://") && !directUrl.startsWith("https://gh-proxy.com/")
+      ? `https://gh-proxy.com/${directUrl}`
+      : null;
+  const sparkUrl = cleanOrigin ? `${cleanOrigin}/updates/${fileName}` : null;
+
+  if (preferredSource === "gh-proxy-manifest") {
+    return deduplicateStrings([proxyUrl, sparkUrl, directUrl]);
+  }
+  if (preferredSource === "github-manifest" || preferredSource === "github-api") {
+    return deduplicateStrings([directUrl, proxyUrl, sparkUrl]);
+  }
+  return deduplicateStrings([sparkUrl, directUrl, proxyUrl]);
+}
+
+export function resolveCoordinatorHttpOriginFromHosts(
+  hosts: readonly {
+    serverId: string;
+    preferredConnectionId: string | null;
+    connections: readonly { id: string; type: string; endpoint?: string; useTls?: boolean }[];
+  }[],
+  coordinatorId?: string | null,
+): string | null {
+  if (!hosts || hosts.length === 0) return null;
+  const targetHost =
+    (coordinatorId ? hosts.find((host) => host.serverId === coordinatorId) : null) ??
+    hosts[0] ??
+    null;
+  if (!targetHost) return null;
+
+  const preferred = targetHost.preferredConnectionId
+    ? targetHost.connections.find(
+        (conn) => conn.id === targetHost.preferredConnectionId && conn.type === "directTcp",
+      )
+    : null;
+  const direct =
+    preferred ?? targetHost.connections.find((conn) => conn.type === "directTcp") ?? null;
+  if (!direct || typeof direct.endpoint !== "string") return null;
+
+  const cleanEndpoint = direct.endpoint
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/+$/, "");
+  if (!cleanEndpoint) return null;
+  return `${direct.useTls ? "https" : "http"}://${cleanEndpoint}`;
+}
+
+export function formatApkMegabytes(bytes: number | null | undefined): string | null {
+  const validBytes = positiveFiniteNumber(bytes);
+  if (validBytes === null) return null;
+  return `${(validBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatSha256Snippet(sha256: string | null | undefined): string | null {
+  const clean = nonEmptyString(sha256);
+  if (!clean) return null;
+  if (clean.length <= 16) return clean;
+  return `${clean.slice(0, 12)}…${clean.slice(-4)}`;
 }
