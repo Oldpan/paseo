@@ -2,6 +2,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
   <application>
     <service
@@ -9,5 +10,9 @@
       android:enabled="true"
       android:exported="false"
       android:foregroundServiceType="dataSync" />
+    <receiver
+      android:name="expo.modules.pavrakeepalive.PavraApkInstallReceiver"
+      android:enabled="true"
+      android:exported="false" />
   </application>
 </manifest>

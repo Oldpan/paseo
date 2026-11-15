@@ -4,6 +4,7 @@ const KEEP_ALIVE_PERMISSIONS = [
   "android.permission.FOREGROUND_SERVICE",
   "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
   "android.permission.POST_NOTIFICATIONS",
+  "android.permission.REQUEST_INSTALL_PACKAGES",
 ];
 
 const KEEP_ALIVE_SERVICE_NAME = "expo.modules.pavrakeepalive.PavraKeepaliveService";
