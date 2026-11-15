@@ -2,11 +2,9 @@ export const PAVRA_GITHUB_REPO = "Oldpan/paseo";
 
 export const AUTO_UPDATE_CHECK_INTERVAL_MS = 24 * 3600_000;
 export const AUTO_UPDATE_RETRY_AFTER_FAILURE_MS = 4 * 3600_000;
-export const SPARK_UPDATE_CHECK_TIMEOUT_MS = 2_500;
 export const REMOTE_UPDATE_CHECK_TIMEOUT_MS = 5_000;
-export const DEFAULT_SPARK_HTTP_ORIGIN = "http://192.168.0.149:6778";
 
-export type PavraUpdateSource = "spark" | "github-manifest" | "gh-proxy-manifest" | "github-api";
+export type PavraUpdateSource = "gh-proxy-manifest" | "github-manifest" | "github-api";
 
 export interface GitHubReleaseAssetPayload {
   name?: unknown;
@@ -126,13 +124,6 @@ function finiteNumber(value: unknown): number | null {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-export function normalizeHttpOrigin(origin: string | null | undefined): string | null {
-  const raw = nonEmptyString(origin);
-  if (!raw) return null;
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
-  return withScheme.replace(/\/+$/, "");
 }
 
 function findApkAsset(rawAssets: unknown): {
@@ -300,48 +291,15 @@ export interface UpdateCheckSourceDescriptor {
   url: string;
 }
 
-function collectCleanCoordinatorOrigins(options?: {
-  coordinatorHttpOrigin?: string | null;
-  coordinatorHttpOrigins?: readonly (string | null | undefined)[];
-}): string[] {
-  const rawList: Array<string | null | undefined> = [];
-  if (options?.coordinatorHttpOrigin) {
-    rawList.push(options.coordinatorHttpOrigin);
-  }
-  if (Array.isArray(options?.coordinatorHttpOrigins)) {
-    rawList.push(...options.coordinatorHttpOrigins);
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const item of rawList) {
-    const clean = normalizeHttpOrigin(item);
-    if (clean && !seen.has(clean)) {
-      seen.add(clean);
-      result.push(clean);
-    }
-  }
-  return result;
-}
-
 export function resolveUpdateCheckSources(options?: {
   repo?: string;
-  coordinatorHttpOrigin?: string | null;
-  coordinatorHttpOrigins?: readonly (string | null | undefined)[];
   lastWorkingSource?: PavraUpdateSource | string | null;
   preferredSource?: PavraUpdateSource | string | null;
 }): UpdateCheckSourceDescriptor[] {
   const repo = nonEmptyString(options?.repo) ?? PAVRA_GITHUB_REPO;
-  const cleanOrigins = collectCleanCoordinatorOrigins(options);
   const preferred = nonEmptyString(options?.lastWorkingSource ?? options?.preferredSource);
 
-  const manifestCandidates: UpdateCheckSourceDescriptor[] = [];
-  for (const cleanOrigin of cleanOrigins) {
-    manifestCandidates.push({
-      source: "spark",
-      url: `${cleanOrigin}/updates/update.json`,
-    });
-  }
-  manifestCandidates.push(
+  const manifestCandidates: UpdateCheckSourceDescriptor[] = [
     {
       source: "gh-proxy-manifest",
       url: `https://gh-proxy.com/https://github.com/${repo}/releases/latest/download/update.json`,
@@ -350,7 +308,7 @@ export function resolveUpdateCheckSources(options?: {
       source: "github-manifest",
       url: `https://github.com/${repo}/releases/latest/download/update.json`,
     },
-  );
+  ];
 
   // Prioritize the last working manifest source first while keeping github-api strictly last.
   const orderedManifests: UpdateCheckSourceDescriptor[] = [];
@@ -386,11 +344,8 @@ function parseFirstReleaseFromArray(items: unknown[]): PavraApkReleaseInfo | nul
 
 export interface FetchPavraApkReleaseOptions {
   repo?: string;
-  coordinatorHttpOrigin?: string | null;
-  coordinatorHttpOrigins?: readonly (string | null | undefined)[];
   lastWorkingSource?: PavraUpdateSource | string | null;
   preferredSource?: PavraUpdateSource | string | null;
-  sparkTimeoutMs?: number;
   remoteTimeoutMs?: number;
   signal?: AbortSignal | null;
   fetchImpl?: typeof fetch;
@@ -481,17 +436,6 @@ async function probeUpdateCheckSource(
   return { release: parsePavraUpdateManifest(payload), sawEmptyList: false };
 }
 
-function resolveSourceTimeouts(options?: FetchPavraApkReleaseOptions): {
-  sparkTimeoutMs: number;
-  remoteTimeoutMs: number;
-} {
-  return {
-    sparkTimeoutMs: positiveFiniteNumber(options?.sparkTimeoutMs) ?? SPARK_UPDATE_CHECK_TIMEOUT_MS,
-    remoteTimeoutMs:
-      positiveFiniteNumber(options?.remoteTimeoutMs) ?? REMOTE_UPDATE_CHECK_TIMEOUT_MS,
-  };
-}
-
 function toCheckError(failure: unknown, source: string, signal?: AbortSignal | null): Error {
   if (signal?.aborted) {
     return failure instanceof Error ? failure : new Error("Update check aborted");
@@ -499,27 +443,31 @@ function toCheckError(failure: unknown, source: string, signal?: AbortSignal | n
   return failure instanceof Error ? failure : new Error(`Update check failed from ${source}`);
 }
 
+function resolveCheckTimeoutMs(options?: FetchPavraApkReleaseOptions): number {
+  return positiveFiniteNumber(options?.remoteTimeoutMs) ?? REMOTE_UPDATE_CHECK_TIMEOUT_MS;
+}
+
 export async function fetchLatestPavraApkRelease(
   options?: FetchPavraApkReleaseOptions,
 ): Promise<PavraApkReleaseInfo | null> {
   const fetchFn = options?.fetchImpl ?? fetch;
   const sources = resolveUpdateCheckSources(options);
-  const { sparkTimeoutMs, remoteTimeoutMs } = resolveSourceTimeouts(options);
+  const timeoutMs = resolveCheckTimeoutMs(options);
+  const signal = options?.signal;
 
   let lastError: Error | null = null;
   let sawValidEmptyReleaseList = false;
 
   for (const entry of sources) {
-    if (options?.signal?.aborted) {
+    if (signal?.aborted) {
       throw new Error("Update check aborted");
     }
-    const timeoutMs = entry.source === "spark" ? sparkTimeoutMs : remoteTimeoutMs;
     try {
       const { release, sawEmptyList } = await probeUpdateCheckSource(
         fetchFn,
         entry,
         timeoutMs,
-        options?.signal,
+        signal,
       );
       if (sawEmptyList) sawValidEmptyReleaseList = true;
       if (release) {
@@ -527,8 +475,8 @@ export async function fetchLatestPavraApkRelease(
         return release;
       }
     } catch (failure) {
-      const err = toCheckError(failure, entry.source, options?.signal);
-      if (options?.signal?.aborted) throw err;
+      const err = toCheckError(failure, entry.source, signal);
+      if (signal?.aborted) throw err;
       lastError = err;
     }
   }
@@ -541,32 +489,22 @@ export async function fetchLatestPavraApkRelease(
 export interface BuildCandidateApkDownloadUrlsOptions {
   preferredSource?: PavraUpdateSource | string | null;
   lastWorkingSource?: PavraUpdateSource | string | null;
-  coordinatorHttpOrigin?: string | null;
 }
 
-function resolveDownloadUrlOptions(
-  releaseOrigin: string | null | undefined,
+function resolvePreferredDownloadSource(
   preferredSourceOrOptions:
     | PavraUpdateSource
     | string
     | null
     | BuildCandidateApkDownloadUrlsOptions
     | undefined,
-  coordinatorHttpOriginArg: string | null | undefined,
-): { preferredSource: string | null; cleanOrigin: string | null } {
+): string | null {
   if (typeof preferredSourceOrOptions === "string") {
-    return {
-      preferredSource: nonEmptyString(preferredSourceOrOptions),
-      cleanOrigin: normalizeHttpOrigin(coordinatorHttpOriginArg ?? releaseOrigin),
-    };
+    return nonEmptyString(preferredSourceOrOptions);
   }
-  const preferredSource = nonEmptyString(
+  return nonEmptyString(
     preferredSourceOrOptions?.preferredSource ?? preferredSourceOrOptions?.lastWorkingSource,
   );
-  const cleanOrigin = normalizeHttpOrigin(
-    coordinatorHttpOriginArg ?? preferredSourceOrOptions?.coordinatorHttpOrigin ?? releaseOrigin,
-  );
-  return { preferredSource, cleanOrigin };
 }
 
 function deduplicateStrings(items: ReadonlyArray<string | null>): string[] {
@@ -586,22 +524,15 @@ export function buildCandidateApkDownloadUrls(
   release: Pick<PavraApkReleaseInfo, "apkDownloadUrl"> & {
     apkFileName?: string | null;
     tagName?: string | null;
-    coordinatorHttpOrigin?: string | null;
   },
   preferredSourceOrOptions?:
     | PavraUpdateSource
     | string
     | null
     | BuildCandidateApkDownloadUrlsOptions,
-  coordinatorHttpOriginArg?: string | null,
 ): string[] {
-  const { preferredSource, cleanOrigin } = resolveDownloadUrlOptions(
-    release.coordinatorHttpOrigin,
-    preferredSourceOrOptions,
-    coordinatorHttpOriginArg,
-  );
+  const preferredSource = resolvePreferredDownloadSource(preferredSourceOrOptions);
 
-  const fileName = nonEmptyString(release.apkFileName) ?? "pavra-arm64.apk";
   const rawDownloadUrl = nonEmptyString(release.apkDownloadUrl) ?? "";
   const directUrl = rawDownloadUrl.startsWith("https://gh-proxy.com/")
     ? rawDownloadUrl.slice("https://gh-proxy.com/".length)
@@ -610,109 +541,11 @@ export function buildCandidateApkDownloadUrls(
     directUrl.startsWith("https://") && !directUrl.startsWith("https://gh-proxy.com/")
       ? `https://gh-proxy.com/${directUrl}`
       : null;
-  const sparkUrl = cleanOrigin ? `${cleanOrigin}/updates/${fileName}` : null;
 
-  if (preferredSource === "gh-proxy-manifest") {
-    return deduplicateStrings([proxyUrl, sparkUrl, directUrl]);
-  }
   if (preferredSource === "github-manifest" || preferredSource === "github-api") {
-    return deduplicateStrings([directUrl, proxyUrl, sparkUrl]);
+    return deduplicateStrings([directUrl, proxyUrl]);
   }
-  return deduplicateStrings([sparkUrl, proxyUrl, directUrl]);
-}
-
-function isLoopbackEndpointHost(endpoint: string): boolean {
-  const hostPart = endpoint
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/.*$/, "")
-    .replace(/:\d+$/, "")
-    .toLowerCase();
-  return (
-    hostPart === "localhost" ||
-    hostPart === "127.0.0.1" ||
-    hostPart === "0.0.0.0" ||
-    hostPart === "::1" ||
-    hostPart === "[::1]"
-  );
-}
-
-export interface HostConnectionSummary {
-  serverId: string;
-  preferredConnectionId: string | null;
-  connections: readonly { id: string; type: string; endpoint?: string; useTls?: boolean }[];
-}
-
-function extractOriginsFromHost(host: HostConnectionSummary, allowLoopback: boolean): string[] {
-  const directConnections = host.connections.filter((conn) => conn.type === "directTcp");
-  if (directConnections.length === 0) return [];
-
-  const ordered = [
-    ...(host.preferredConnectionId
-      ? directConnections.filter((conn) => conn.id === host.preferredConnectionId)
-      : []),
-    ...directConnections.filter((conn) => conn.id !== host.preferredConnectionId),
-  ];
-
-  const origins: string[] = [];
-  for (const conn of ordered) {
-    if (typeof conn.endpoint !== "string") continue;
-    const cleanEndpoint = conn.endpoint
-      .trim()
-      .replace(/^https?:\/\//i, "")
-      .replace(/\/+$/, "");
-    if (!cleanEndpoint) continue;
-    if (!allowLoopback && isLoopbackEndpointHost(cleanEndpoint)) continue;
-    origins.push(`${conn.useTls ? "https" : "http"}://${cleanEndpoint}`);
-  }
-  return origins;
-}
-
-export function resolveCoordinatorHttpOriginsFromHosts(
-  hosts: readonly HostConnectionSummary[],
-  coordinatorId?: string | null,
-  options?: { allowLoopback?: boolean; includeDefaultSpark?: boolean },
-): string[] {
-  const allowLoopback = options?.allowLoopback ?? false;
-  const includeDefaultSpark = options?.includeDefaultSpark ?? false;
-  const orderedHosts: HostConnectionSummary[] = [];
-
-  if (hosts && hosts.length > 0) {
-    const primary = coordinatorId
-      ? hosts.find((host) => host.serverId === coordinatorId)
-      : undefined;
-    if (primary) orderedHosts.push(primary);
-    for (const host of hosts) {
-      if (!orderedHosts.some((existing) => existing.serverId === host.serverId)) {
-        orderedHosts.push(host);
-      }
-    }
-  }
-
-  const candidateOrigins: Array<string | null> = [];
-  for (const host of orderedHosts) {
-    candidateOrigins.push(...extractOriginsFromHost(host, allowLoopback));
-  }
-  if (includeDefaultSpark) {
-    candidateOrigins.push(DEFAULT_SPARK_HTTP_ORIGIN);
-  }
-  return deduplicateStrings(candidateOrigins);
-}
-
-export function resolveCoordinatorHttpOriginFromHosts(
-  hosts: readonly HostConnectionSummary[],
-  coordinatorId?: string | null,
-): string | null {
-  const nonLoopback = resolveCoordinatorHttpOriginsFromHosts(hosts, coordinatorId, {
-    allowLoopback: false,
-    includeDefaultSpark: false,
-  });
-  if (nonLoopback.length > 0) return nonLoopback[0] ?? null;
-  const withLoopback = resolveCoordinatorHttpOriginsFromHosts(hosts, coordinatorId, {
-    allowLoopback: true,
-    includeDefaultSpark: false,
-  });
-  return withLoopback[0] ?? null;
+  return deduplicateStrings([proxyUrl, directUrl]);
 }
 
 export function formatApkMegabytes(bytes: number | null | undefined): string | null {

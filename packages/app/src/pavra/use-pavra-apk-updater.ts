@@ -4,21 +4,16 @@ import { useCallback, useEffect } from "react";
 import { AppState, Linking, Platform } from "react-native";
 import { create } from "zustand";
 import * as PavraKeepalive from "../../modules/pavra-keepalive";
-import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { resolveAppVersion } from "@/utils/app-version";
 import {
   buildCandidateApkDownloadUrls,
-  DEFAULT_SPARK_HTTP_ORIGIN,
   fetchLatestPavraApkRelease,
   isAutoUpdateCheckDue,
   isReleaseNewerThanInstalled,
-  resolveCoordinatorHttpOriginsFromHosts,
   type InstalledPavraBuildInfo,
   type PavraApkReleaseInfo,
   type PavraUpdateSource,
 } from "./apk-updates";
-import { resolveDefaultCoordinatorId } from "./model";
-import { usePavraView } from "./store";
 
 export const PAVRA_APK_UPDATER_PREFS_KEY = "pavra.apkUpdater.prefs.v1";
 
@@ -101,24 +96,6 @@ export async function openApkReleaseDownload(release: PavraApkReleaseInfo): Prom
 
 export function isAndroidApkUpdateSupported(): boolean {
   return Platform.OS === "android";
-}
-
-function resolveCurrentCoordinatorHttpOrigins(): string[] {
-  try {
-    const hosts = getHostRuntimeStore().getHosts();
-    const savedCoordinatorId = usePavraView.getState().coordinatorId;
-    const coordinatorId = resolveDefaultCoordinatorId(savedCoordinatorId, hosts);
-    return resolveCoordinatorHttpOriginsFromHosts(hosts, coordinatorId, {
-      allowLoopback: false,
-      includeDefaultSpark: true,
-    });
-  } catch {
-    return [DEFAULT_SPARK_HTTP_ORIGIN];
-  }
-}
-
-function resolveCurrentCoordinatorHttpOrigin(): string | null {
-  return resolveCurrentCoordinatorHttpOrigins()[0] ?? DEFAULT_SPARK_HTTP_ORIGIN;
 }
 
 export interface PavraApkUpdaterState {
@@ -348,13 +325,6 @@ function applyCheckedReleaseToStore(input: {
   if (manual) onNotice?.(msg);
 }
 
-function resolveCheckCoordinatorOrigins(explicitOrigin: string | null | undefined): string[] {
-  if (explicitOrigin === undefined) {
-    return resolveCurrentCoordinatorHttpOrigins();
-  }
-  return explicitOrigin ? [explicitOrigin] : [];
-}
-
 function resetActiveCheckController(): AbortController | null {
   if (activeCheckAbortController) {
     try {
@@ -389,7 +359,6 @@ function applyCheckFailureToStore(
 
 export async function checkForPavraApkUpdateAction(options?: {
   manual?: boolean;
-  coordinatorHttpOrigin?: string | null;
   onNotice?: (message: string) => void;
 }): Promise<void> {
   const manual = Boolean(options?.manual);
@@ -411,12 +380,10 @@ export async function checkForPavraApkUpdateAction(options?: {
     lastAttemptAtMs: Date.now(),
   });
 
-  const coordinatorHttpOrigins = resolveCheckCoordinatorOrigins(options?.coordinatorHttpOrigin);
   let workingSource: PavraUpdateSource | string | null = store.lastWorkingSource;
 
   try {
     const latest = await fetchLatestPavraApkRelease({
-      coordinatorHttpOrigins,
       lastWorkingSource: store.lastWorkingSource,
       signal: controller?.signal,
       onSourceSuccess: (source) => {
@@ -649,11 +616,7 @@ export async function startPavraApkDownloadAndInstallAction(): Promise<void> {
   });
 
   const removeProgressListener = attachDownloadProgressListener(bridge, release.apkSizeBytes);
-  const candidateUrls = buildCandidateApkDownloadUrls(
-    release,
-    state.lastWorkingSource,
-    resolveCurrentCoordinatorHttpOrigin(),
-  );
+  const candidateUrls = buildCandidateApkDownloadUrls(release, state.lastWorkingSource);
   const urlsToTry = candidateUrls.length > 0 ? candidateUrls : [release.apkDownloadUrl];
 
   try {
@@ -723,7 +686,7 @@ export function usePavraApkUpdater(onNotice?: (message: string) => void) {
   }, []);
 
   const checkForApkUpdate = useCallback(
-    async (options?: { manual?: boolean; coordinatorHttpOrigin?: string | null }) => {
+    async (options?: { manual?: boolean }) => {
       await checkForPavraApkUpdateAction({
         ...options,
         onNotice,
