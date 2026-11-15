@@ -15,6 +15,7 @@ import {
   parsePavraUpdateManifest,
   parseSemverTuple,
   resolveCoordinatorHttpOriginFromHosts,
+  resolveCoordinatorHttpOriginsFromHosts,
   resolveUpdateCheckSources,
 } from "./apk-updates";
 
@@ -271,10 +272,10 @@ describe("apk-updates", () => {
     ).toBe(true);
   });
 
-  it("orders multi-source check descriptors with lastWorkingSource first and github-api always last", () => {
+  it("orders multi-source check descriptors with lastWorkingSource first, gh-proxy before raw github, and github-api always last", () => {
     expect(resolveUpdateCheckSources().map((s) => s.source)).toEqual([
-      "github-manifest",
       "gh-proxy-manifest",
+      "github-manifest",
       "github-api",
     ]);
 
@@ -282,14 +283,14 @@ describe("apk-updates", () => {
       resolveUpdateCheckSources({
         coordinatorHttpOrigin: "http://100.115.92.20:6778/",
       }).map((s) => s.source),
-    ).toEqual(["spark", "github-manifest", "gh-proxy-manifest", "github-api"]);
+    ).toEqual(["spark", "gh-proxy-manifest", "github-manifest", "github-api"]);
 
     expect(
       resolveUpdateCheckSources({
         coordinatorHttpOrigin: "http://100.115.92.20:6778",
-        lastWorkingSource: "gh-proxy-manifest",
+        lastWorkingSource: "github-manifest",
       }).map((s) => s.source),
-    ).toEqual(["gh-proxy-manifest", "spark", "github-manifest", "github-api"]);
+    ).toEqual(["github-manifest", "spark", "gh-proxy-manifest", "github-api"]);
 
     // github-api stays last even if it was the last working source
     expect(
@@ -297,19 +298,17 @@ describe("apk-updates", () => {
         coordinatorHttpOrigin: "http://100.115.92.20:6778",
         lastWorkingSource: "github-api",
       }).map((s) => s.source),
-    ).toEqual(["spark", "github-manifest", "gh-proxy-manifest", "github-api"]);
+    ).toEqual(["spark", "gh-proxy-manifest", "github-manifest", "github-api"]);
   });
 
-  it("falls back across sources and reports the working source", async () => {
+  it("falls back across sources, enforces per-source timeout, and reports the working source", async () => {
     const calledUrls: string[] = [];
     const onSourceSuccess = vi.fn();
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       calledUrls.push(url);
       if (url.includes("/updates/update.json")) {
-        return { ok: false, status: 404, json: async () => ({}) };
-      }
-      if (url === "https://github.com/Oldpan/paseo/releases/latest/download/update.json") {
-        throw new Error("Network timeout");
+        // Simulate a hanging LAN host that never resolves unless timed out
+        return new Promise(() => {});
       }
       if (url.startsWith("https://gh-proxy.com/")) {
         return {
@@ -339,16 +338,20 @@ describe("apk-updates", () => {
 
     const latest = await fetchLatestPavraApkRelease({
       coordinatorHttpOrigin: "http://100.115.92.20:6778",
+      sparkTimeoutMs: 25,
+      remoteTimeoutMs: 50,
       fetchImpl: mockFetch as unknown as typeof fetch,
       onSourceSuccess,
     });
 
     expect(calledUrls).toEqual([
       "http://100.115.92.20:6778/updates/update.json",
-      "https://github.com/Oldpan/paseo/releases/latest/download/update.json",
       "https://gh-proxy.com/https://github.com/Oldpan/paseo/releases/latest/download/update.json",
     ]);
-    expect(onSourceSuccess).toHaveBeenCalledWith("gh-proxy-manifest");
+    expect(onSourceSuccess).toHaveBeenCalledWith(
+      "gh-proxy-manifest",
+      "https://gh-proxy.com/https://github.com/Oldpan/paseo/releases/latest/download/update.json",
+    );
     expect(latest?.version).toBe("0.16.0");
     expect(latest?.sha256).toBe("1234567890abcdef");
   });
@@ -385,8 +388,8 @@ describe("apk-updates", () => {
     };
 
     expect(buildCandidateApkDownloadUrls(release, null)).toEqual([
-      "https://github.com/Oldpan/paseo/releases/download/pavra-v0.16.0/pavra-arm64.apk",
       "https://gh-proxy.com/https://github.com/Oldpan/paseo/releases/download/pavra-v0.16.0/pavra-arm64.apk",
+      "https://github.com/Oldpan/paseo/releases/download/pavra-v0.16.0/pavra-arm64.apk",
     ]);
 
     expect(buildCandidateApkDownloadUrls(release, "gh-proxy-manifest")).toEqual([
@@ -396,8 +399,8 @@ describe("apk-updates", () => {
 
     expect(buildCandidateApkDownloadUrls(release, "spark", "http://100.115.92.20:6778/")).toEqual([
       "http://100.115.92.20:6778/updates/pavra-arm64.apk",
-      "https://github.com/Oldpan/paseo/releases/download/pavra-v0.16.0/pavra-arm64.apk",
       "https://gh-proxy.com/https://github.com/Oldpan/paseo/releases/download/pavra-v0.16.0/pavra-arm64.apk",
+      "https://github.com/Oldpan/paseo/releases/download/pavra-v0.16.0/pavra-arm64.apk",
     ]);
 
     expect(
@@ -422,6 +425,18 @@ describe("apk-updates", () => {
       resolveCoordinatorHttpOriginFromHosts(
         [
           {
+            serverId: "mac-local",
+            preferredConnectionId: "direct:localhost:6777",
+            connections: [
+              {
+                id: "direct:localhost:6777",
+                type: "directTcp",
+                endpoint: "localhost:6777",
+                useTls: false,
+              },
+            ],
+          },
+          {
             serverId: "spark-1",
             preferredConnectionId: "direct:100.115.92.20:6778",
             connections: [
@@ -434,15 +449,36 @@ describe("apk-updates", () => {
             ],
           },
         ],
-        "spark-1",
+        "",
       ),
     ).toBe("http://100.115.92.20:6778");
+
+    expect(
+      resolveCoordinatorHttpOriginsFromHosts(
+        [
+          {
+            serverId: "mac-local",
+            preferredConnectionId: "direct:127.0.0.1:6777",
+            connections: [
+              {
+                id: "direct:127.0.0.1:6777",
+                type: "directTcp",
+                endpoint: "127.0.0.1:6777",
+                useTls: false,
+              },
+            ],
+          },
+        ],
+        "mac-local",
+        { allowLoopback: false, includeDefaultSpark: true },
+      ),
+    ).toEqual(["http://192.168.0.149:6778"]);
   });
 
-  it("keeps client version.json and coordinator package.json aligned at 0.16.0 and preserves coordinatorVersion in chat.state", () => {
-    expect(pavraVersion.version).toBe("0.16.0");
+  it("keeps client version.json and coordinator package.json aligned and preserves coordinatorVersion in chat.state", () => {
+    expect(pavraVersion.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(extensionPkg.version).toBe(pavraVersion.version);
-    expect(readCoordinatorVersion(".dev/pavra/paseo-home")).toBe("0.16.0");
+    expect(readCoordinatorVersion(".dev/pavra/paseo-home")).toBe(pavraVersion.version);
 
     const snapshot = mergeChatState(EMPTY_CHAT_STATE, {
       ...EMPTY_CHAT_STATE,

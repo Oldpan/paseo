@@ -981,7 +981,6 @@ function AndroidApkUpdateRow() {
       <Pressable
         style={rowStyle}
         onPress={handlePressCheckRow}
-        disabled={checking}
         accessibilityRole="button"
         testID="settings-android-apk-update"
       >

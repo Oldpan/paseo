@@ -8,14 +8,16 @@ import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { resolveAppVersion } from "@/utils/app-version";
 import {
   buildCandidateApkDownloadUrls,
+  DEFAULT_SPARK_HTTP_ORIGIN,
   fetchLatestPavraApkRelease,
   isAutoUpdateCheckDue,
   isReleaseNewerThanInstalled,
-  resolveCoordinatorHttpOriginFromHosts,
+  resolveCoordinatorHttpOriginsFromHosts,
   type InstalledPavraBuildInfo,
   type PavraApkReleaseInfo,
   type PavraUpdateSource,
 } from "./apk-updates";
+import { resolveDefaultCoordinatorId } from "./model";
 import { usePavraView } from "./store";
 
 export const PAVRA_APK_UPDATER_PREFS_KEY = "pavra.apkUpdater.prefs.v1";
@@ -101,14 +103,22 @@ export function isAndroidApkUpdateSupported(): boolean {
   return Platform.OS === "android";
 }
 
-function resolveCurrentCoordinatorHttpOrigin(): string | null {
+function resolveCurrentCoordinatorHttpOrigins(): string[] {
   try {
     const hosts = getHostRuntimeStore().getHosts();
-    const coordinatorId = usePavraView.getState().coordinatorId;
-    return resolveCoordinatorHttpOriginFromHosts(hosts, coordinatorId);
+    const savedCoordinatorId = usePavraView.getState().coordinatorId;
+    const coordinatorId = resolveDefaultCoordinatorId(savedCoordinatorId, hosts);
+    return resolveCoordinatorHttpOriginsFromHosts(hosts, coordinatorId, {
+      allowLoopback: false,
+      includeDefaultSpark: true,
+    });
   } catch {
-    return null;
+    return [DEFAULT_SPARK_HTTP_ORIGIN];
   }
+}
+
+function resolveCurrentCoordinatorHttpOrigin(): string | null {
+  return resolveCurrentCoordinatorHttpOrigins()[0] ?? DEFAULT_SPARK_HTTP_ORIGIN;
 }
 
 export interface PavraApkUpdaterState {
@@ -261,6 +271,8 @@ export async function hydratePavraApkUpdaterPrefs(): Promise<void> {
 }
 
 let activeDownloadCancelled = false;
+let activeCheckAbortController: AbortController | null = null;
+let activeCheckRunId = 0;
 
 function applyCheckedReleaseToStore(input: {
   latest: PavraApkReleaseInfo | null;
@@ -330,7 +342,46 @@ function applyCheckedReleaseToStore(input: {
           downloadedFilePath: null,
         }
       : {}),
-    ...(manual ? { sheetOpen: true } : {}),
+    ...(manual ? { sheetOpen: true, skippedVersion: null } : {}),
+  });
+  void persistUpdaterPrefs(usePavraApkUpdaterStore.getState());
+  if (manual) onNotice?.(msg);
+}
+
+function resolveCheckCoordinatorOrigins(explicitOrigin: string | null | undefined): string[] {
+  if (explicitOrigin === undefined) {
+    return resolveCurrentCoordinatorHttpOrigins();
+  }
+  return explicitOrigin ? [explicitOrigin] : [];
+}
+
+function resetActiveCheckController(): AbortController | null {
+  if (activeCheckAbortController) {
+    try {
+      activeCheckAbortController.abort();
+    } catch {
+      // Ignore abort errors.
+    }
+    activeCheckAbortController = null;
+  }
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  activeCheckAbortController = controller;
+  return controller;
+}
+
+function applyCheckFailureToStore(
+  failure: unknown,
+  manual: boolean,
+  onNotice?: (message: string) => void,
+): void {
+  const store = usePavraApkUpdaterStore.getState();
+  const msg = failure instanceof Error ? failure.message : "Failed to check APK releases.";
+  const currentRelease = store.availableRelease;
+  store.patchState({
+    checking: false,
+    checkPhase: currentRelease ? "available" : "unavailable",
+    statusMessage: msg,
+    lastAttemptAtMs: Date.now(),
   });
   void persistUpdaterPrefs(usePavraApkUpdaterStore.getState());
   if (manual) onNotice?.(msg);
@@ -346,29 +397,33 @@ export async function checkForPavraApkUpdateAction(options?: {
 
   await hydratePavraApkUpdaterPrefs();
   const store = usePavraApkUpdaterStore.getState();
-  if (store.checking || store.checkPhase === "checking") return;
+  if ((store.checking || store.checkPhase === "checking") && !manual) {
+    return;
+  }
+
+  const runId = ++activeCheckRunId;
+  const controller = resetActiveCheckController();
 
   store.patchState({
     checking: true,
     checkPhase: "checking",
+    statusMessage: manual ? "Checking update sources…" : store.statusMessage,
     lastAttemptAtMs: Date.now(),
   });
 
-  const coordinatorHttpOrigin =
-    options?.coordinatorHttpOrigin !== undefined
-      ? options.coordinatorHttpOrigin
-      : resolveCurrentCoordinatorHttpOrigin();
-
+  const coordinatorHttpOrigins = resolveCheckCoordinatorOrigins(options?.coordinatorHttpOrigin);
   let workingSource: PavraUpdateSource | string | null = store.lastWorkingSource;
 
   try {
     const latest = await fetchLatestPavraApkRelease({
-      coordinatorHttpOrigin,
+      coordinatorHttpOrigins,
       lastWorkingSource: store.lastWorkingSource,
+      signal: controller?.signal,
       onSourceSuccess: (source) => {
         workingSource = source;
       },
     });
+    if (runId !== activeCheckRunId) return;
     applyCheckedReleaseToStore({
       latest,
       checkedTimeMs: Date.now(),
@@ -377,16 +432,12 @@ export async function checkForPavraApkUpdateAction(options?: {
       onNotice: options?.onNotice,
     });
   } catch (failure) {
-    const msg = failure instanceof Error ? failure.message : "Failed to check APK releases.";
-    const currentRelease = usePavraApkUpdaterStore.getState().availableRelease;
-    store.patchState({
-      checking: false,
-      checkPhase: currentRelease ? "available" : "unavailable",
-      statusMessage: msg,
-      lastAttemptAtMs: Date.now(),
-    });
-    void persistUpdaterPrefs(usePavraApkUpdaterStore.getState());
-    if (manual) options?.onNotice?.(msg);
+    if (runId !== activeCheckRunId) return;
+    applyCheckFailureToStore(failure, manual, options?.onNotice);
+  } finally {
+    if (runId === activeCheckRunId) {
+      activeCheckAbortController = null;
+    }
   }
 }
 

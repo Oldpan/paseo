@@ -107,19 +107,29 @@ class PavraKeepaliveModule : Module() {
       val isBusy = downloadActive.get()
 
       val files = updatesDir.listFiles() ?: emptyArray()
+      val nowMs = System.currentTimeMillis()
       for (file in files) {
         if (!file.isFile) continue
-        if (isBusy && file.name.endsWith(".part")) {
+        val isStaleFile = nowMs - file.lastModified() > 7L * 24L * 3600_000L
+        if (file.name.endsWith(".part")) {
+          if (!isBusy && isStaleFile) {
+            try {
+              file.delete()
+            } catch (_: Throwable) {
+            }
+          }
           continue
         }
         if (file.name.endsWith(".apk")) {
           val archiveInfo = getArchivePackageInfo(context, file.absolutePath)
           val archiveVersionCode = archiveInfo?.let { getPackageVersionCode(it) } ?: -1L
-          val shouldDelete = !isBusy ||
-            archiveInfo == null ||
-            archiveInfo.packageName != context.packageName ||
-            (installedVersionCode > 0L && archiveVersionCode in 1L..installedVersionCode) ||
-            (installedVersionName != null && archiveInfo.versionName == installedVersionName)
+          val shouldDelete = !isBusy && (
+            isStaleFile ||
+              archiveInfo == null ||
+              archiveInfo.packageName != context.packageName ||
+              (installedVersionCode > 0L && archiveVersionCode in 1L..installedVersionCode) ||
+              (installedVersionName != null && archiveInfo.versionName == installedVersionName)
+            )
           if (shouldDelete) {
             try {
               file.delete()
@@ -328,6 +338,14 @@ class PavraKeepaliveModule : Module() {
           if (responseCode == 416 && existingBytes > 0L && expectedSizeBytes != null && existingBytes == expectedSizeBytes) {
             // .part file already holds the complete payload
           } else if (responseCode == HttpURLConnection.HTTP_PARTIAL || responseCode == HttpURLConnection.HTTP_OK) {
+            val contentType = connection.contentType?.lowercase(Locale.US) ?: ""
+            if (contentType.startsWith("text/html")) {
+              throw CodedException(
+                "ERR_INVALID_CONTENT_TYPE",
+                "ERR_INVALID_CONTENT_TYPE: Expected binary APK but received $contentType",
+                null
+              )
+            }
             val isResume = responseCode == HttpURLConnection.HTTP_PARTIAL && existingBytes > 0L
             val initialBytes = if (isResume) existingBytes else 0L
             val contentLength = connection.contentLengthLong
@@ -550,8 +568,8 @@ class PavraKeepaliveModule : Module() {
     private const val UPDATES_DIR_NAME = "updates"
     private const val PART_FILE_NAME = "pavra-update.apk.part"
     private const val FINAL_FILE_NAME = "pavra-update.apk"
-    private const val CONNECT_TIMEOUT_MS = 15_000
-    private const val READ_TIMEOUT_MS = 30_000
+    private const val CONNECT_TIMEOUT_MS = 8_000
+    private const val READ_TIMEOUT_MS = 20_000
     private const val PROGRESS_EMIT_INTERVAL_MS = 150L
     private const val BUFFER_SIZE = 32 * 1024
     private const val MAX_REDIRECTS = 8

@@ -2,6 +2,9 @@ export const PAVRA_GITHUB_REPO = "Oldpan/paseo";
 
 export const AUTO_UPDATE_CHECK_INTERVAL_MS = 24 * 3600_000;
 export const AUTO_UPDATE_RETRY_AFTER_FAILURE_MS = 4 * 3600_000;
+export const SPARK_UPDATE_CHECK_TIMEOUT_MS = 2_500;
+export const REMOTE_UPDATE_CHECK_TIMEOUT_MS = 5_000;
+export const DEFAULT_SPARK_HTTP_ORIGIN = "http://192.168.0.149:6778";
 
 export type PavraUpdateSource = "spark" | "github-manifest" | "gh-proxy-manifest" | "github-api";
 
@@ -297,18 +300,42 @@ export interface UpdateCheckSourceDescriptor {
   url: string;
 }
 
+function collectCleanCoordinatorOrigins(options?: {
+  coordinatorHttpOrigin?: string | null;
+  coordinatorHttpOrigins?: readonly (string | null | undefined)[];
+}): string[] {
+  const rawList: Array<string | null | undefined> = [];
+  if (options?.coordinatorHttpOrigin) {
+    rawList.push(options.coordinatorHttpOrigin);
+  }
+  if (Array.isArray(options?.coordinatorHttpOrigins)) {
+    rawList.push(...options.coordinatorHttpOrigins);
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of rawList) {
+    const clean = normalizeHttpOrigin(item);
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      result.push(clean);
+    }
+  }
+  return result;
+}
+
 export function resolveUpdateCheckSources(options?: {
   repo?: string;
   coordinatorHttpOrigin?: string | null;
+  coordinatorHttpOrigins?: readonly (string | null | undefined)[];
   lastWorkingSource?: PavraUpdateSource | string | null;
   preferredSource?: PavraUpdateSource | string | null;
 }): UpdateCheckSourceDescriptor[] {
   const repo = nonEmptyString(options?.repo) ?? PAVRA_GITHUB_REPO;
-  const cleanOrigin = normalizeHttpOrigin(options?.coordinatorHttpOrigin);
+  const cleanOrigins = collectCleanCoordinatorOrigins(options);
   const preferred = nonEmptyString(options?.lastWorkingSource ?? options?.preferredSource);
 
   const manifestCandidates: UpdateCheckSourceDescriptor[] = [];
-  if (cleanOrigin) {
+  for (const cleanOrigin of cleanOrigins) {
     manifestCandidates.push({
       source: "spark",
       url: `${cleanOrigin}/updates/update.json`,
@@ -316,25 +343,26 @@ export function resolveUpdateCheckSources(options?: {
   }
   manifestCandidates.push(
     {
-      source: "github-manifest",
-      url: `https://github.com/${repo}/releases/latest/download/update.json`,
-    },
-    {
       source: "gh-proxy-manifest",
       url: `https://gh-proxy.com/https://github.com/${repo}/releases/latest/download/update.json`,
+    },
+    {
+      source: "github-manifest",
+      url: `https://github.com/${repo}/releases/latest/download/update.json`,
     },
   );
 
   // Prioritize the last working manifest source first while keeping github-api strictly last.
   const orderedManifests: UpdateCheckSourceDescriptor[] = [];
   if (preferred && preferred !== "github-api") {
-    const matched = manifestCandidates.find((entry) => entry.source === preferred);
-    if (matched) {
-      orderedManifests.push(matched);
+    for (const entry of manifestCandidates) {
+      if (entry.source === preferred) {
+        orderedManifests.push(entry);
+      }
     }
   }
   for (const entry of manifestCandidates) {
-    if (!orderedManifests.some((existing) => existing.source === entry.source)) {
+    if (!orderedManifests.some((existing) => existing.url === entry.url)) {
       orderedManifests.push(entry);
     }
   }
@@ -359,10 +387,116 @@ function parseFirstReleaseFromArray(items: unknown[]): PavraApkReleaseInfo | nul
 export interface FetchPavraApkReleaseOptions {
   repo?: string;
   coordinatorHttpOrigin?: string | null;
+  coordinatorHttpOrigins?: readonly (string | null | undefined)[];
   lastWorkingSource?: PavraUpdateSource | string | null;
   preferredSource?: PavraUpdateSource | string | null;
+  sparkTimeoutMs?: number;
+  remoteTimeoutMs?: number;
+  signal?: AbortSignal | null;
   fetchImpl?: typeof fetch;
-  onSourceSuccess?: (source: PavraUpdateSource) => void;
+  onSourceSuccess?: (source: PavraUpdateSource, url?: string) => void;
+}
+
+async function fetchSourceWithTimeout(
+  fetchFn: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  externalSignal?: AbortSignal | null,
+): Promise<Response> {
+  if (externalSignal?.aborted) {
+    throw new Error("Update check aborted");
+  }
+  if (typeof AbortController === "undefined") {
+    return fetchFn(url, { headers });
+  }
+  const controller = new AbortController();
+  const handleExternalAbort = () => {
+    controller.abort();
+  };
+  externalSignal?.addEventListener("abort", handleExternalAbort, { once: true });
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  const raceTimeout = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        if (externalSignal?.aborted) {
+          reject(new Error("Update check aborted"));
+          return;
+        }
+        reject(new Error(`Update check timed out after ${timeoutMs}ms`));
+      },
+      { once: true },
+    );
+  });
+
+  try {
+    return await Promise.race([
+      fetchFn(url, {
+        headers,
+        signal: controller.signal,
+      }),
+      raceTimeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", handleExternalAbort);
+  }
+}
+
+async function probeUpdateCheckSource(
+  fetchFn: typeof fetch,
+  entry: UpdateCheckSourceDescriptor,
+  timeoutMs: number,
+  externalSignal?: AbortSignal | null,
+): Promise<{ release: PavraApkReleaseInfo | null; sawEmptyList: boolean }> {
+  const response = await fetchSourceWithTimeout(
+    fetchFn,
+    entry.url,
+    {
+      Accept: entry.source === "github-api" ? "application/vnd.github+json" : "application/json",
+    },
+    timeoutMs,
+    externalSignal,
+  );
+  if (!response.ok) {
+    throw new Error(
+      entry.source === "github-api"
+        ? `GitHub release check failed (${response.status})`
+        : `Update manifest check failed from ${entry.source} (${response.status})`,
+    );
+  }
+
+  const payload = (await response.json()) as unknown;
+  if (entry.source === "github-api") {
+    if (!Array.isArray(payload)) {
+      return { release: null, sawEmptyList: false };
+    }
+    return { release: parseFirstReleaseFromArray(payload), sawEmptyList: true };
+  }
+
+  return { release: parsePavraUpdateManifest(payload), sawEmptyList: false };
+}
+
+function resolveSourceTimeouts(options?: FetchPavraApkReleaseOptions): {
+  sparkTimeoutMs: number;
+  remoteTimeoutMs: number;
+} {
+  return {
+    sparkTimeoutMs: positiveFiniteNumber(options?.sparkTimeoutMs) ?? SPARK_UPDATE_CHECK_TIMEOUT_MS,
+    remoteTimeoutMs:
+      positiveFiniteNumber(options?.remoteTimeoutMs) ?? REMOTE_UPDATE_CHECK_TIMEOUT_MS,
+  };
+}
+
+function toCheckError(failure: unknown, source: string, signal?: AbortSignal | null): Error {
+  if (signal?.aborted) {
+    return failure instanceof Error ? failure : new Error("Update check aborted");
+  }
+  return failure instanceof Error ? failure : new Error(`Update check failed from ${source}`);
 }
 
 export async function fetchLatestPavraApkRelease(
@@ -370,56 +504,37 @@ export async function fetchLatestPavraApkRelease(
 ): Promise<PavraApkReleaseInfo | null> {
   const fetchFn = options?.fetchImpl ?? fetch;
   const sources = resolveUpdateCheckSources(options);
+  const { sparkTimeoutMs, remoteTimeoutMs } = resolveSourceTimeouts(options);
 
   let lastError: Error | null = null;
   let sawValidEmptyReleaseList = false;
 
   for (const entry of sources) {
+    if (options?.signal?.aborted) {
+      throw new Error("Update check aborted");
+    }
+    const timeoutMs = entry.source === "spark" ? sparkTimeoutMs : remoteTimeoutMs;
     try {
-      const response = await fetchFn(entry.url, {
-        headers: {
-          Accept:
-            entry.source === "github-api" ? "application/vnd.github+json" : "application/json",
-        },
-      });
-      if (!response.ok) {
-        lastError = new Error(
-          entry.source === "github-api"
-            ? `GitHub release check failed (${response.status})`
-            : `Update manifest check failed from ${entry.source} (${response.status})`,
-        );
-        continue;
-      }
-
-      const payload = (await response.json()) as unknown;
-      if (entry.source === "github-api") {
-        if (!Array.isArray(payload)) continue;
-        sawValidEmptyReleaseList = true;
-        const parsed = parseFirstReleaseFromArray(payload);
-        if (parsed) {
-          options?.onSourceSuccess?.("github-api");
-          return parsed;
-        }
-        continue;
-      }
-
-      const parsedManifest = parsePavraUpdateManifest(payload);
-      if (parsedManifest) {
-        options?.onSourceSuccess?.(entry.source);
-        return parsedManifest;
+      const { release, sawEmptyList } = await probeUpdateCheckSource(
+        fetchFn,
+        entry,
+        timeoutMs,
+        options?.signal,
+      );
+      if (sawEmptyList) sawValidEmptyReleaseList = true;
+      if (release) {
+        options?.onSourceSuccess?.(entry.source, entry.url);
+        return release;
       }
     } catch (failure) {
-      lastError =
-        failure instanceof Error ? failure : new Error(`Update check failed from ${entry.source}`);
+      const err = toCheckError(failure, entry.source, options?.signal);
+      if (options?.signal?.aborted) throw err;
+      lastError = err;
     }
   }
 
-  if (sawValidEmptyReleaseList) {
-    return null;
-  }
-  if (lastError) {
-    throw lastError;
-  }
+  if (sawValidEmptyReleaseList) return null;
+  if (lastError) throw lastError;
   return null;
 }
 
@@ -503,39 +618,101 @@ export function buildCandidateApkDownloadUrls(
   if (preferredSource === "github-manifest" || preferredSource === "github-api") {
     return deduplicateStrings([directUrl, proxyUrl, sparkUrl]);
   }
-  return deduplicateStrings([sparkUrl, directUrl, proxyUrl]);
+  return deduplicateStrings([sparkUrl, proxyUrl, directUrl]);
+}
+
+function isLoopbackEndpointHost(endpoint: string): boolean {
+  const hostPart = endpoint
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase();
+  return (
+    hostPart === "localhost" ||
+    hostPart === "127.0.0.1" ||
+    hostPart === "0.0.0.0" ||
+    hostPart === "::1" ||
+    hostPart === "[::1]"
+  );
+}
+
+export interface HostConnectionSummary {
+  serverId: string;
+  preferredConnectionId: string | null;
+  connections: readonly { id: string; type: string; endpoint?: string; useTls?: boolean }[];
+}
+
+function extractOriginsFromHost(host: HostConnectionSummary, allowLoopback: boolean): string[] {
+  const directConnections = host.connections.filter((conn) => conn.type === "directTcp");
+  if (directConnections.length === 0) return [];
+
+  const ordered = [
+    ...(host.preferredConnectionId
+      ? directConnections.filter((conn) => conn.id === host.preferredConnectionId)
+      : []),
+    ...directConnections.filter((conn) => conn.id !== host.preferredConnectionId),
+  ];
+
+  const origins: string[] = [];
+  for (const conn of ordered) {
+    if (typeof conn.endpoint !== "string") continue;
+    const cleanEndpoint = conn.endpoint
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "");
+    if (!cleanEndpoint) continue;
+    if (!allowLoopback && isLoopbackEndpointHost(cleanEndpoint)) continue;
+    origins.push(`${conn.useTls ? "https" : "http"}://${cleanEndpoint}`);
+  }
+  return origins;
+}
+
+export function resolveCoordinatorHttpOriginsFromHosts(
+  hosts: readonly HostConnectionSummary[],
+  coordinatorId?: string | null,
+  options?: { allowLoopback?: boolean; includeDefaultSpark?: boolean },
+): string[] {
+  const allowLoopback = options?.allowLoopback ?? false;
+  const includeDefaultSpark = options?.includeDefaultSpark ?? false;
+  const orderedHosts: HostConnectionSummary[] = [];
+
+  if (hosts && hosts.length > 0) {
+    const primary = coordinatorId
+      ? hosts.find((host) => host.serverId === coordinatorId)
+      : undefined;
+    if (primary) orderedHosts.push(primary);
+    for (const host of hosts) {
+      if (!orderedHosts.some((existing) => existing.serverId === host.serverId)) {
+        orderedHosts.push(host);
+      }
+    }
+  }
+
+  const candidateOrigins: Array<string | null> = [];
+  for (const host of orderedHosts) {
+    candidateOrigins.push(...extractOriginsFromHost(host, allowLoopback));
+  }
+  if (includeDefaultSpark) {
+    candidateOrigins.push(DEFAULT_SPARK_HTTP_ORIGIN);
+  }
+  return deduplicateStrings(candidateOrigins);
 }
 
 export function resolveCoordinatorHttpOriginFromHosts(
-  hosts: readonly {
-    serverId: string;
-    preferredConnectionId: string | null;
-    connections: readonly { id: string; type: string; endpoint?: string; useTls?: boolean }[];
-  }[],
+  hosts: readonly HostConnectionSummary[],
   coordinatorId?: string | null,
 ): string | null {
-  if (!hosts || hosts.length === 0) return null;
-  const targetHost =
-    (coordinatorId ? hosts.find((host) => host.serverId === coordinatorId) : null) ??
-    hosts[0] ??
-    null;
-  if (!targetHost) return null;
-
-  const preferred = targetHost.preferredConnectionId
-    ? targetHost.connections.find(
-        (conn) => conn.id === targetHost.preferredConnectionId && conn.type === "directTcp",
-      )
-    : null;
-  const direct =
-    preferred ?? targetHost.connections.find((conn) => conn.type === "directTcp") ?? null;
-  if (!direct || typeof direct.endpoint !== "string") return null;
-
-  const cleanEndpoint = direct.endpoint
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/+$/, "");
-  if (!cleanEndpoint) return null;
-  return `${direct.useTls ? "https" : "http"}://${cleanEndpoint}`;
+  const nonLoopback = resolveCoordinatorHttpOriginsFromHosts(hosts, coordinatorId, {
+    allowLoopback: false,
+    includeDefaultSpark: false,
+  });
+  if (nonLoopback.length > 0) return nonLoopback[0] ?? null;
+  const withLoopback = resolveCoordinatorHttpOriginsFromHosts(hosts, coordinatorId, {
+    allowLoopback: true,
+    includeDefaultSpark: false,
+  });
+  return withLoopback[0] ?? null;
 }
 
 export function formatApkMegabytes(bytes: number | null | undefined): string | null {

@@ -21,7 +21,7 @@ function stageLocalUpdateManifestsForWebUi() {
     "web-ui",
     "updates",
   );
-  const candidateFiles = ["update.json", "SHA256SUMS"];
+  const candidateFiles = ["update.json", "SHA256SUMS", "pavra-arm64.apk"];
   const copiedFiles = [];
 
   for (const fileName of candidateFiles) {
