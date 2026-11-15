@@ -56,8 +56,34 @@ function getFdroidVersionCodes(version) {
   }));
 }
 
+function getPavraAndroidVersionCode(date = new Date()) {
+  const targetDate = date instanceof Date ? date : new Date(date);
+  const timestampMs = targetDate.getTime();
+  if (!Number.isFinite(timestampMs)) {
+    throw new Error(`Cannot derive Pavra Android versionCode from invalid date: ${String(date)}`);
+  }
+
+  const utc8Date = new Date(timestampMs + 8 * 60 * 60 * 1000);
+  const utc8Year = utc8Date.getUTCFullYear();
+  const month = utc8Date.getUTCMonth() + 1;
+  const day = utc8Date.getUTCDate();
+  const hour = utc8Date.getUTCHours();
+  const minute = utc8Date.getUTCMinutes();
+
+  const versionCode = Math.max(
+    16001,
+    (utc8Year - 2026) * 100_000_000 + month * 1_000_000 + day * 10_000 + hour * 100 + minute,
+  );
+  if (!Number.isSafeInteger(versionCode) || versionCode <= 0 || versionCode > 2_100_000_000) {
+    throw new Error(`Derived Pavra Android versionCode is out of range: ${versionCode}`);
+  }
+
+  return versionCode;
+}
+
 module.exports = {
   FDROID_ABI_VERSION_CODE_SUFFIXES,
   getFdroidVersionCodes,
   getNativeReleaseVersion,
+  getPavraAndroidVersionCode,
 };

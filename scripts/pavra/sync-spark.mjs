@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { watch } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainModule } from "../is-main-module.mjs";
@@ -9,6 +9,34 @@ const defaultHost = process.env.PAVRA_SPARK_SSH ?? process.env.BIGBANG_SPARK_SSH
 const defaultRemoteDir =
   process.env.PAVRA_SPARK_DIR ?? process.env.BIGBANG_SPARK_DIR ?? "/ai/code/paseo-bigbang";
 const sparkNodeBin = "/home/linuxbrew/.linuxbrew/opt/node@24/bin";
+
+function stageLocalUpdateManifestsForWebUi() {
+  const artifactsDir = path.join(repoRoot, "artifacts");
+  const webUiUpdatesDir = path.join(
+    repoRoot,
+    "packages",
+    "server",
+    "dist",
+    "server",
+    "web-ui",
+    "updates",
+  );
+  const candidateFiles = ["update.json", "SHA256SUMS"];
+  const copiedFiles = [];
+
+  for (const fileName of candidateFiles) {
+    const sourcePath = path.join(artifactsDir, fileName);
+    if (!existsSync(sourcePath)) {
+      continue;
+    }
+    mkdirSync(webUiUpdatesDir, { recursive: true });
+    const destinationPath = path.join(webUiUpdatesDir, fileName);
+    copyFileSync(sourcePath, destinationPath);
+    copiedFiles.push(fileName);
+  }
+
+  return { webUiUpdatesDir, copiedFiles };
+}
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -30,6 +58,9 @@ function run(command, args, options = {}) {
 
 async function syncOnce({ all, reloadPlugin, rebuildWebUi }) {
   const target = `${defaultHost}:${defaultRemoteDir.replace(/\/$/, "")}/`;
+  const stagedUpdates = rebuildWebUi
+    ? stageLocalUpdateManifestsForWebUi()
+    : { webUiUpdatesDir: "", copiedFiles: [] };
   const excludes = [
     "--exclude=.git/",
     "--exclude=.dev/",
@@ -71,6 +102,13 @@ async function syncOnce({ all, reloadPlugin, rebuildWebUi }) {
       defaultHost,
       `cd ${defaultRemoteDir} && PATH="${sparkNodeBin}:$PATH" npm run pavra:build:daemon-web-ui`,
     ]);
+    if (stagedUpdates.copiedFiles.length > 0) {
+      await run("rsync", [
+        "-az",
+        "packages/server/dist/server/web-ui/updates/",
+        `${target}packages/server/dist/server/web-ui/updates/`,
+      ]);
+    }
   }
 }
 

@@ -4,6 +4,7 @@ const {
   FDROID_ABI_VERSION_CODE_SUFFIXES,
   getFdroidVersionCodes,
   getNativeReleaseVersion,
+  getPavraAndroidVersionCode,
 } = require("./native-release-version");
 
 describe("native release version", () => {
@@ -42,5 +43,11 @@ describe("native release version", () => {
       { abi: "x86", versionCode: 50003 },
       { abi: "x86_64", versionCode: 50004 },
     ]);
+  });
+
+  it("derives monotonic UTC+8 timestamp version codes for Pavra Android builds", () => {
+    expect(getPavraAndroidVersionCode(new Date("2026-11-15T13:10:00Z"))).toBe(11_152_110);
+    expect(getPavraAndroidVersionCode(new Date("2027-01-02T00:05:00+08:00"))).toBe(101_020_005);
+    expect(getPavraAndroidVersionCode(new Date("2025-12-31T23:59:00+08:00"))).toBe(16_001);
   });
 });

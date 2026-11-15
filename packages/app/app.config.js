@@ -8,7 +8,7 @@ const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
 const withPasteInput = require("./plugins/with-paste-input");
 const withPavraForegroundService = require("./plugins/with-pavra-foreground-service");
 const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
-const { getNativeReleaseVersion } = require("./native-release-version");
+const { getNativeReleaseVersion, getPavraAndroidVersionCode } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
 const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
 const isWatchdogBuild = process.env.PASEO_WATCHDOG_BUILD === "1";
@@ -145,7 +145,7 @@ export default {
       usesCleartextTraffic: true,
       permissions: buildProfile.androidPermissions,
       package: variant.packageId,
-      versionCode: nativeReleaseVersion.androidVersionCode,
+      versionCode: isPavra ? getPavraAndroidVersionCode() : nativeReleaseVersion.androidVersionCode,
       ...(variant.googleServicesFile ? { googleServicesFile: variant.googleServicesFile } : {}),
     },
     web: {

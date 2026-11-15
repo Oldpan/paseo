@@ -72,8 +72,9 @@ jobs:
       - name: Build Pavra ARM64 release APK
         run: npm run pavra:apk:arm64
 
-      - name: Publish APK to GitHub Release
+      - name: Publish APK, update.json, and SHA256SUMS to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAVRA_GITHUB_REPO: ${{ github.repository }}
+          PAVRA_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/pavra-v') && github.ref_name || '' }}
         run: node scripts/pavra/release-apk.mjs --skip-build
