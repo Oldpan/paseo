@@ -128,7 +128,7 @@ export function useAssistantRoutines(
           (assistantId === undefined || routine.assistantId === assistantId) &&
           (conversationId === undefined || routine.conversationId === conversationId),
       )
-      .toSorted((a, b) => b.createdAt - a.createdAt);
+      .sort((a, b) => b.createdAt - a.createdAt);
   }, [assistantId, conversationId, deletedIds, state.routines]);
 
   const create = useCallback<RoutinesModel["create"]>(

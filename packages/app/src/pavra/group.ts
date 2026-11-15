@@ -66,7 +66,9 @@ export function recentParticipantIds(
       message.kind !== "system" &&
       message.threadId === threadId,
   );
-  for (const message of sortMessages(lane).toReversed()) {
+  const sorted = sortMessages(lane);
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const message = sorted[index]!;
     if (
       !members.has(message.senderId) ||
       message.taskId ||

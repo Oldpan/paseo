@@ -166,7 +166,7 @@ export function useAssistantPlaybooks(
       const template = playbookTemplate(slug);
       const title = titleFromSlug(slug);
       setPlaybooks((previous) =>
-        [...previous.filter((item) => item.slug !== slug), { slug, title, mtimeMs: 0 }].toSorted(
+        [...previous.filter((item) => item.slug !== slug), { slug, title, mtimeMs: 0 }].sort(
           (a, b) => a.slug.localeCompare(b.slug),
         ),
       );

@@ -52,7 +52,7 @@ export function openExchanges(
         },
       ];
     })
-    .toSorted((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function exchangeState(request: PeerMessage, reply: PeerMessage | undefined): string {
@@ -78,7 +78,7 @@ export interface RecordRow {
 export function studioRecords(messages: readonly PeerMessage[], studio: Studio): RecordRow[] {
   const own = messages
     .filter((row) => row.ledger === "studio" && row.studioId === studio.id)
-    .toSorted((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   const ids = new Set(own.map((row) => row.id));
   const children = new Map<string, PeerMessage[]>();
   for (const row of own)
