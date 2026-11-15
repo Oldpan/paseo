@@ -571,6 +571,25 @@ function ConnectedHostsSection({ clientVersion }: { clientVersion: string | null
   );
 }
 
+function resolveHostDisplayVersion(
+  isPavra: boolean,
+  pavraHostVersion: string | null,
+  normalizedClient: string | null,
+  daemonVersion: string | null,
+): { displayVersion: string | null; comparableVersion: string | null } {
+  const normalizedDaemon = normalizeVersion(daemonVersion);
+  if (!isPavra) {
+    return {
+      displayVersion: normalizedDaemon,
+      comparableVersion: normalizedDaemon,
+    };
+  }
+  return {
+    displayVersion: pavraHostVersion ?? normalizedClient ?? normalizedDaemon,
+    comparableVersion: pavraHostVersion,
+  };
+}
+
 function HostVersionRow({
   host,
   showBorder,
@@ -585,16 +604,28 @@ function HostVersionRow({
   const daemonVersion = useSessionStore(
     (state) => state.sessions[host.serverId]?.serverInfo?.version ?? null,
   );
+  const { state: pavraState } = usePavraData(IS_PAVRA && isConnected ? host.serverId : "");
+  const pavraHostVersion = normalizeVersion(
+    (pavraState as { coordinatorVersion?: string }).coordinatorVersion,
+  );
 
   const rowStyle = useMemo(
     () => [settingsStyles.row, showBorder && settingsStyles.rowBorder],
     [showBorder],
   );
 
-  const normalizedHost = normalizeVersion(daemonVersion);
   const normalizedClient = normalizeVersion(clientVersion);
+  const { displayVersion: normalizedHost, comparableVersion } = resolveHostDisplayVersion(
+    IS_PAVRA,
+    pavraHostVersion,
+    normalizedClient,
+    daemonVersion,
+  );
   const isMismatch =
-    normalizedHost !== null && normalizedClient !== null && normalizedHost !== normalizedClient;
+    isConnected &&
+    comparableVersion !== null &&
+    normalizedClient !== null &&
+    comparableVersion !== normalizedClient;
 
   let valueText: string;
   if (!isConnected) {
