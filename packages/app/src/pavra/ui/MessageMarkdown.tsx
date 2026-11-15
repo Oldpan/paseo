@@ -12,12 +12,15 @@ import {
   type ViewStyle,
 } from "react-native";
 import { copyText } from "./clipboard";
+import { parseFileRef, type ParsedFileRef } from "./fileRefParser";
 import { HighlightedCode } from "./HighlightedCode";
-import { CheckIcon, ChevronIcon, CopyIcon } from "./icons";
+import { CheckIcon, ChevronIcon, CopyIcon, FileTextIcon } from "./icons";
 import { linkKind, parseMarkdown, type MdBlock, type MdInline, type MdRoot } from "./markdown";
 import { isPreviewableAgentPortUrl } from "./portPreviewUrl";
-import { ctrlShadow, text as type, type Palette } from "./theme";
+import { ctrlShadow, text as type, webTransition, type Palette } from "./theme";
 import { useTheme } from "./ThemeProvider";
+
+export type { ParsedFileRef } from "./fileRefParser";
 
 const COLLAPSE_LINES = 12;
 
@@ -27,12 +30,16 @@ export function MessageMarkdown({
   narrow,
   onOpenLocalPath,
   onOpenPortPreview,
+  onPressFileRef,
+  workspaceCwd,
 }: {
   content: string;
   color: string;
   narrow: boolean;
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
 }) {
   const tree = useMemo(() => parseMarkdown(content), [content]);
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
@@ -45,6 +52,8 @@ export function MessageMarkdown({
         onOpenLink={setPendingUrl}
         onOpenLocalPath={onOpenLocalPath}
         onOpenPortPreview={onOpenPortPreview}
+        onPressFileRef={onPressFileRef}
+        workspaceCwd={workspaceCwd}
       />
       <ExternalLinkModal url={pendingUrl} onClose={() => setPendingUrl(null)} />
     </View>
@@ -67,6 +76,8 @@ function Blocks({
   onOpenLink,
   onOpenLocalPath,
   onOpenPortPreview,
+  onPressFileRef,
+  workspaceCwd,
   italic,
 }: {
   nodes: MdRoot["children"];
@@ -75,6 +86,8 @@ function Blocks({
   onOpenLink: (url: string) => void;
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
   italic?: boolean;
 }) {
   return (
@@ -88,6 +101,8 @@ function Blocks({
           onOpenLink={onOpenLink}
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
+          onPressFileRef={onPressFileRef}
+          workspaceCwd={workspaceCwd}
           italic={italic}
         />
       ))}
@@ -102,6 +117,8 @@ function Block({
   onOpenLink,
   onOpenLocalPath,
   onOpenPortPreview,
+  onPressFileRef,
+  workspaceCwd,
   italic,
 }: {
   node: MdBlock;
@@ -110,6 +127,8 @@ function Block({
   onOpenLink: (url: string) => void;
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
   italic?: boolean;
 }) {
   const { palette: t } = useTheme();
@@ -122,6 +141,8 @@ function Block({
           onOpenLink={onOpenLink}
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
+          onPressFileRef={onPressFileRef}
+          workspaceCwd={workspaceCwd}
         />
       </Text>
     );
@@ -136,6 +157,8 @@ function Block({
           onOpenLink={onOpenLink}
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
+          onPressFileRef={onPressFileRef}
+          workspaceCwd={workspaceCwd}
         />
       </Text>
     );
@@ -150,6 +173,8 @@ function Block({
           onOpenLink={onOpenLink}
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
+          onPressFileRef={onPressFileRef}
+          workspaceCwd={workspaceCwd}
           italic
         />
       </View>
@@ -191,6 +216,8 @@ function Block({
                 onOpenLink={onOpenLink}
                 onOpenLocalPath={onOpenLocalPath}
                 onOpenPortPreview={onOpenPortPreview}
+                onPressFileRef={onPressFileRef}
+                workspaceCwd={workspaceCwd}
                 italic={italic}
               />
             </View>
@@ -207,6 +234,8 @@ function Block({
         onOpenLink={onOpenLink}
         onOpenLocalPath={onOpenLocalPath}
         onOpenPortPreview={onOpenPortPreview}
+        onPressFileRef={onPressFileRef}
+        workspaceCwd={workspaceCwd}
       />
     );
   }
@@ -259,18 +288,200 @@ function ListMarker({
   );
 }
 
+export function FileRefChip({
+  fileRef,
+  onPress,
+}: {
+  fileRef: ParsedFileRef;
+  onPress: (ref: ParsedFileRef) => void;
+}) {
+  const { palette: t, name } = useTheme();
+  const lineBadge =
+    fileRef.line !== undefined
+      ? `:${fileRef.line}${fileRef.column !== undefined ? `:${fileRef.column}` : ""}`
+      : null;
+
+  return (
+    <Pressable
+      testID="file-ref-chip"
+      role="button"
+      accessibilityRole="button"
+      accessibilityLabel={`Preview ${fileRef.displayPath}${lineBadge ?? ""}`}
+      {...({
+        "data-file-path": fileRef.filePath,
+        "data-display-path": fileRef.displayPath,
+        "data-file-line": fileRef.line !== undefined ? String(fileRef.line) : undefined,
+      } as object)}
+      onPress={() => onPress(fileRef)}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        return [
+          {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 4,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: hovered ? t.brandAccent : t.brandAccentSoft,
+            paddingHorizontal: 6,
+            paddingVertical: 1,
+            marginHorizontal: 1,
+            ...(isWeb
+              ? ({
+                  display: "inline-flex",
+                  verticalAlign: "baseline",
+                  cursor: "pointer",
+                  ...webTransition("background-color, transform"),
+                } as unknown as ViewStyle)
+              : null),
+          },
+          ctrlShadow(t, name),
+        ];
+      }}
+    >
+      <FileTextIcon color={t.onAccent} size={11} />
+      <Text
+        testID="file-ref-chip-path"
+        style={{
+          fontFamily: "monospace",
+          fontSize: 11,
+          fontWeight: "700",
+          color: t.onAccent,
+        }}
+      >
+        {fileRef.displayPath}
+      </Text>
+      {lineBadge ? (
+        <Text
+          testID="file-ref-chip-line"
+          style={{
+            fontFamily: "monospace",
+            fontSize: 10,
+            fontWeight: "700",
+            color: t.brandAccent,
+            backgroundColor: t.onAccent,
+            borderRadius: 4,
+            paddingHorizontal: 4,
+            paddingVertical: 0.5,
+          }}
+        >
+          {lineBadge}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function renderInlineCodeNode({
+  index,
+  value,
+  theme: t,
+  onPressFileRef,
+  workspaceCwd,
+}: {
+  index: number;
+  value: string;
+  theme: Palette;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
+}) {
+  const fileRef = onPressFileRef ? parseFileRef(value, workspaceCwd) : null;
+  if (fileRef && onPressFileRef) {
+    return <FileRefChip key={index} fileRef={fileRef} onPress={onPressFileRef} />;
+  }
+  return (
+    <Text
+      key={index}
+      testID="markdown-inline-code"
+      style={{
+        fontFamily: "monospace",
+        fontSize: 11,
+        fontWeight: "500",
+        color: t.codeForeground,
+        backgroundColor: t.codeBackground,
+        borderWidth: 1,
+        borderColor: t.retroBorder,
+        borderRadius: 10,
+        paddingHorizontal: 4,
+        paddingVertical: 1,
+      }}
+    >
+      {value}
+    </Text>
+  );
+}
+
+function renderLocalLinkNode({
+  index,
+  node,
+  theme: t,
+  onOpenLink,
+  onOpenLocalPath,
+  onOpenPortPreview,
+  onPressFileRef,
+  workspaceCwd,
+}: {
+  index: number;
+  node: Extract<MdInline, { type: "link" }>;
+  theme: Palette;
+  onOpenLink: (url: string) => void;
+  onOpenLocalPath?: (path: string) => void;
+  onOpenPortPreview?: (url: string) => void;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
+}) {
+  const fileRef = onPressFileRef ? parseFileRef(node.url, workspaceCwd) : null;
+  if (fileRef && onPressFileRef) {
+    return <FileRefChip key={index} fileRef={fileRef} onPress={onPressFileRef} />;
+  }
+  return (
+    <Text
+      key={index}
+      testID="markdown-path-chip"
+      accessibilityRole={onOpenLocalPath ? "link" : undefined}
+      accessibilityLabel={onOpenLocalPath ? `Open ${node.url}` : undefined}
+      onPress={onOpenLocalPath ? () => onOpenLocalPath(node.url) : undefined}
+      style={{
+        fontFamily: "monospace",
+        fontSize: 11,
+        color: onOpenLocalPath ? t.link : t.textSecondary,
+        borderWidth: 1,
+        borderColor: t.retroBorderLight,
+        borderRadius: 10,
+        paddingHorizontal: 4,
+        textDecorationLine: onOpenLocalPath ? "underline" : "none",
+      }}
+    >
+      <Inlines
+        nodes={node.children}
+        color={onOpenLocalPath ? t.link : t.textSecondary}
+        onOpenLink={onOpenLink}
+        onOpenLocalPath={onOpenLocalPath}
+        onOpenPortPreview={onOpenPortPreview}
+        onPressFileRef={onPressFileRef}
+        workspaceCwd={workspaceCwd}
+      />
+    </Text>
+  );
+}
+
 function Inlines({
   nodes,
   color,
   onOpenLink,
   onOpenLocalPath,
   onOpenPortPreview,
+  onPressFileRef,
+  workspaceCwd,
 }: {
   nodes: MdInline[];
   color: string;
   onOpenLink: (url: string) => void;
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
 }): ReactNode {
   const { palette: t } = useTheme();
   return nodes.map((node, index) => {
@@ -290,6 +501,8 @@ function Inlines({
             onOpenLink={onOpenLink}
             onOpenLocalPath={onOpenLocalPath}
             onOpenPortPreview={onOpenPortPreview}
+            onPressFileRef={onPressFileRef}
+            workspaceCwd={workspaceCwd}
           />
         </Text>
       );
@@ -302,6 +515,8 @@ function Inlines({
             onOpenLink={onOpenLink}
             onOpenLocalPath={onOpenLocalPath}
             onOpenPortPreview={onOpenPortPreview}
+            onPressFileRef={onPressFileRef}
+            workspaceCwd={workspaceCwd}
           />
         </Text>
       );
@@ -314,30 +529,19 @@ function Inlines({
             onOpenLink={onOpenLink}
             onOpenLocalPath={onOpenLocalPath}
             onOpenPortPreview={onOpenPortPreview}
+            onPressFileRef={onPressFileRef}
+            workspaceCwd={workspaceCwd}
           />
         </Text>
       );
     if (node.type === "code") {
-      return (
-        <Text
-          key={index}
-          testID="markdown-inline-code"
-          style={{
-            fontFamily: "monospace",
-            fontSize: 11,
-            fontWeight: "500",
-            color: t.codeForeground,
-            backgroundColor: t.codeBackground,
-            borderWidth: 1,
-            borderColor: t.retroBorder,
-            borderRadius: 10,
-            paddingHorizontal: 4,
-            paddingVertical: 1,
-          }}
-        >
-          {node.value}
-        </Text>
-      );
+      return renderInlineCodeNode({
+        index,
+        value: node.value,
+        theme: t,
+        onPressFileRef,
+        workspaceCwd,
+      });
     }
     if (node.type === "image") {
       return (
@@ -360,33 +564,16 @@ function Inlines({
     }
     const kind = linkKind(node.url);
     if (kind === "local") {
-      return (
-        <Text
-          key={index}
-          testID="markdown-path-chip"
-          accessibilityRole={onOpenLocalPath ? "link" : undefined}
-          accessibilityLabel={onOpenLocalPath ? `Open ${node.url}` : undefined}
-          onPress={onOpenLocalPath ? () => onOpenLocalPath(node.url) : undefined}
-          style={{
-            fontFamily: "monospace",
-            fontSize: 11,
-            color: onOpenLocalPath ? t.link : t.textSecondary,
-            borderWidth: 1,
-            borderColor: t.retroBorderLight,
-            borderRadius: 10,
-            paddingHorizontal: 4,
-            textDecorationLine: onOpenLocalPath ? "underline" : "none",
-          }}
-        >
-          <Inlines
-            nodes={node.children}
-            color={onOpenLocalPath ? t.link : t.textSecondary}
-            onOpenLink={onOpenLink}
-            onOpenLocalPath={onOpenLocalPath}
-            onOpenPortPreview={onOpenPortPreview}
-          />
-        </Text>
-      );
+      return renderLocalLinkNode({
+        index,
+        node,
+        theme: t,
+        onOpenLink,
+        onOpenLocalPath,
+        onOpenPortPreview,
+        onPressFileRef,
+        workspaceCwd,
+      });
     }
     if (kind === "unsafe") {
       return (
@@ -397,6 +584,8 @@ function Inlines({
             onOpenLink={onOpenLink}
             onOpenLocalPath={onOpenLocalPath}
             onOpenPortPreview={onOpenPortPreview}
+            onPressFileRef={onPressFileRef}
+            workspaceCwd={workspaceCwd}
           />
         </Text>
       );
@@ -417,6 +606,8 @@ function Inlines({
             onOpenLink={onOpenLink}
             onOpenLocalPath={onOpenLocalPath}
             onOpenPortPreview={onOpenPortPreview}
+            onPressFileRef={onPressFileRef}
+            workspaceCwd={workspaceCwd}
           />
         </Text>
       );
@@ -434,6 +625,8 @@ function Inlines({
           onOpenLink={onOpenLink}
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
+          onPressFileRef={onPressFileRef}
+          workspaceCwd={workspaceCwd}
         />
       </Text>
     );
@@ -552,12 +745,16 @@ function MarkdownTable({
   onOpenLink,
   onOpenLocalPath,
   onOpenPortPreview,
+  onPressFileRef,
+  workspaceCwd,
 }: {
   node: Extract<MdBlock, { type: "table" }>;
   color: string;
   onOpenLink: (url: string) => void;
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
+  onPressFileRef?: (ref: ParsedFileRef) => void;
+  workspaceCwd?: string;
 }) {
   const { palette: t, name } = useTheme();
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
@@ -656,6 +853,8 @@ function MarkdownTable({
                       onOpenLink={onOpenLink}
                       onOpenLocalPath={onOpenLocalPath}
                       onOpenPortPreview={onOpenPortPreview}
+                      onPressFileRef={onPressFileRef}
+                      workspaceCwd={workspaceCwd}
                     />
                   </Text>
                 </View>
