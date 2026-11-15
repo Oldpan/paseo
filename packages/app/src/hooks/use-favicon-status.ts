@@ -5,11 +5,13 @@ import { getDesktopHost } from "@/desktop/host";
 import { useWorkspaceStatusesForBadges } from "@/stores/session-store-hooks";
 import { deriveMacDockBadgeCountFromWorkspaceStatuses } from "@/utils/desktop-badge-state";
 import { isNative } from "@/constants/platform";
+import { IS_PAVRA } from "@/pavra/build";
 
 type FaviconStatus = "none" | "running" | "attention";
 type ColorScheme = "dark" | "light";
 
 /* eslint-disable @typescript-eslint/no-require-imports */
+const PAVRA_FAVICON_IMAGE: { uri: string } | number = require("../../assets/images/pavra-icon.png");
 const FAVICON_IMAGES: Record<ColorScheme, Record<FaviconStatus, { uri: string } | number>> = {
   dark: {
     none: require("../../assets/images/favicon-dark.png"),
@@ -40,6 +42,12 @@ function deriveFaviconStatus(
 }
 
 function getFaviconUri(status: FaviconStatus, colorScheme: ColorScheme): string {
+  if (IS_PAVRA) {
+    if (typeof PAVRA_FAVICON_IMAGE === "object" && "uri" in PAVRA_FAVICON_IMAGE) {
+      return PAVRA_FAVICON_IMAGE.uri;
+    }
+    return "/assets/images/pavra-icon.png";
+  }
   const image = FAVICON_IMAGES[colorScheme][status];
   if (typeof image === "object" && "uri" in image) {
     return image.uri;

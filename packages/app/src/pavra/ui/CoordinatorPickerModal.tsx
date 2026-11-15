@@ -43,10 +43,14 @@ export function CoordinatorPickerModal({
   hosts,
   onSelect,
   onClose,
+  onCheckUpdate,
+  checkingUpdate = false,
 }: {
   hosts: readonly HostProfile[];
   onSelect(serverId: string): void;
   onClose(): void;
+  onCheckUpdate?(): void;
+  checkingUpdate?: boolean;
 }) {
   const { palette: t } = useTheme();
   const { probeAndUpsertDirectConnection, beginLinkPairing } = useHostMutations();
@@ -206,6 +210,11 @@ export function CoordinatorPickerModal({
             <Chip onPress={openPairLink} disabled={busy}>
               Paste pairing link
             </Chip>
+            {onCheckUpdate ? (
+              <Chip onPress={onCheckUpdate} disabled={busy || checkingUpdate}>
+                {checkingUpdate ? "Checking update…" : "Check APK update"}
+              </Chip>
+            ) : null}
           </View>
         </View>
       ) : (
@@ -215,6 +224,11 @@ export function CoordinatorPickerModal({
           </Chip>
           <Chip onPress={openPairLink}>Paste pairing link</Chip>
           <Chip onPress={() => setShowConnectForm(true)}>+ Direct host</Chip>
+          {onCheckUpdate ? (
+            <Chip onPress={onCheckUpdate} disabled={checkingUpdate}>
+              {checkingUpdate ? "Checking update…" : "Check APK update"}
+            </Chip>
+          ) : null}
         </View>
       )}
     </FormFrame>

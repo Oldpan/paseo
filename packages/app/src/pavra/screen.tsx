@@ -35,9 +35,11 @@ import { openTurnProcess, Studio, StudioHomePanel } from "./studio";
 import { TurnProcessDrawer } from "./turn-process-drawer";
 import { PavraTheme, usePavraDark } from "./ui/ThemeProvider";
 import { AnimatedDrawer } from "./ui/AnimatedDrawer";
+import { ApkUpdateModal } from "./ui/ApkUpdateModal";
 import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
 import { InboxPane } from "./ui/InboxPane";
 import { Sidebar } from "./ui/Sidebar";
+import { isAndroidApkUpdateSupported, usePavraApkUpdater } from "./use-pavra-apk-updater";
 import { usePavraNotifications } from "./use-pavra-notifications";
 
 const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
@@ -282,6 +284,10 @@ export function PavraScreen() {
   // first one's ids; kept while the form is open so a retried save stays idempotent.
   const [formIds, setFormIds] = useState(freshFormIds);
   const [error, setError] = useState<string | null>(null);
+  const apkUpdater = usePavraApkUpdater(setError);
+  const handleManualUpdateCheck = useCallback(() => {
+    void apkUpdater.checkForApkUpdate({ manual: true });
+  }, [apkUpdater]);
   const [group, setGroup] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [processTurnId, setProcessTurnId] = useState<string | null>(null);
@@ -803,6 +809,18 @@ export function PavraScreen() {
                   hosts={hosts}
                   onSelect={selectCoordinator}
                   onClose={close}
+                  onCheckUpdate={
+                    isAndroidApkUpdateSupported() ? handleManualUpdateCheck : undefined
+                  }
+                  checkingUpdate={apkUpdater.checking}
+                />
+              ) : null}
+              {apkUpdater.pendingRelease ? (
+                <ApkUpdateModal
+                  release={apkUpdater.pendingRelease}
+                  installed={apkUpdater.installed}
+                  onDownload={apkUpdater.downloadPendingRelease}
+                  onDismiss={apkUpdater.dismissPendingRelease}
                 />
               ) : null}
               <FormHost

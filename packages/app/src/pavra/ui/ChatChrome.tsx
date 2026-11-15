@@ -1,11 +1,11 @@
 import { isWeb } from "@/constants/platform";
-import { useIsCompactFormFactor } from "@/constants/layout";
 // Presentation extracted/adapted from Bigbang Chat.tsx MessageRow and header.
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
 import { useRef, useEffect, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { AgentAvatar, StatusDot, UserAvatar } from "./avatars";
 import {
+  ActivityIcon,
   BoxesIcon,
   CheckIcon,
   ChatIcon,
@@ -303,40 +303,76 @@ export function Chip({
     </Pressable>
   );
 }
+export function ProcessIconButton({
+  onPress,
+  label = "View process",
+}: {
+  onPress(): void;
+  label?: string;
+}) {
+  const { palette: t, name } = useTheme();
+  return (
+    <Pressable
+      role="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        return [
+          {
+            width: 26,
+            height: 24,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
+            alignItems: "center",
+            justifyContent: "center",
+            ...webTransition("background-color 120ms ease"),
+          },
+          ctrlShadow(t, name),
+        ];
+      }}
+    >
+      <ActivityIcon color={t.textSecondary} size={13} />
+    </Pressable>
+  );
+}
+
 function MessageActionBar({
   actionsShown,
   copied,
   content,
+  user,
   onCopied,
   onQuote,
   onReply,
+  onOpenProcess,
 }: {
   actionsShown: boolean;
   copied: boolean;
   content: string;
+  user: boolean;
   onCopied(copied: boolean): void;
   onQuote?: () => void;
   onReply?: () => void;
+  onOpenProcess?: () => void;
 }) {
   const { palette: t, name } = useTheme();
+  if (!actionsShown) return null;
   return (
     <View
-      pointerEvents={actionsShown ? "auto" : "none"}
       style={[
         {
-          position: "absolute",
-          bottom: "100%",
-          marginBottom: 6,
-          right: 0,
-          zIndex: 20,
           flexDirection: "row",
+          alignItems: "center",
           gap: 2,
           borderRadius: 10,
           borderWidth: 1,
           borderColor: t.retroBorder,
           backgroundColor: t.surfaceSecondary,
           padding: 2,
-          opacity: actionsShown ? 1 : 0,
+          alignSelf: user ? "flex-end" : "flex-start",
         },
         ctrlShadow(t, name),
       ]}
@@ -349,18 +385,22 @@ function MessageActionBar({
             return onCopied(status === "copied");
           });
         }}
-        style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+        style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
       >
-        {copied ? <CheckIcon color={t.success} /> : <CopyIcon color={t.textSecondary} />}
+        {copied ? (
+          <CheckIcon color={t.success} size={13} />
+        ) : (
+          <CopyIcon color={t.textSecondary} size={13} />
+        )}
       </Pressable>
       {onQuote ? (
         <Pressable
           role="button"
           accessibilityLabel="Quote message"
           onPress={onQuote}
-          style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+          style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
         >
-          <QuoteIcon color={t.textSecondary} size={14} />
+          <QuoteIcon color={t.textSecondary} size={13} />
         </Pressable>
       ) : null}
       {onReply ? (
@@ -368,9 +408,135 @@ function MessageActionBar({
           role="button"
           accessibilityLabel="Reply in thread"
           onPress={onReply}
-          style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+          style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
+        >
+          <ChatIcon color={t.textSecondary} size={13} />
+        </Pressable>
+      ) : null}
+      {!user && onOpenProcess ? (
+        <Pressable
+          role="button"
+          accessibilityLabel="View process"
+          onPress={onOpenProcess}
+          style={{ width: 26, height: 24, alignItems: "center", justifyContent: "center" }}
+        >
+          <ActivityIcon color={t.textSecondary} size={13} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function MessageContextMenu({
+  id,
+  user,
+  copied,
+  content,
+  onCopied,
+  onQuote,
+  onReply,
+  onOpenProcess,
+  onClose,
+}: {
+  id: string;
+  user: boolean;
+  copied: boolean;
+  content: string;
+  onCopied(copied: boolean): void;
+  onQuote?: () => void;
+  onReply?: () => void;
+  onOpenProcess?: () => void;
+  onClose(): void;
+}) {
+  const { palette: t, name } = useTheme();
+  const itemStyle = {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+  };
+  return (
+    <View
+      testID={`message-context-menu-${id}`}
+      role="menu"
+      style={[
+        {
+          marginTop: 6,
+          minWidth: 168,
+          borderRadius: 12,
+          borderWidth: 1,
+          borderColor: t.retroBorder,
+          backgroundColor: t.surfaceElevated,
+          padding: 4,
+          gap: 2,
+          alignSelf: user ? "flex-end" : "flex-start",
+          zIndex: 30,
+        },
+        ctrlShadow(t, name),
+      ]}
+    >
+      <Pressable
+        role="menuitem"
+        accessibilityLabel={copied ? "Copied" : "Copy message"}
+        onPress={() => {
+          void copyText(content).then((status) => {
+            onCopied(status === "copied");
+            return onClose();
+          });
+        }}
+        style={itemStyle}
+      >
+        {copied ? (
+          <CheckIcon color={t.success} size={14} />
+        ) : (
+          <CopyIcon color={t.textSecondary} size={14} />
+        )}
+        <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>
+          {copied ? "Copied" : "Copy message"}
+        </Text>
+      </Pressable>
+      {onReply ? (
+        <Pressable
+          role="menuitem"
+          accessibilityLabel="Reply in thread"
+          onPress={() => {
+            onClose();
+            onReply();
+          }}
+          style={itemStyle}
         >
           <ChatIcon color={t.textSecondary} size={14} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Reply in thread</Text>
+        </Pressable>
+      ) : null}
+      {onQuote ? (
+        <Pressable
+          role="menuitem"
+          accessibilityLabel="Quote message"
+          onPress={() => {
+            onClose();
+            onQuote();
+          }}
+          style={itemStyle}
+        >
+          <QuoteIcon color={t.textSecondary} size={14} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Quote message</Text>
+        </Pressable>
+      ) : null}
+      {!user && onOpenProcess ? (
+        <Pressable
+          role="menuitem"
+          accessibilityLabel="View process"
+          onPress={() => {
+            onClose();
+            onOpenProcess();
+          }}
+          style={itemStyle}
+        >
+          <ActivityIcon color={t.textSecondary} size={14} />
+          <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>View process</Text>
         </Pressable>
       ) : null}
     </View>
@@ -380,28 +546,55 @@ function MessageActionBar({
 function MessageFooterChips({
   user,
   replyCount,
+  hovered,
+  copied,
+  content,
+  onCopied,
+  onQuote,
   onReply,
   onOpenProcess,
 }: {
   user: boolean;
   replyCount: number;
+  hovered: boolean;
+  copied: boolean;
+  content: string;
+  onCopied(copied: boolean): void;
+  onQuote?: () => void;
   onReply?: () => void;
   onOpenProcess?: () => void;
 }) {
   const showProcess = !user && Boolean(onOpenProcess);
   const showReplies = Boolean(onReply && replyCount > 0);
-  if (!showProcess && !showReplies) return null;
+  const showHoverBar = isWeb && hovered;
+  if (!showProcess && !showReplies && !showHoverBar) return null;
   return (
-    <View style={{ marginTop: 6, flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-      {showProcess && onOpenProcess ? (
-        <Chip onPress={onOpenProcess} label="View process">
-          View process
-        </Chip>
-      ) : null}
+    <View
+      style={{
+        marginTop: 6,
+        flexDirection: "row",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      {showProcess && onOpenProcess ? <ProcessIconButton onPress={onOpenProcess} /> : null}
       {showReplies && onReply ? (
         <Chip onPress={onReply} label="Open thread">
           {replyCount} {replyCount === 1 ? "reply" : "replies"}
         </Chip>
+      ) : null}
+      {showHoverBar ? (
+        <MessageActionBar
+          actionsShown={showHoverBar}
+          copied={copied}
+          content={content}
+          user={user}
+          onCopied={onCopied}
+          onQuote={onQuote}
+          onReply={onReply}
+          onOpenProcess={onOpenProcess}
+        />
       ) : null}
     </View>
   );
@@ -441,8 +634,8 @@ export function ChatMessage({
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
-  const compact = useIsCompactFormFactor();
   const [hovered, setHovered] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showChrome = () => {
@@ -451,7 +644,7 @@ export function ChatMessage({
   };
   const hideChrome = () => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setHovered(false), 500);
+    hideTimer.current = setTimeout(() => setHovered(false), 350);
   };
   useEffect(
     () => () => {
@@ -460,17 +653,25 @@ export function ChatMessage({
     [],
   );
 
-  // Hover only exists on web with a pointer; touch layouts keep the actions in reach.
-  const actionsShown = hovered || !isWeb || compact;
   const alignment = user ? "flex-end" : "flex-start";
   const avatar = user ? (
     <UserAvatar label="You" size={32} theme={t} name={name} />
   ) : (
     <AgentAvatar seed={seed} label={sender} size={32} theme={t} name={name} />
   );
+  const webContextMenuProps = isWeb
+    ? ({
+        onContextMenu: (event: { preventDefault?: () => void }) => {
+          event.preventDefault?.();
+          setMenuOpen((prev) => !prev);
+        },
+      } as Record<string, unknown>)
+    : undefined;
   return (
     <View
       testID={`message-${id}`}
+      onPointerEnter={showChrome}
+      onPointerLeave={hideChrome}
       style={{
         position: "relative",
         flexDirection: "row",
@@ -527,20 +728,20 @@ export function ChatMessage({
             })}
           </Text>
         </View>
-        <View
-          onPointerEnter={showChrome}
-          onPointerLeave={hideChrome}
+        <Pressable
           accessibilityLabel={`Message from ${sender}`}
+          onPress={() => {
+            if (!isWeb || menuOpen) {
+              setMenuOpen((prev) => !prev);
+            }
+          }}
+          onLongPress={() => {
+            setMenuOpen(true);
+          }}
+          delayLongPress={280}
+          {...webContextMenuProps}
           style={{ position: "relative", maxWidth: "100%" }}
         >
-          <MessageActionBar
-            actionsShown={actionsShown}
-            copied={copied}
-            content={content}
-            onCopied={setCopied}
-            onQuote={onQuote}
-            onReply={onReply}
-          />
           <View
             style={[
               {
@@ -557,11 +758,29 @@ export function ChatMessage({
           >
             <MessageBody id={id} content={content} user={user} quote={quote} />
           </View>
-        </View>
+        </Pressable>
+        {menuOpen ? (
+          <MessageContextMenu
+            id={id}
+            user={user}
+            copied={copied}
+            content={content}
+            onCopied={setCopied}
+            onQuote={onQuote}
+            onReply={onReply}
+            onOpenProcess={onOpenProcess}
+            onClose={() => setMenuOpen(false)}
+          />
+        ) : null}
         {children}
         <MessageFooterChips
           user={user}
           replyCount={replyCount}
+          hovered={hovered && !menuOpen}
+          copied={copied}
+          content={content}
+          onCopied={setCopied}
+          onQuote={onQuote}
           onReply={onReply}
           onOpenProcess={onOpenProcess}
         />

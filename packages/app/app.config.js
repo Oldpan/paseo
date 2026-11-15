@@ -128,7 +128,7 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: "#000000",
+        backgroundColor: isPavra ? "#0D0D10" : "#000000",
         foregroundImage: isPavra
           ? "./assets/images/pavra-icon.png"
           : "./assets/images/android-icon-foreground.png",
@@ -145,7 +145,7 @@ export default {
     },
     web: {
       output: "single",
-      favicon: "./assets/images/favicon.png",
+      favicon: isPavra ? "./assets/images/pavra-icon.png" : "./assets/images/favicon.png",
     },
     autolinking: {
       searchPaths: ["../../node_modules", "./node_modules"],
@@ -161,12 +161,12 @@ export default {
       [
         "expo-splash-screen",
         {
-          image: "./assets/images/splash-icon.png",
+          image: isPavra ? "./assets/images/pavra-icon.png" : "./assets/images/splash-icon.png",
           imageWidth: 200,
           resizeMode: "contain",
-          backgroundColor: "#ffffff",
+          backgroundColor: isPavra ? "#0D0D10" : "#ffffff",
           dark: {
-            backgroundColor: "#000000",
+            backgroundColor: isPavra ? "#0D0D10" : "#000000",
           },
         },
       ],

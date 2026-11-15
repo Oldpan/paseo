@@ -9,7 +9,7 @@ import { useSessionStore } from "@/stores/session-store";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
 import type { Turn } from "../../../../extensions/pavra/shared/contracts";
-import { Chip, LiveTurnBubble } from "./ui/ChatChrome";
+import { LiveTurnBubble, ProcessIconButton } from "./ui/ChatChrome";
 import { isPassPrefix, isSilentAwareness, selectLiveTurn, TURN_STATUS_LABEL } from "./live-turn";
 
 const EMPTY_ITEMS: StreamItem[] = [];
@@ -85,9 +85,7 @@ export const LiveTurnItem = memo(function LiveTurnItem({
         </View>
       ) : null}
       <View style={CHIP_ROW}>
-        <Chip onPress={onOpen} label="View process">
-          View process
-        </Chip>
+        <ProcessIconButton onPress={onOpen} label="View process" />
       </View>
     </LiveTurnBubble>
   );

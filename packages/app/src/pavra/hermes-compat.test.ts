@@ -189,4 +189,13 @@ describe("Hermes runtime compatibility", () => {
     const safeCalls = [...source.matchAll(/dom\.current\?\.\w+\?\.\(/g)].map((m) => m[0]);
     expect(safeCalls.length).toBeGreaterThanOrEqual(10);
   });
+
+  it("unifies Android and Web icons on lucide-react-native and hides message action bars by default", () => {
+    const iconsSource = readFileSync(path.join(pavraDir, "ui", "icons.tsx"), "utf8");
+    expect(iconsSource).toContain('from "lucide-react-native"');
+    const chatChromeSource = readFileSync(path.join(pavraDir, "ui", "ChatChrome.tsx"), "utf8");
+    expect(chatChromeSource).not.toContain("hovered || !isWeb || compact");
+    expect(chatChromeSource).toContain("MessageContextMenu");
+    expect(chatChromeSource).toContain("ProcessIconButton");
+  });
 });
