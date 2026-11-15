@@ -8,6 +8,7 @@ import {
   machineRoleLabel,
   mergeChatState,
   OPENED_GROUP,
+  resolveActiveStudioKey,
   resolveDefaultChatId,
   resolveDefaultCoordinatorId,
   sortMessages,
@@ -167,5 +168,24 @@ describe("resolveDefaultCoordinatorId and resolveDefaultChatId", () => {
     expect(resolveDefaultChatId("", [{ id: "dm-sky" }, { id: "dm-ada" }])).toBe("dm-sky");
     expect(resolveDefaultChatId("missing", [{ id: "dm-sky" }, { id: "dm-ada" }])).toBe("dm-sky");
     expect(resolveDefaultChatId("dm-ada", [{ id: "dm-sky" }, { id: "dm-ada" }])).toBe("dm-ada");
+  });
+});
+
+describe("resolveActiveStudioKey", () => {
+  const first = { serverId: "spark", workspaceId: "w1", name: "Spark project", group: "General" };
+  const second = { serverId: "mac", workspaceId: "w2", name: "Mac project", group: "Tasks" };
+
+  it("returns null when no columns are open", () => {
+    expect(resolveActiveStudioKey([], null)).toBeNull();
+    expect(resolveActiveStudioKey([], studioKey(first))).toBeNull();
+  });
+
+  it("returns activeKey when it matches an open column", () => {
+    expect(resolveActiveStudioKey([first, second], studioKey(second))).toBe(studioKey(second));
+  });
+
+  it("falls back to the first column when activeKey is null or stale", () => {
+    expect(resolveActiveStudioKey([first, second], null)).toBe(studioKey(first));
+    expect(resolveActiveStudioKey([first, second], '["stale","missing"]')).toBe(studioKey(first));
   });
 });
