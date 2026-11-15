@@ -696,4 +696,104 @@ describe("Chat ledger v2 store", () => {
     const state = store.snapshot();
     expect(unseenMessages(state.messages, rolled, state.turns)).toHaveLength(4);
   });
+
+  it("bookmarks and unbookmarks messages with saveMessage while preserving seq and windowed visibility", () => {
+    const { store, coordinator, conversation } = fixture();
+    const first = store.putMessage({
+      id: "msg-saved-1",
+      conversationId: conversation.id,
+      threadId: null,
+      senderId: "user",
+      content: "Important architecture decision",
+      createdAt: 1,
+      taskId: null,
+    });
+    for (let index = 2; index <= 4; index += 1) {
+      store.putMessage({
+        id: `msg-${index}`,
+        conversationId: conversation.id,
+        threadId: null,
+        senderId: "user",
+        content: `Followup ${index}`,
+        createdAt: index,
+        taskId: null,
+      });
+    }
+    const cursorBefore = store.cursor();
+    const saved = coordinator.saveMessage({
+      conversationId: conversation.id,
+      messageId: first.id,
+      saved: true,
+    });
+    expect(saved.savedAt).toEqual(expect.any(String));
+    expect(saved.seq).toBe(first.seq);
+    expect(store.cursor()).toBeGreaterThan(cursorBefore);
+    expect(store.get("messages", first.id)?.savedAt).toBe(saved.savedAt);
+
+    // Bookmarked messages are preserved even when initial snapshot windowing trims older messages.
+    const windowed = store.snapshot(0, undefined, { messageLimit: 2 });
+    expect(windowed.messages.map((message) => message.id).sort()).toEqual([
+      "msg-3",
+      "msg-4",
+      "msg-saved-1",
+    ]);
+
+    const unsaved = coordinator.saveMessage({
+      messageId: first.id,
+      saved: false,
+    });
+    expect(unsaved.savedAt).toBeUndefined();
+    expect(unsaved.seq).toBe(first.seq);
+    expect(store.get("messages", first.id)?.savedAt).toBeUndefined();
+  });
+
+  it("persists forwardedFrom provenance metadata when forwarding a message", () => {
+    const { store, coordinator, assistant, conversation } = fixture();
+    const targetConversation = coordinator.createConversation({
+      id: randomUUID(),
+      name: "Ops Room",
+      kind: "group",
+      members: [assistant.id],
+      roundtable: false,
+    });
+    const forwardedId = randomUUID();
+    const forwardedFrom = {
+      conversationId: conversation.id,
+      conversationTitle: conversation.name,
+      senderName: assistant.name,
+      messageId: "origin-msg-1",
+    };
+    coordinator.send({
+      id: forwardedId,
+      conversationId: targetConversation.id,
+      threadId: null,
+      content: "Check this root cause\n\n> Forwarded from Ada",
+      forwardedFrom,
+    });
+
+    const stored = store.get("messages", forwardedId);
+    expect(stored?.forwardedFrom).toEqual(forwardedFrom);
+  });
+
+  it("applies custom budgetMinutes when promoting a message to a task", () => {
+    const { store, coordinator, assistant, conversation } = fixture();
+    const taskId = randomUUID();
+    const before = Date.now();
+    const created = coordinator.task({
+      id: taskId,
+      conversationId: conversation.id,
+      assistantId: assistant.id,
+      title: "Fix flaky migration",
+      prompt: "Investigate and fix the flaky migration test.",
+      serverId: "local",
+      directory: "/tmp/repo",
+      provider: assistant.provider,
+      isolation: "worktree",
+      budgetMinutes: 120,
+    });
+
+    expect(created.deadline).toBeGreaterThanOrEqual(before + 120 * 60_000 - 1_000);
+    expect(created.deadline).toBeLessThanOrEqual(Date.now() + 120 * 60_000 + 1_000);
+    expect(store.get("tasks", taskId)?.title).toBe("Fix flaky migration");
+  });
 });

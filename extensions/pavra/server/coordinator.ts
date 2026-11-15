@@ -28,6 +28,7 @@ import {
   respondTaskPermission,
   resumeRoutine,
   runRoutineOnce,
+  saveMessage,
   saveRoutine,
   sendMessage,
   startTask,
@@ -1229,6 +1230,7 @@ export class Coordinator {
         taskId: null,
         kind: "user",
         ...(input.quoteOf ? { quoteOf: input.quoteOf } : {}),
+        ...(input.forwardedFrom ? { forwardedFrom: input.forwardedFrom } : {}),
       });
       for (const previous of superseded)
         this.store.put("turns", {
@@ -1276,6 +1278,14 @@ export class Coordinator {
       messageId: input.messageId,
       emoji: input.emoji,
       actorId: input.actorId ?? "user",
+    });
+  }
+  saveMessage(input: RpcInput<typeof saveMessage>): RpcOutput<typeof saveMessage> {
+    return this.store.saveMessage({
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      saved: input.saved,
+      savedAt: new Date(this.now()).toISOString(),
     });
   }
   // Checks everything a message needs before anything is written and decides how it is routed.
@@ -1341,8 +1351,9 @@ export class Coordinator {
     });
   }
 
-  private deadlineFromNow(): number {
-    return Date.now() + this.limits.autonomousBudgetMinutes * 60_000;
+  private deadlineFromNow(budgetMinutes?: number): number {
+    const minutes = budgetMinutes ?? this.limits.autonomousBudgetMinutes;
+    return Date.now() + minutes * 60_000;
   }
   task(input: RpcInput<typeof startTask>): Task {
     const existing = this.store.get("tasks", input.id);
@@ -1359,14 +1370,15 @@ export class Coordinator {
     const conversation = this.store.get("conversations", input.conversationId);
     if (!conversation?.members.includes(input.assistantId))
       throw new Error("Choose a member of this chat.");
+    const { budgetMinutes, ...taskInput } = input;
     const task: Task = {
-      ...input,
+      ...taskInput,
       status: "queued",
       execution: null,
       accepted: false,
       error: null,
       createdAt: Date.now(),
-      deadline: this.deadlineFromNow(),
+      deadline: this.deadlineFromNow(budgetMinutes),
       origin: "user",
       sourceThreadId: null,
     };

@@ -40,10 +40,17 @@ function windowMessages(messages: readonly Message[], limit: number): Message[] 
   }
   const kept = new Set<string>();
   for (const list of byConversation.values()) {
-    const tail = list.length > limit ? list.slice(-limit) : list;
+    const ordered = [...list].sort((a, b) => (a.seq ?? a.createdAt) - (b.seq ?? b.createdAt));
+    const tail = ordered.length > limit ? ordered.slice(-limit) : ordered;
     for (const message of tail) {
       kept.add(message.id);
       if (message.threadId) kept.add(message.threadId);
+    }
+    for (const message of ordered) {
+      if (message.savedAt) {
+        kept.add(message.id);
+        if (message.threadId) kept.add(message.threadId);
+      }
     }
   }
   return messages.filter((message) => kept.has(message.id));
@@ -210,6 +217,28 @@ export class ChatStore {
       const { reactions: _removed, ...rest } = existing;
       const updated: Message =
         Object.keys(nextReactions).length > 0 ? { ...rest, reactions: nextReactions } : rest;
+      return this.putMessage(updated);
+    });
+  }
+  /** Sets or clears a message's saved bookmark timestamp (`savedAt`) and bumps the ledger cursor. */
+  saveMessage(input: {
+    messageId: string;
+    saved: boolean;
+    conversationId?: string;
+    savedAt?: string;
+  }): Message {
+    return this.transaction(() => {
+      const existing = this.get("messages", input.messageId);
+      if (
+        !existing ||
+        (input.conversationId !== undefined && existing.conversationId !== input.conversationId)
+      ) {
+        throw new Error("Message no longer exists.");
+      }
+      const { savedAt: _removed, ...rest } = existing;
+      const updated: Message = input.saved
+        ? { ...rest, savedAt: input.savedAt ?? new Date().toISOString() }
+        : rest;
       return this.putMessage(updated);
     });
   }

@@ -49,6 +49,14 @@ export const conversationSchema = z.object({
   // Replies when a plain message has no mention, quote or recent participant.
   defaultResponderId: z.string().uuid().optional(),
 });
+export const forwardedFromSchema = z.object({
+  conversationId: z.string(),
+  conversationTitle: z.string(),
+  senderName: z.string(),
+  messageId: z.string(),
+});
+export type ForwardedFrom = z.infer<typeof forwardedFromSchema>;
+
 export const messageSchema = z.object({
   id: z.string(),
   conversationId: z.string(),
@@ -66,6 +74,8 @@ export const messageSchema = z.object({
   routineId: z.string().optional(),
   routineName: z.string().optional(),
   reactions: z.record(z.string(), z.array(z.string())).optional(),
+  savedAt: z.string().optional(),
+  forwardedFrom: forwardedFromSchema.optional(),
   // Lifecycle receipt payload of a `task_event` row. `type` stays a string so a newer daemon can add
   // event types an older client does not know; see `taskEventTypes` for the current set.
   event: z
@@ -80,6 +90,7 @@ export const messageSchema = z.object({
     })
     .optional(),
 });
+export const ChatMessageSchema = messageSchema;
 export const taskEventTypes = [
   "task_started",
   "task_attention",
@@ -394,6 +405,7 @@ export const writeAssistantPlaybook = defineRpc({
   }),
   output: playbookFileSchema,
 });
+export const savePlaybook = writeAssistantPlaybook;
 export const deleteAssistantPlaybook = defineRpc({
   name: "chat.assistant.playbook.delete",
   input: z.object({
@@ -421,6 +433,8 @@ export const sendMessage = defineRpc({
     content: z.string().trim().min(1).max(100000),
     // Id of the assistant message being quoted; routes the reply to its sender.
     quoteOf: z.string().optional(),
+    // Provenance metadata when a message is forwarded from another chat or thread.
+    forwardedFrom: forwardedFromSchema.optional(),
     // "roundtable" starts an ordered discussion from a root message with 2-6 explicit mentions.
     responseMode: z.literal("roundtable").optional(),
     // "steer" supersedes the active turn in the lane immediately instead of waiting for it to finish.
@@ -434,6 +448,15 @@ export const reactToMessage = defineRpc({
     conversationId: z.string().min(1),
     messageId: z.string().min(1),
     emoji: z.string().trim().min(1).max(32),
+  }),
+  output: messageSchema,
+});
+export const saveMessage = defineRpc({
+  name: "chat.message.save",
+  input: z.object({
+    conversationId: z.string().min(1).optional(),
+    messageId: z.string().min(1),
+    saved: z.boolean(),
   }),
   output: messageSchema,
 });
@@ -460,6 +483,7 @@ export const startTask = defineRpc({
       id: z.string().uuid(),
       prompt: z.string().trim().min(1),
       directory: z.string().min(1),
+      budgetMinutes: z.number().int().min(1).max(720).optional(),
     }),
   output: taskSchema,
 });
