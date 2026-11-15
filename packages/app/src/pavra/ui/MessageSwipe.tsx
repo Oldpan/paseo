@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Animated, Easing, PanResponder, Text, View } from "react-native";
 import { isWeb } from "@/constants/platform";
 import { text as type } from "./theme";
@@ -69,8 +69,137 @@ export function MessageSwipeReveal({
 }) {
   const offset = useRef(new Animated.Value(0)).current;
   const opacity = useRef(new Animated.Value(0)).current;
-  const start = useRef({ x: 0, y: 0, active: false });
-  const direction = side === "start" ? 1 : -1;
+  const [activeSide, setActiveSide] = useState<"start" | "end">(side);
+  const activeSideRef = useRef<"start" | "end">(side);
+  const contentRef = useRef<View | null>(null);
+
+  const applyDelta = useCallback(
+    (dx: number) => {
+      const clamped = Math.max(
+        -MESSAGE_SWIPE_MAX_OFFSET_PX,
+        Math.min(MESSAGE_SWIPE_MAX_OFFSET_PX, dx),
+      );
+      const nextSide: "start" | "end" = clamped >= 0 ? "start" : "end";
+      if (activeSideRef.current !== nextSide) {
+        activeSideRef.current = nextSide;
+        setActiveSide(nextSide);
+      }
+      offset.setValue(clamped);
+      opacity.setValue(Math.min(1, Math.abs(clamped) / SWIPE_FULL_REVEAL_PX));
+    },
+    [offset, opacity],
+  );
+
+  const springBack = useCallback(() => {
+    const easing = Easing.bezier(0.2, 0.8, 0.25, 1);
+    Animated.parallel([
+      Animated.timing(offset, {
+        toValue: 0,
+        duration: SWIPE_RESET_MS,
+        easing,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 0,
+        duration: SWIPE_RESET_MS,
+        easing,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [offset, opacity]);
+
+  useEffect(() => {
+    if (!isWeb) return;
+    const node = contentRef.current as unknown as HTMLElement | null;
+    if (!node || typeof node.addEventListener !== "function") return;
+
+    let pointerStart: { x: number; y: number; id: number } | null = null;
+    let dragging = false;
+    let wheelAccum = 0;
+    let wheelTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId };
+      dragging = false;
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!pointerStart) return;
+      const dx = event.clientX - pointerStart.x;
+      const dy = event.clientY - pointerStart.y;
+      if (!dragging) {
+        if (Math.abs(dx) > SWIPE_ACTIVATE_PX && Math.abs(dx) > Math.abs(dy)) {
+          dragging = true;
+          offset.stopAnimation();
+          opacity.stopAnimation();
+          try {
+            node.setPointerCapture(pointerStart.id);
+          } catch {
+            // Ignore pointer capture errors
+          }
+        } else if (Math.abs(dy) > SWIPE_ACTIVATE_PX) {
+          pointerStart = null;
+          return;
+        } else {
+          return;
+        }
+      }
+      applyDelta(dx);
+      if (event.cancelable) event.preventDefault();
+    };
+
+    const finishPointer = () => {
+      if (!pointerStart) return;
+      if (node.hasPointerCapture?.(pointerStart.id)) {
+        try {
+          node.releasePointerCapture(pointerStart.id);
+        } catch {
+          // Ignore release errors
+        }
+      }
+      pointerStart = null;
+      if (dragging) {
+        dragging = false;
+        springBack();
+      }
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY) || Math.abs(event.deltaX) < 2) {
+        return;
+      }
+      offset.stopAnimation();
+      opacity.stopAnimation();
+      wheelAccum = Math.max(
+        -MESSAGE_SWIPE_MAX_OFFSET_PX,
+        Math.min(MESSAGE_SWIPE_MAX_OFFSET_PX, wheelAccum - event.deltaX),
+      );
+      if (Math.abs(wheelAccum) < SWIPE_ACTIVATE_PX) return;
+      if (event.cancelable) event.preventDefault();
+      applyDelta(wheelAccum);
+      if (wheelTimer) clearTimeout(wheelTimer);
+      wheelTimer = setTimeout(() => {
+        wheelAccum = 0;
+        springBack();
+      }, 180);
+    };
+
+    node.addEventListener("pointerdown", onPointerDown);
+    node.addEventListener("pointermove", onPointerMove);
+    node.addEventListener("pointerup", finishPointer);
+    node.addEventListener("pointercancel", finishPointer);
+    node.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      if (wheelTimer) clearTimeout(wheelTimer);
+      node.removeEventListener("pointerdown", onPointerDown);
+      node.removeEventListener("pointermove", onPointerMove);
+      node.removeEventListener("pointerup", finishPointer);
+      node.removeEventListener("pointercancel", finishPointer);
+      node.removeEventListener("wheel", onWheel);
+    };
+  });
 
   const responder = useMemo(
     () =>
@@ -78,66 +207,36 @@ export function MessageSwipeReveal({
         onMoveShouldSetPanResponder: (_event, gesture) => {
           const absX = Math.abs(gesture.dx);
           const absY = Math.abs(gesture.dy);
-          return (
-            absX > SWIPE_ACTIVATE_PX &&
-            absX > absY &&
-            (direction < 0 ? gesture.dx < 0 : gesture.dx > 0)
-          );
+          return absX > SWIPE_ACTIVATE_PX && absX > absY;
         },
         onMoveShouldSetPanResponderCapture: (_event, gesture) => {
           const absX = Math.abs(gesture.dx);
           const absY = Math.abs(gesture.dy);
-          return (
-            absX > SWIPE_ACTIVATE_PX &&
-            absX > absY &&
-            (direction < 0 ? gesture.dx < 0 : gesture.dx > 0)
-          );
+          return absX > SWIPE_ACTIVATE_PX && absX > absY;
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
-          start.current.active = true;
           offset.stopAnimation();
           opacity.stopAnimation();
         },
         onPanResponderMove: (_event, gesture) => {
-          const raw = direction < 0 ? Math.min(0, gesture.dx) : Math.max(0, gesture.dx);
-          const clamped = Math.max(
-            -MESSAGE_SWIPE_MAX_OFFSET_PX,
-            Math.min(MESSAGE_SWIPE_MAX_OFFSET_PX, raw),
-          );
-          offset.setValue(clamped);
-          opacity.setValue(Math.min(1, Math.abs(clamped) / SWIPE_FULL_REVEAL_PX));
+          applyDelta(gesture.dx);
         },
         onPanResponderRelease: () => {
-          start.current.active = false;
-          const easing = Easing.bezier(0.2, 0.8, 0.25, 1);
-          Animated.parallel([
-            Animated.timing(offset, {
-              toValue: 0,
-              duration: SWIPE_RESET_MS,
-              easing,
-              useNativeDriver: true,
-            }),
-            Animated.timing(opacity, {
-              toValue: 0,
-              duration: SWIPE_RESET_MS,
-              easing,
-              useNativeDriver: true,
-            }),
-          ]).start();
+          springBack();
         },
         onPanResponderTerminate: () => {
-          start.current.active = false;
           offset.setValue(0);
           opacity.setValue(0);
         },
       }),
-    [direction, offset, opacity],
+    [applyDelta, offset, opacity, springBack],
   );
 
   return (
     <View style={{ position: "relative", overflow: "visible" }}>
       <Animated.View
+        ref={contentRef}
         testID="message-swipe-content"
         {...responder.panHandlers}
         style={{
@@ -151,12 +250,12 @@ export function MessageSwipeReveal({
         pointerEvents="none"
         style={{
           position: "absolute",
-          top: 8,
-          [side === "start" ? "left" : "right"]: 8,
+          top: 10,
+          [activeSide === "start" ? "left" : "right"]: 8,
           opacity,
         }}
       >
-        <MessageTimestamp createdAt={createdAt} side={side} visible embedded />
+        <MessageTimestamp createdAt={createdAt} side={activeSide} visible embedded />
       </Animated.View>
     </View>
   );

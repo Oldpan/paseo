@@ -730,15 +730,21 @@ export function ChatMessage({
             {user ? sideActions : null}
             <Pressable
               accessibilityLabel={`Message from ${sender}`}
-              onPress={() => {
-                if (!isWeb || menuOpen) {
-                  setMenuOpen((prev) => !prev);
-                }
-              }}
-              onLongPress={() => {
-                setMenuOpen(true);
-              }}
-              delayLongPress={280}
+              onPress={
+                !isWeb || menuOpen
+                  ? () => {
+                      setMenuOpen((prev) => !prev);
+                    }
+                  : undefined
+              }
+              onLongPress={
+                isWeb
+                  ? undefined
+                  : () => {
+                      setMenuOpen(true);
+                    }
+              }
+              delayLongPress={isWeb ? undefined : 280}
               {...webContextMenuProps}
               style={{ position: "relative", flexShrink: 1, maxWidth: "100%" }}
             >
