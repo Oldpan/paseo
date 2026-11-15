@@ -23,6 +23,7 @@ import {
   readAssistantMemory,
   readAssistantPlaybook,
   readState,
+  reactToMessage,
   resolveTakeover,
   respondTaskPermission,
   resumeRoutine,
@@ -1266,6 +1267,16 @@ export class Coordinator {
     for (const agentId of staleAgents) this.settle(agentId);
     this.kick();
     return { id: input.id };
+  }
+  reactToMessage(
+    input: RpcInput<typeof reactToMessage> & { actorId?: string },
+  ): RpcOutput<typeof reactToMessage> {
+    return this.store.reactToMessage({
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      emoji: input.emoji,
+      actorId: input.actorId ?? "user",
+    });
   }
   // Checks everything a message needs before anything is written and decides how it is routed.
   private planSend(

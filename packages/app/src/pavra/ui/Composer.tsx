@@ -19,12 +19,75 @@ import {
   parseSlashInvocation,
   replaceLeadingSlashCommand,
   buildPromptSlashCommand,
+  resolveSlashCommandAction,
+  formatMessageWithAttachments,
 } from "./slashCommands";
-interface PendingAttachment {
+
+export { formatMessageWithAttachments };
+
+export interface PendingAttachment {
   localId: string;
   attachmentId: string | null;
   name: string;
   previewUrl: string | null;
+  mimeType?: string;
+  sizeBytes?: number;
+  textContent?: string | null;
+}
+
+export interface ComposerSendExtras {
+  sendAsTask?: boolean;
+  planMode?: boolean;
+  delivery?: "steer";
+  contentOverride?: string;
+  attachments?: PendingAttachment[];
+  slashCommand?: { name: string; bodyText: string };
+}
+
+const TEXT_ATTACHMENT_EXT = /\.(txt|md|json|ts|tsx|py)$/i;
+const MAX_ATTACHMENT_TEXT_CHARS = 16_000;
+
+async function readPickedFile(file: File, index: number): Promise<PendingAttachment> {
+  const localId = `local-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+  const mimeType = file.type || undefined;
+  const isImage = Boolean(mimeType?.startsWith("image/"));
+  const isText =
+    Boolean(mimeType?.startsWith("text/")) ||
+    mimeType === "application/json" ||
+    TEXT_ATTACHMENT_EXT.test(file.name);
+  let previewUrl: string | null = null;
+  let textContent: string | null = null;
+  if (isImage && typeof FileReader !== "undefined") {
+    previewUrl = await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.addEventListener(
+        "load",
+        () => resolve(typeof reader.result === "string" ? reader.result : null),
+        { once: true },
+      );
+      reader.addEventListener("error", () => resolve(null), { once: true });
+      reader.readAsDataURL(file);
+    });
+  } else if (isText && typeof file.text === "function") {
+    try {
+      const raw = await file.text();
+      textContent =
+        raw.length > MAX_ATTACHMENT_TEXT_CHARS
+          ? `${raw.slice(0, MAX_ATTACHMENT_TEXT_CHARS)}\n…`
+          : raw;
+    } catch {
+      textContent = null;
+    }
+  }
+  return {
+    localId,
+    attachmentId: localId,
+    name: file.name,
+    previewUrl,
+    mimeType,
+    sizeBytes: file.size,
+    textContent,
+  };
 }
 
 export function Composer({
@@ -45,7 +108,9 @@ export function Composer({
   footerAction,
   group,
   onAttach,
+  onTask,
   onRemovePending,
+  onPasteFiles,
   onSend,
   onStop,
 }: {
@@ -67,17 +132,20 @@ export function Composer({
   /** Group chat chrome: quote chip, @-mention suggestions, roundtable toggle and responder hint. */
   group?: GroupComposerState;
   onAttach?: () => void;
+  onTask?: (initialPrompt?: string) => void;
   onRemovePending: (localId: string) => void;
   onPasteFiles: (files: File[]) => void;
-  onSend: (extras?: {
-    sendAsTask?: boolean;
-    planMode?: boolean;
-    slashCommand?: { name: string; bodyText: string };
-  }) => void;
+  onSend: (extras?: ComposerSendExtras) => void;
   onStop: () => void;
 }) {
   const { palette: t, name } = useTheme();
   const editor = useRef<EditingTextInputHandle>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [localFiles, setLocalFiles] = useState<PendingAttachment[]>([]);
+  const allPendingFiles = useMemo(
+    () => (localFiles.length ? [...pendingFiles, ...localFiles] : pendingFiles),
+    [localFiles, pendingFiles],
+  );
   useEffect(() => {
     if (editor.current && editor.current.getText() !== draft) editor.current.replaceText(draft);
   }, [draft]);
@@ -97,7 +165,7 @@ export function Composer({
   const inputHeight = userRows != null ? Math.max(minHeight, userRows * line + padV * 2) : autoH;
   const locked = failed;
   const sendLocked = locked || uploading;
-  const emptyDraft = !draft.trim() && pendingFiles.every((item) => !item.attachmentId);
+  const emptyDraft = !draft.trim() && allPendingFiles.every((item) => !item.attachmentId);
   const disabled = sendLocked || (sendAsTask && !draft.trim());
   const slashCommands = useMemo(() => resolveSlashCommands("primary_dm", agentType), [agentType]);
   const slashMatches = useMemo(
@@ -112,6 +180,7 @@ export function Composer({
   useEffect(() => {
     setPlanMode(false);
     setSendAsTask(false);
+    setLocalFiles([]);
     setUserRows(null);
     userRowsRef.current = null;
     setAutoH(minHeight);
@@ -187,30 +256,111 @@ export function Composer({
     };
   }, [line, minHeight, padV]);
 
+  function resetComposerBox() {
+    setPlanMode(false);
+    setSendAsTask(false);
+    setLocalFiles([]);
+    setUserRows(null);
+    userRowsRef.current = null;
+    setAutoH(minHeight);
+  }
+
+  async function handlePickedFiles(files: File[]) {
+    if (!files.length) return;
+    onPasteFiles(files);
+    const items = await Promise.all(files.map((file, index) => readPickedFile(file, index)));
+    setLocalFiles((current) => [...current, ...items]);
+  }
+
+  function handleRemoveAttachment(localId: string) {
+    setLocalFiles((current) => current.filter((item) => item.localId !== localId));
+    onRemovePending(localId);
+  }
+
+  function handleAttachPress() {
+    if (onAttach) onAttach();
+    if (isWeb) fileInputRef.current?.click();
+  }
+
   function submit() {
     if (sendLocked) return;
     if (emptyDraft) return;
     if (sendAsTask && !draft.trim()) return;
+    const action = resolveSlashCommandAction(draft, slashCommands);
+    if (action) {
+      if (action.kind === "clear") {
+        setDraft("");
+        resetComposerBox();
+        return;
+      }
+      if (action.kind === "autocomplete") {
+        setDraft(action.replacement);
+        return;
+      }
+      if (action.kind === "task") {
+        setDraft("");
+        resetComposerBox();
+        if (onTask) {
+          onTask(action.goal || undefined);
+        } else {
+          onSend({
+            sendAsTask: true,
+            contentOverride: action.goal || undefined,
+            slashCommand: { name: "task", bodyText: action.goal },
+          });
+        }
+        return;
+      }
+      if (action.kind === "steer") {
+        const contentOverride = formatMessageWithAttachments(action.instruction, allPendingFiles);
+        setDraft("");
+        resetComposerBox();
+        onSend({
+          delivery: "steer",
+          contentOverride,
+          ...(allPendingFiles.length ? { attachments: allPendingFiles } : {}),
+          slashCommand: { name: "steer", bodyText: action.instruction },
+        });
+        return;
+      }
+      if (action.kind === "send") {
+        const contentOverride = formatMessageWithAttachments(action.content, allPendingFiles);
+        setDraft("");
+        resetComposerBox();
+        onSend({
+          contentOverride,
+          ...(allPendingFiles.length ? { attachments: allPendingFiles } : {}),
+          slashCommand: { name: action.command.name, bodyText: action.content },
+        });
+        return;
+      }
+    }
     const invocation = parseSlashInvocation(draft, slashCommands);
-    if (invocation && !/\s/.test(draft.trim().slice(1)) && slashMatches.length) {
+    if (
+      !invocation &&
+      draft.trim().startsWith("/") &&
+      !/\s/.test(draft.trim().slice(1)) &&
+      slashMatches.length
+    ) {
       setDraft(
         replaceLeadingSlashCommand(draft, (slashMatches[slashIndex] ?? slashMatches[0]!).name),
       );
       return;
     }
-    const extras = {
+    const contentOverride = allPendingFiles.length
+      ? formatMessageWithAttachments(draft, allPendingFiles)
+      : undefined;
+    const extras: ComposerSendExtras = {
       sendAsTask: sendAsTask || undefined,
       planMode: planMode || undefined,
+      ...(contentOverride ? { contentOverride } : {}),
+      ...(allPendingFiles.length ? { attachments: allPendingFiles } : {}),
       slashCommand:
         invocation && invocation.command.enabled && invocation.bodyText
           ? buildPromptSlashCommand(invocation)
           : undefined,
     };
-    setPlanMode(false);
-    setSendAsTask(false);
-    setUserRows(null);
-    userRowsRef.current = null;
-    setAutoH(minHeight);
+    resetComposerBox();
     onSend(extras);
   }
 
@@ -229,12 +379,29 @@ export function Composer({
         borderTopColor: t.retroBorder,
       }}
     >
-      {pendingFiles.length ? (
+      {isWeb ? (
+        <input
+          ref={fileInputRef}
+          data-testid="composer-file-input"
+          type="file"
+          multiple
+          accept="image/*,.txt,.md,.json,.ts,.tsx,.py"
+          style={{ display: "none" }}
+          onChange={(event) => {
+            const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+            event.currentTarget.value = "";
+            if (files.length > 0) {
+              void handlePickedFiles(files);
+            }
+          }}
+        />
+      ) : null}
+      {allPendingFiles.length ? (
         <View
           testID="pending-attachments"
           style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 }}
         >
-          {pendingFiles.map((item) => (
+          {allPendingFiles.map((item) => (
             <View
               key={item.localId}
               style={{
@@ -262,7 +429,7 @@ export function Composer({
               ) : null}
               <Pressable
                 accessibilityLabel="Remove attachment"
-                onPress={() => onRemovePending(item.localId)}
+                onPress={() => handleRemoveAttachment(item.localId)}
               >
                 <Text style={type(t.textMuted, 11)}>×</Text>
               </Pressable>
@@ -367,12 +534,17 @@ export function Composer({
                 }
                 if (key.key === "Enter" && !key.shiftKey && !key.metaKey && !key.ctrlKey) {
                   event.preventDefault();
-                  setDraft(
-                    replaceLeadingSlashCommand(
-                      draft,
-                      (slashMatches[slashIndex] ?? slashMatches[0]!).name,
-                    ),
-                  );
+                  const selected = slashMatches[slashIndex] ?? slashMatches[0]!;
+                  if (
+                    draft.trim() === `/${selected.name}` &&
+                    (selected.name === "clear" ||
+                      selected.name === "status" ||
+                      selected.name === "pass")
+                  ) {
+                    submit();
+                    return;
+                  }
+                  setDraft(replaceLeadingSlashCommand(draft, selected.name));
                   return;
                 }
               }
@@ -421,7 +593,14 @@ export function Composer({
               key={command.name}
               testID={`slash-command-row-${command.name}`}
               disabled={!command.enabled}
-              onPress={() => setDraft(replaceLeadingSlashCommand(draft, command.name))}
+              onPress={() => {
+                if (command.name === "clear") {
+                  setDraft("");
+                  resetComposerBox();
+                  return;
+                }
+                setDraft(replaceLeadingSlashCommand(draft, command.name));
+              }}
               style={{
                 paddingHorizontal: 10,
                 paddingVertical: 6,
@@ -429,9 +608,11 @@ export function Composer({
                 opacity: command.enabled ? 1 : 0.6,
               }}
             >
-              <Text
-                style={type(t.textPrimary, 13, { fontFamily: "monospace" })}
-              >{`/${command.name}`}</Text>
+              <Text style={type(t.textPrimary, 13, { fontFamily: "monospace" })}>
+                {command.argumentHint
+                  ? `/${command.name} ${command.argumentHint}`
+                  : `/${command.name}`}
+              </Text>
               <Text numberOfLines={1} style={type(t.textMuted, 10)}>
                 {command.enabled ? command.description : command.disabledReason}
               </Text>
@@ -449,13 +630,13 @@ export function Composer({
           flexWrap: "wrap",
         }}
       >
-        {onAttach ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Pressable
             testID="attach-file"
             role="button"
             accessibilityLabel="Attach file"
             disabled={locked || uploading}
-            onPress={onAttach}
+            onPress={handleAttachPress}
             style={(state) => {
               const hovered = Boolean((state as { hovered?: boolean }).hovered);
               return [
@@ -481,9 +662,8 @@ export function Composer({
           >
             <PaperclipIcon color={t.textPrimary} size={phone ? 16 : 12} />
           </Pressable>
-        ) : (
-          footerAction
-        )}
+          {footerAction}
+        </View>
         <View
           style={{
             flexDirection: "row",

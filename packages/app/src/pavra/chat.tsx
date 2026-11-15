@@ -25,6 +25,7 @@ import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { useShallow } from "zustand/shallow";
 import {
   sendMessage,
+  reactToMessage,
   cancelTakeover,
   cancelTask,
   cancelTurn,
@@ -49,6 +50,7 @@ import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
 import { BrowserTakeoverModal, TakeoverCard } from "./ui/BrowserTakeoverModal";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
+import type { ComposerSendExtras } from "./ui/Composer";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
 import { ColResizeHandle } from "./ui/ColResizeHandle";
 import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
@@ -86,7 +88,7 @@ interface ChatProps {
   data: PavraData;
   palette: Palette;
   hostLabels?: Record<string, string>;
-  onTask(): void;
+  onTask(initialPrompt?: string): void;
   onOpenTask(task: Task): void;
   onOpenTurn(turn: Turn): void;
   onOpenStudio?(conversationId: string, threadId: string | null): void;
@@ -822,67 +824,95 @@ function ConversationPane({
   const roundtableOn =
     eligibility.eligible && (roundtableChoice ?? conversation?.roundtable ?? false);
   const quoted = quoteId ? messagesById.get(quoteId) : undefined;
-  const send = useCallback(async () => {
-    if (!draft.trim()) return;
-    const request = {
-      content: draft,
-      ...(quoted ? { quoteOf: quoted.id } : {}),
-      ...(roundtableOn ? { responseMode: "roundtable" as const } : {}),
-    };
-    if (turns.length > 0 || pending) {
-      const queuedItem: PendingQueueItem = { id: randomUUID(), ...request };
-      setQueuesByLane((current) => ({
-        ...current,
-        [draftKey]: [...(current[draftKey] ?? []), queuedItem],
-      }));
-      setDraft(draftKey, "");
-      pendingMessage.current = null;
-      setQuoteId(null);
-      setRoundtableChoice(null);
+  const toggleReaction = useCallback(
+    async (messageId: string, emoji: string) => {
       setError(null);
-      return;
-    }
-    // A retry of the same message keeps its id, so the coordinator never stores it twice.
-    const previous = pendingMessage.current;
-    const message =
-      previous &&
-      previous.content === request.content &&
-      previous.quoteOf === request.quoteOf &&
-      previous.responseMode === request.responseMode
-        ? previous
-        : { id: randomUUID(), ...request };
-    pendingMessage.current = message;
-    setPending(true);
-    setError(null);
-    try {
-      await data.call(sendMessage, { ...message, conversationId: chatId, threadId });
-      if (usePavraView.getState().drafts[draftKey] === message.content) setDraft(draftKey, "");
-      pendingMessage.current = null;
-      setQuoteId(null);
-      setRoundtableChoice(null);
-      // The roundtable runs in the thread under the message that started it.
-      if (message.responseMode) setThread(message.id);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setPending(false);
-    }
-  }, [
-    chatId,
-    data,
-    draft,
-    draftKey,
-    pending,
-    quoted,
-    roundtableOn,
-    setDraft,
-    setThread,
-    threadId,
-    turns.length,
-  ]);
-  const sendPress = useCallback(() => {
-    void send();
-  }, [send]);
+      try {
+        await data.call(reactToMessage, {
+          conversationId: chatId,
+          messageId,
+          emoji,
+        });
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      }
+    },
+    [chatId, data],
+  );
+  const send = useCallback(
+    async (extras?: ComposerSendExtras) => {
+      const content = extras?.contentOverride ?? draft;
+      if (!content.trim()) return;
+      const delivery = extras?.delivery;
+      const request = {
+        content,
+        ...(quoted ? { quoteOf: quoted.id } : {}),
+        ...(roundtableOn ? { responseMode: "roundtable" as const } : {}),
+      };
+      if ((turns.length > 0 && delivery !== "steer") || pending) {
+        const queuedItem: PendingQueueItem = { id: randomUUID(), ...request };
+        setQueuesByLane((current) => ({
+          ...current,
+          [draftKey]: [...(current[draftKey] ?? []), queuedItem],
+        }));
+        setDraft(draftKey, "");
+        pendingMessage.current = null;
+        setQuoteId(null);
+        setRoundtableChoice(null);
+        setError(null);
+        return;
+      }
+      // A retry of the same message keeps its id, so the coordinator never stores it twice.
+      const previous = pendingMessage.current;
+      const message =
+        previous &&
+        previous.content === request.content &&
+        previous.quoteOf === request.quoteOf &&
+        previous.responseMode === request.responseMode
+          ? previous
+          : { id: randomUUID(), ...request };
+      pendingMessage.current = message;
+      setPending(true);
+      setError(null);
+      try {
+        await data.call(sendMessage, {
+          ...message,
+          conversationId: chatId,
+          threadId,
+          ...(delivery ? { delivery } : {}),
+        });
+        if (usePavraView.getState().drafts[draftKey] === draft) setDraft(draftKey, "");
+        pendingMessage.current = null;
+        setQuoteId(null);
+        setRoundtableChoice(null);
+        // The roundtable runs in the thread under the message that started it.
+        if (message.responseMode) setThread(message.id);
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setPending(false);
+      }
+    },
+    [
+      chatId,
+      data,
+      draft,
+      draftKey,
+      pending,
+      quoted,
+      roundtableOn,
+      setDraft,
+      setThread,
+      threadId,
+      turns.length,
+    ],
+  );
+  const sendPress = useCallback(
+    (extras?: ComposerSendExtras) => {
+      void send(extras);
+    },
+    [send],
+  );
   const rows = useMemo(() => {
     const replyCounts = new Map<string, number>();
     for (const message of data.state.messages) {
@@ -912,6 +942,10 @@ function ConversationPane({
         sender: nameOf(message.senderId),
         seed: `${assistant?.id}:${assistant?.name}`,
         replyCount: replyCounts.get(message.id) ?? 0,
+        reactions: message.reactions,
+        onReact: (emoji: string) => {
+          void toggleReaction(message.id, emoji);
+        },
         reply: threadId ? undefined : () => setThread(message.id),
         onQuote: canQuote(message, conversation) ? () => setQuoteId(message.id) : undefined,
         onOpenProcess: turn ? () => onOpenTurn(turn) : undefined,
@@ -954,6 +988,7 @@ function ConversationPane({
     setThread,
     tasksById,
     threadId,
+    toggleReaction,
     turnsByFinalMessageId,
     turnsById,
     wiring,

@@ -16,6 +16,7 @@ import {
   ArrowLeftIcon,
   QuoteIcon,
   SettingsIcon,
+  SmilePlusIcon,
 } from "./icons";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { MessageSwipeReveal } from "./MessageSwipe";
@@ -397,12 +398,15 @@ function SideActionIcon({
   );
 }
 
+export const QUICK_REACTION_EMOJIS = ["👍", "❤️", "🔥", "🎉", "👀"] as const;
+
 function MessageSideActions({
   visible,
   copied,
   content,
   user,
   onCopied,
+  onReact,
   onQuote,
   onReply,
   onOpenProcess,
@@ -413,6 +417,7 @@ function MessageSideActions({
   content: string;
   user: boolean;
   onCopied(copied: boolean): void;
+  onReact?: (emoji: string) => void;
   onQuote?: () => void;
   onReply?: () => void;
   onOpenProcess?: () => void;
@@ -433,6 +438,11 @@ function MessageSideActions({
         ...webTransition("opacity 140ms ease"),
       }}
     >
+      {onReact ? (
+        <SideActionIcon label="Add reaction" onPress={onToggleMenu}>
+          {(color) => <SmilePlusIcon color={color} size={14} />}
+        </SideActionIcon>
+      ) : null}
       <SideActionIcon
         label={copied ? "Copied" : "Copy message"}
         onPress={() => {
@@ -467,12 +477,14 @@ function MessageSideActions({
   );
 }
 
-function MessageContextMenu({
+export function MessageContextMenu({
   id,
   user,
   copied,
   content,
+  reactions,
   onCopied,
+  onReact,
   onQuote,
   onReply,
   onOpenProcess,
@@ -482,7 +494,9 @@ function MessageContextMenu({
   user: boolean;
   copied: boolean;
   content: string;
+  reactions?: Record<string, string[]>;
   onCopied(copied: boolean): void;
+  onReact?: (emoji: string) => void;
   onQuote?: () => void;
   onReply?: () => void;
   onOpenProcess?: () => void;
@@ -517,6 +531,51 @@ function MessageContextMenu({
         ctrlShadow(t, name),
       ]}
     >
+      {onReact ? (
+        <View
+          testID={`message-quick-reactions-${id}`}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 4,
+            paddingHorizontal: 6,
+            paddingVertical: 4,
+            borderBottomWidth: 1,
+            borderBottomColor: t.dividerLine,
+            marginBottom: 2,
+          }}
+        >
+          {QUICK_REACTION_EMOJIS.map((emoji) => {
+            const active = Boolean(reactions?.[emoji]?.includes("user"));
+            return (
+              <Pressable
+                key={emoji}
+                testID={`message-react-${id}-${emoji}`}
+                role="menuitem"
+                accessibilityLabel={`React with ${emoji}`}
+                accessibilityState={{ selected: active }}
+                onPress={() => {
+                  onReact(emoji);
+                  onClose();
+                }}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 8,
+                  borderWidth: active ? 1 : 0,
+                  borderColor: active ? t.brandAccent : "transparent",
+                  backgroundColor: active ? t.brandAccentMuted : "transparent",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={type(t.textPrimary, 14)}>{emoji}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
       <Pressable
         role="menuitem"
         accessibilityLabel={copied ? "Copied" : "Copy message"}
@@ -583,6 +642,72 @@ function MessageContextMenu({
   );
 }
 
+export { MessageContextMenu as MessageActionsSheet };
+
+function MessageReactionPills({
+  id,
+  user,
+  reactions,
+  onReact,
+}: {
+  id: string;
+  user: boolean;
+  reactions?: Record<string, string[]>;
+  onReact?: (emoji: string) => void;
+}) {
+  const { palette: t, name } = useTheme();
+  if (!reactions) return null;
+  const entries = Object.entries(reactions).filter(([, actors]) => actors.length > 0);
+  if (entries.length === 0) return null;
+  return (
+    <View
+      testID={`message-reactions-${id}`}
+      style={{
+        marginTop: 5,
+        flexDirection: "row",
+        flexWrap: "wrap",
+        alignItems: "center",
+        justifyContent: user ? "flex-end" : "flex-start",
+        gap: 5,
+      }}
+    >
+      {entries.map(([emoji, actors]) => {
+        const active = actors.includes("user");
+        return (
+          <Pressable
+            key={emoji}
+            testID={`reaction-pill-${id}-${emoji}`}
+            role="button"
+            accessibilityLabel={`Reaction ${emoji} ${actors.length}`}
+            accessibilityState={{ selected: active }}
+            disabled={!onReact}
+            onPress={() => onReact?.(emoji)}
+            style={[
+              {
+                minHeight: 24,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: active ? t.brandAccent : t.retroBorder,
+                backgroundColor: active ? t.brandAccentMuted : t.surfaceElevated,
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+              },
+              ctrlShadow(t, name),
+            ]}
+          >
+            <Text style={type(t.textPrimary, 11, { fontWeight: active ? "700" : "600" })}>
+              {`${emoji} ${actors.length}`}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 function MessageFooterChips({ replyCount, onReply }: { replyCount: number; onReply?: () => void }) {
   if (!onReply || replyCount <= 0) return null;
   return (
@@ -610,6 +735,8 @@ export function ChatMessage({
   user,
   createdAt,
   replyCount,
+  reactions,
+  onReact,
   onReply,
   onQuote,
   onOpenProcess,
@@ -624,6 +751,8 @@ export function ChatMessage({
   user: boolean;
   createdAt: number;
   replyCount: number;
+  reactions?: Record<string, string[]>;
+  onReact?: (emoji: string) => void;
   onReply?: () => void;
   /** Quotes this message in the composer. Group chats offer it on assistant replies. */
   onQuote?: () => void;
@@ -676,6 +805,7 @@ export function ChatMessage({
       content={content}
       user={user}
       onCopied={setCopied}
+      onReact={onReact}
       onQuote={onQuote}
       onReply={onReply}
       onOpenProcess={onOpenProcess}
@@ -787,13 +917,16 @@ export function ChatMessage({
             </Pressable>
             {!user ? sideActions : null}
           </View>
+          <MessageReactionPills id={id} user={user} reactions={reactions} onReact={onReact} />
           {menuOpen ? (
             <MessageContextMenu
               id={id}
               user={user}
               copied={copied}
               content={content}
+              reactions={reactions}
               onCopied={setCopied}
+              onReact={onReact}
               onQuote={onQuote}
               onReply={onReply}
               onOpenProcess={onOpenProcess}

@@ -12,7 +12,7 @@ import type {
   RoutineCadence,
 } from "../../../../../extensions/pavra/shared/contracts";
 import { formatRoutineCadence, formatRoutineOutcome, routineKindLabel } from "../routines";
-import { Composer } from "./Composer";
+import { Composer, type ComposerSendExtras } from "./Composer";
 import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
 import { PendingQueueBar, type PendingQueueItem } from "./PendingQueueBar";
@@ -26,6 +26,8 @@ export interface MessageRow {
   sender: string;
   seed: string;
   replyCount: number;
+  reactions?: Record<string, string[]>;
+  onReact?: (emoji: string) => void;
   reply?: () => void;
   /** Quotes this message in the composer; set on assistant replies in a group chat. */
   onQuote?: () => void;
@@ -91,8 +93,8 @@ export function ChatPane({
   error: string | null;
   phone: boolean;
   connected: boolean;
-  onSend(): void;
-  onTask(): void;
+  onSend(extras?: ComposerSendExtras): void;
+  onTask(initialPrompt?: string): void;
   /** Group chat composer chrome; absent in a direct chat. */
   group?: GroupComposerState;
   /** The composer cannot send (a task thread whose task takes no follow-up). */
@@ -146,6 +148,8 @@ export function ChatPane({
         user={row.message.senderId === "user"}
         createdAt={row.message.createdAt}
         replyCount={row.replyCount}
+        reactions={row.reactions}
+        onReact={row.onReact}
         onReply={row.reply}
         onQuote={row.onQuote}
         onOpenProcess={row.onOpenProcess}
@@ -242,11 +246,12 @@ export function ChatPane({
         uploadError=""
         allowPlanMode={false}
         showSendAsTask={false}
+        onTask={onTask}
         onRemovePending={ignoreFile}
         onPasteFiles={ignoreFile}
         onSend={onSend}
         onStop={onStop ?? ignoreFile}
-        footerAction={<Chip onPress={onTask}>Create task</Chip>}
+        footerAction={<Chip onPress={() => onTask()}>Create task</Chip>}
         group={group}
       />
     </View>

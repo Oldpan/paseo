@@ -1738,4 +1738,61 @@ describe("routines and reminders (Stage A.2: T0 + T1)", () => {
       ),
     ).rejects.toThrow("Routines cannot create new routines during a routine turn.");
   });
+
+  it("toggles emoji reactions on a message and advances the ledger cursor without changing message seq", async () => {
+    const { store, execution, coordinator, conversation, say, ended, finals } = fixture();
+    const turn = await say("Hello reactions");
+    execution.say(turn.agentId, "React to me!", "m1");
+    execution.finish(turn.agentId);
+    ended(turn.agentId);
+    await coordinator.idle();
+
+    const target = finals()[0]!;
+    const initialSeq = target.seq;
+    const cursorBefore = store.cursor();
+
+    const added = coordinator.reactToMessage({
+      conversationId: conversation.id,
+      messageId: target.id,
+      emoji: "👍",
+    });
+    expect(added.reactions).toEqual({ "👍": ["user"] });
+    expect(added.seq).toBe(initialSeq);
+    expect(store.cursor()).toBeGreaterThan(cursorBefore);
+
+    const delta = store.snapshot(cursorBefore);
+    expect(delta.messages).toEqual([
+      expect.objectContaining({ id: target.id, reactions: { "👍": ["user"] } }),
+    ]);
+
+    const secondEmoji = coordinator.reactToMessage({
+      conversationId: conversation.id,
+      messageId: target.id,
+      emoji: "🔥",
+    });
+    expect(secondEmoji.reactions).toEqual({ "👍": ["user"], "🔥": ["user"] });
+
+    const toggledOffFirst = coordinator.reactToMessage({
+      conversationId: conversation.id,
+      messageId: target.id,
+      emoji: "👍",
+    });
+    expect(toggledOffFirst.reactions).toEqual({ "🔥": ["user"] });
+
+    const toggledOffAll = coordinator.reactToMessage({
+      conversationId: conversation.id,
+      messageId: target.id,
+      emoji: "🔥",
+    });
+    expect(toggledOffAll.reactions).toBeUndefined();
+    expect(store.get("messages", target.id)?.reactions).toBeUndefined();
+
+    expect(() =>
+      coordinator.reactToMessage({
+        conversationId: "wrong-conversation",
+        messageId: target.id,
+        emoji: "👍",
+      }),
+    ).toThrow("Message no longer exists.");
+  });
 });

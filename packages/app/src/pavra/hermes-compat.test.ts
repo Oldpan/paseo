@@ -5,6 +5,12 @@ import { describe, expect, it } from "vitest";
 import type { PeerMessage, Studio } from "../../../../extensions/pavra/shared/contracts";
 import { recentParticipantIds } from "./group";
 import { openExchanges, studioRecords } from "./peer-activity";
+import {
+  findMatchingSlashCommands,
+  formatMessageWithAttachments,
+  resolveSlashCommandAction,
+  resolveSlashCommands,
+} from "./ui/slashCommands";
 
 const pavraDir = path.dirname(fileURLToPath(import.meta.url));
 const sharedDir = path.resolve(pavraDir, "../../../../extensions/pavra/shared");
@@ -204,5 +210,44 @@ describe("Hermes runtime compatibility", () => {
     const swipeSource = readFileSync(path.join(pavraDir, "ui", "MessageSwipe.tsx"), "utf8");
     expect(swipeSource).toContain("message-swipe-content");
     expect(swipeSource).toContain("message-timestamp");
+  });
+
+  it("supports Pavra composer slash commands (/task, /steer, /status, /pass, /clear) and attachment formatting", () => {
+    const commands = resolveSlashCommands("primary_dm");
+    expect(commands.map((c) => c.name)).toEqual(["task", "steer", "status", "pass", "clear"]);
+    expect(findMatchingSlashCommands("/st", commands).map((c) => c.name)).toEqual([
+      "steer",
+      "status",
+    ]);
+
+    expect(resolveSlashCommandAction("/clear", commands)).toMatchObject({ kind: "clear" });
+    expect(resolveSlashCommandAction("/task Ship v0.16", commands)).toMatchObject({
+      kind: "task",
+      goal: "Ship v0.16",
+    });
+    expect(resolveSlashCommandAction("/steer", commands)).toMatchObject({
+      kind: "autocomplete",
+      replacement: "/steer ",
+    });
+    expect(resolveSlashCommandAction("/steer Focus on tests", commands)).toMatchObject({
+      kind: "steer",
+      instruction: "Focus on tests",
+    });
+    expect(resolveSlashCommandAction("/status", commands)).toMatchObject({
+      kind: "send",
+      content: "Status check: please summarize current progress, blockers, and next steps.",
+    });
+    expect(resolveSlashCommandAction("/pass", commands)).toMatchObject({
+      kind: "send",
+      content: "Quick status check — reply (pass) if nothing needs attention.",
+    });
+
+    const formatted = formatMessageWithAttachments("Please review", [
+      { name: "notes.md", textContent: "# Plan\n- Step 1" },
+      { name: "shot.png", previewUrl: "data:image/png;base64,abc", mimeType: "image/png" },
+    ]);
+    expect(formatted).toContain("Please review");
+    expect(formatted).toContain("[Attachment: notes.md]\n```\n# Plan\n- Step 1\n```");
+    expect(formatted).toContain("[Attachment: shot.png (image)]");
   });
 });

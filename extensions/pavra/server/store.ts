@@ -180,6 +180,39 @@ export class ChatStore {
     this.put("messages", stamped);
     return stamped;
   }
+  /** Toggles `actorId` on an emoji reaction for a message and bumps the ledger cursor. */
+  reactToMessage(input: {
+    conversationId: string;
+    messageId: string;
+    emoji: string;
+    actorId?: string;
+  }): Message {
+    const emoji = input.emoji.trim();
+    if (!emoji) throw new Error("Reaction emoji is required.");
+    const actorId = input.actorId ?? "user";
+    return this.transaction(() => {
+      const existing = this.get("messages", input.messageId);
+      if (!existing || existing.conversationId !== input.conversationId) {
+        throw new Error("Message no longer exists.");
+      }
+      const nextReactions: Record<string, string[]> = {};
+      for (const [key, actors] of Object.entries(existing.reactions ?? {})) {
+        if (actors.length > 0) nextReactions[key] = [...actors];
+      }
+      const currentActors = nextReactions[emoji] ?? [];
+      if (currentActors.includes(actorId)) {
+        const filtered = currentActors.filter((id) => id !== actorId);
+        if (filtered.length > 0) nextReactions[emoji] = filtered;
+        else delete nextReactions[emoji];
+      } else {
+        nextReactions[emoji] = [...currentActors, actorId];
+      }
+      const { reactions: _removed, ...rest } = existing;
+      const updated: Message =
+        Object.keys(nextReactions).length > 0 ? { ...rest, reactions: nextReactions } : rest;
+      return this.putMessage(updated);
+    });
+  }
   private nextMessageSeq(): number {
     const row = this.db
       .prepare(

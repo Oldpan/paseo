@@ -65,6 +65,7 @@ export const messageSchema = z.object({
   round: z.number().optional(),
   routineId: z.string().optional(),
   routineName: z.string().optional(),
+  reactions: z.record(z.string(), z.array(z.string())).optional(),
   // Lifecycle receipt payload of a `task_event` row. `type` stays a string so a newer daemon can add
   // event types an older client does not know; see `taskEventTypes` for the current set.
   event: z
@@ -325,6 +326,7 @@ export type Peer = z.infer<typeof peerSchema>;
 export type Assistant = z.infer<typeof assistantSchema>;
 export type Conversation = z.infer<typeof conversationSchema>;
 export type Message = z.infer<typeof messageSchema>;
+export type ChatMessageRecord = Message;
 export type Task = z.infer<typeof taskSchema>;
 export type Turn = z.infer<typeof turnSchema>;
 export type ChatState = z.infer<typeof stateSchema>;
@@ -425,6 +427,15 @@ export const sendMessage = defineRpc({
     delivery: z.literal("steer").optional(),
   }),
   output: z.object({ id: z.string() }),
+});
+export const reactToMessage = defineRpc({
+  name: "chat.message.react",
+  input: z.object({
+    conversationId: z.string().min(1),
+    messageId: z.string().min(1),
+    emoji: z.string().trim().min(1).max(32),
+  }),
+  output: messageSchema,
 });
 export const cancelTurn = defineRpc({
   name: "pavra.turn.cancel",

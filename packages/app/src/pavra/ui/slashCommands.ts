@@ -21,10 +21,45 @@ export interface SlashCommandDescriptor {
   disabledReason?: string;
 }
 
-// Old Core-only commands are supplied by the host when their capabilities are available.
+// Pavra Chat slash commands available in the composer.
 const COMMANDS: Array<
   Omit<SlashCommandDescriptor, "enabled" | "disabledReason"> & { kind: string }
-> = [];
+> = [
+  {
+    name: "task",
+    argumentHint: "<goal>",
+    description: "Create a background task or prefill the task prompt",
+    kind: "all",
+  },
+  {
+    name: "steer",
+    argumentHint: "<instruction>",
+    description: "Steer the active turn immediately with new instructions",
+    kind: "all",
+  },
+  {
+    name: "status",
+    description: "Ask for a concise status check on current work",
+    kind: "all",
+  },
+  {
+    name: "pass",
+    description: "Send a quick pass / status check prompt",
+    kind: "all",
+  },
+  {
+    name: "clear",
+    description: "Clear the current message draft",
+    kind: "all",
+  },
+];
+
+export type SlashCommandAction =
+  | { kind: "clear"; command: SlashCommandDescriptor }
+  | { kind: "task"; command: SlashCommandDescriptor; goal: string }
+  | { kind: "steer"; command: SlashCommandDescriptor; instruction: string }
+  | { kind: "send"; command: SlashCommandDescriptor; content: string }
+  | { kind: "autocomplete"; command: SlashCommandDescriptor; replacement: string };
 
 export function resolveSlashCommands(
   surface: SlashCommandSurface,
@@ -87,4 +122,67 @@ export function buildPromptSlashCommand(invocation: {
 }): ConversationPromptSlashCommand | undefined {
   if (!invocation.command.enabled) return undefined;
   return { name: invocation.command.name, bodyText: invocation.bodyText };
+}
+
+export function resolveSlashCommandAction(
+  text: string,
+  commands: SlashCommandDescriptor[],
+): SlashCommandAction | null {
+  const invocation = parseSlashInvocation(text, commands);
+  if (!invocation || !invocation.command.enabled) return null;
+  const { command, bodyText } = invocation;
+  switch (command.name) {
+    case "clear":
+      return { kind: "clear", command };
+    case "task":
+      return { kind: "task", command, goal: bodyText };
+    case "steer":
+      if (!bodyText) {
+        return {
+          kind: "autocomplete",
+          command,
+          replacement: replaceLeadingSlashCommand(text, "steer"),
+        };
+      }
+      return { kind: "steer", command, instruction: bodyText };
+    case "status":
+      return {
+        kind: "send",
+        command,
+        content: bodyText
+          ? `Status check: ${bodyText}`
+          : "Status check: please summarize current progress, blockers, and next steps.",
+      };
+    case "pass":
+      return {
+        kind: "send",
+        command,
+        content: bodyText || "Quick status check — reply (pass) if nothing needs attention.",
+      };
+    default:
+      return bodyText ? { kind: "send", command, content: bodyText } : null;
+  }
+}
+
+export function formatMessageWithAttachments(
+  draftText: string,
+  attachments: ReadonlyArray<{
+    name: string;
+    previewUrl?: string | null;
+    textContent?: string | null;
+    mimeType?: string;
+  }>,
+): string {
+  const base = draftText.trim();
+  if (!attachments.length) return draftText;
+  const blocks = attachments.map((item) => {
+    if (item.textContent && item.textContent.trim()) {
+      return `[Attachment: ${item.name}]\n\`\`\`\n${item.textContent.trim()}\n\`\`\``;
+    }
+    if (item.previewUrl || item.mimeType?.startsWith("image/")) {
+      return `[Attachment: ${item.name} (image)]`;
+    }
+    return `[Attachment: ${item.name}]`;
+  });
+  return base ? `${base}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n");
 }

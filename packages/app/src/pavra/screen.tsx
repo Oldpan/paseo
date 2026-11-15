@@ -283,6 +283,7 @@ export function PavraScreen() {
   );
   const [editing, setEditing] = useState<string | null>(null);
   const [defaultServerId, setDefaultServerId] = useState<string | null>(null);
+  const [taskInitialPrompt, setTaskInitialPrompt] = useState("");
   // Ids for records a form creates. Fresh on every open so a second creation never reuses the
   // first one's ids; kept while the form is open so a retried save stays idempotent.
   const [formIds, setFormIds] = useState(freshFormIds);
@@ -348,7 +349,13 @@ export function PavraScreen() {
     [openForm],
   );
   const showGroup = useCallback(() => openForm("group"), [openForm]);
-  const showTask = useCallback(() => openForm("task"), [openForm]);
+  const showTask = useCallback(
+    (initialPrompt?: string) => {
+      setTaskInitialPrompt(typeof initialPrompt === "string" ? initialPrompt : "");
+      openForm("task");
+    },
+    [openForm],
+  );
   const showWorkspaces = useCallback(() => {
     setForm("workspaces");
     setSidebarOpen(false);
@@ -636,7 +643,7 @@ export function PavraScreen() {
   const taskFields = useMemo(
     () => [
       { name: "id", label: "Task ID", initial: formIds.task, hidden: true },
-      { name: "prompt", label: "Task", initial: "", multiline: true },
+      { name: "prompt", label: "Task", initial: taskInitialPrompt, multiline: true },
       {
         name: "assistant",
         label: "Assistant name",
@@ -680,6 +687,7 @@ export function PavraScreen() {
       data.state.conversations,
       hosts,
       formIds,
+      taskInitialPrompt,
     ],
   );
   const groupChange = useCallback((textValue: string) => setGroup(textValue), []);
