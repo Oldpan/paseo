@@ -34,6 +34,7 @@ const ENTRIES: RailEntry[] = [
 export function Rail({
   active,
   inboxBadge,
+  settingsBadge,
   onSelect,
   onUsage,
   onSettings,
@@ -41,6 +42,7 @@ export function Rail({
 }: {
   active: RailItem | null;
   inboxBadge?: number;
+  settingsBadge?: number;
   onSelect(item: RailItem): void;
   onUsage(): void;
   onSettings(): void;
@@ -115,10 +117,11 @@ export function Rail({
         <RailNavButton
           label="Settings"
           active={false}
+          badge={settingsBadge}
           onPress={onSettings}
           t={t}
           name={name}
-          icon={<SettingsIcon color={t.textSecondary} size={20} />}
+          icon={<SettingsIcon color={ink(false, (settingsBadge ?? 0) > 0)} size={20} />}
         />
       </View>
     </View>

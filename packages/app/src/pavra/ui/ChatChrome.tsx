@@ -21,6 +21,7 @@ import { MessageMarkdown } from "./MessageMarkdown";
 import { MessageSwipeReveal } from "./MessageSwipe";
 import { copyText } from "./clipboard";
 import { formatLiveTurnStatus } from "../live-turn";
+import { usePavraApkUpdaterStore } from "../use-pavra-apk-updater";
 import { bubbleShadow, ctrlShadow, text as type, selectedFillProps, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
@@ -122,6 +123,7 @@ export function ChatHeader({
   onOpenStudio?: () => void;
 }) {
   const { palette: t, name } = useTheme();
+  const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
   const tabs = [
     { id: "chat", label: "Chat" },
     { id: "task", label: "Task" },
@@ -165,9 +167,27 @@ export function ChatHeader({
           }}
         >
           {onSidebar ? (
-            <HeaderIconButton label="Open sidebar" onPress={onSidebar} size={34}>
-              <MenuIcon color={t.textSecondary} size={16} />
-            </HeaderIconButton>
+            <View style={{ position: "relative" }}>
+              <HeaderIconButton label="Open sidebar" onPress={onSidebar} size={34}>
+                <MenuIcon color={t.textSecondary} size={16} />
+              </HeaderIconButton>
+              {hasApkUpdate ? (
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: "absolute",
+                    top: -2,
+                    right: -2,
+                    width: 9,
+                    height: 9,
+                    borderRadius: 5,
+                    backgroundColor: t.brandAccent,
+                    borderWidth: 1.5,
+                    borderColor: t.surfacePrimary,
+                  }}
+                />
+              ) : null}
+            </View>
           ) : null}
           <View style={{ position: "relative" }}>
             <AgentAvatar seed={seed} label={label} size={34} theme={t} name={name} />

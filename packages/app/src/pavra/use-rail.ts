@@ -1,9 +1,10 @@
 import { useCallback } from "react";
 import { router, usePathname } from "expo-router";
-import { buildSettingsRoute } from "@/utils/host-routes";
+import { buildSettingsRoute, buildSettingsSectionRoute } from "@/utils/host-routes";
 import { returnToPavra } from "./navigation";
 import { PAVRA_ROUTE, isPageItem, PAGE_ROUTES, railActive, type RailItem } from "./rail";
 import { usePavraView } from "./store";
+import { usePavraApkUpdaterStore } from "./use-pavra-apk-updater";
 
 const MAIN_AREA: Partial<Record<RailItem, "chat" | "studio">> = {
   chat: "chat",
@@ -40,6 +41,9 @@ export function useRailNavigation(): {
     },
     [onPavra],
   );
-  const settings = useCallback(() => router.push(buildSettingsRoute()), []);
+  const settings = useCallback(() => {
+    const hasUpdate = Boolean(usePavraApkUpdaterStore.getState().availableRelease);
+    router.push(hasUpdate ? buildSettingsSectionRoute("about") : buildSettingsRoute());
+  }, []);
   return { active: railActive(pathname, mode, section), select, settings };
 }

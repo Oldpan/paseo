@@ -19,6 +19,7 @@ import {
 } from "../panel-resize";
 import type { RailItem } from "../rail";
 import { usePavraView } from "../store";
+import { usePavraApkUpdaterStore } from "../use-pavra-apk-updater";
 import { useRailNavigation } from "../use-rail";
 import type {
   Assistant,
@@ -78,6 +79,7 @@ export function Sidebar(props: SidebarProps) {
   const sidebarWidth = usePavraView((state) => state.sidebarWidth);
   const setSidebarWidth = usePavraView((state) => state.setSidebarWidth);
   const section = usePavraView((state) => state.section);
+  const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
   const rail = useRailNavigation();
   const openUsage = useOpenSidebarUsage();
 
@@ -138,6 +140,7 @@ export function Sidebar(props: SidebarProps) {
       <Rail
         active={rail.active}
         inboxBadge={props.inboxBadge}
+        settingsBadge={hasApkUpdate ? 1 : undefined}
         onSelect={select}
         onUsage={openUsage}
         onSettings={rail.settings}
@@ -232,7 +235,7 @@ export function Sidebar(props: SidebarProps) {
           <Pressable
             role="button"
             onPress={rail.settings}
-            accessibilityLabel="Your settings"
+            accessibilityLabel={hasApkUpdate ? "Your settings (Update available)" : "Your settings"}
             style={({ pressed }) => ({
               padding: 12,
               flexDirection: "row",
@@ -246,7 +249,22 @@ export function Sidebar(props: SidebarProps) {
           >
             <UserAvatar label="You" size={28} theme={t} name={name} />
             <Text style={type(t.textPrimary, 12, { fontWeight: "600", flex: 1 })}>You</Text>
-            <SettingsIcon color={t.textMuted} size={15} />
+            {hasApkUpdate ? (
+              <View
+                testID="sidebar-settings-update-badge"
+                style={{
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor: t.brandAccent,
+                  paddingHorizontal: 7,
+                  paddingVertical: 1,
+                }}
+              >
+                <Text style={type(t.onAccent, 10, { fontWeight: "700" })}>Update</Text>
+              </View>
+            ) : null}
+            <SettingsIcon color={hasApkUpdate ? t.brandAccent : t.textMuted} size={15} />
           </Pressable>
         </View>
       </Animated.View>

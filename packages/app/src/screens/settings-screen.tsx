@@ -145,6 +145,11 @@ import {
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
 import { isNative, isWeb } from "@/constants/platform";
 import { useOpenOnboarding } from "@/onboarding";
+import {
+  isAndroidApkUpdateSupported,
+  usePavraApkUpdater,
+  usePavraApkUpdaterStore,
+} from "@/pavra/use-pavra-apk-updater";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -489,6 +494,7 @@ function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSection
           </View>
           <WhatsNewRow />
           {isDesktopApp ? <DesktopAppUpdateRow /> : null}
+          {isAndroidApkUpdateSupported() ? <AndroidApkUpdateRow /> : null}
         </View>
       </SettingsSection>
       <ConnectedHostsSection clientVersion={appVersion} />
@@ -750,6 +756,53 @@ function DesktopAppUpdateRow() {
   );
 }
 
+function AndroidApkUpdateRow() {
+  const {
+    installed,
+    availableRelease,
+    hasUpdate,
+    checking,
+    statusMessage,
+    checkForApkUpdate,
+    downloadAvailableRelease,
+  } = usePavraApkUpdater();
+
+  const handleCheckForUpdates = useCallback(() => {
+    void checkForApkUpdate({ manual: true });
+  }, [checkForApkUpdate]);
+
+  const installedLabel = `v${installed.version}${installed.revision ? ` · ${installed.revision}` : ""}`;
+  const hintText =
+    statusMessage ??
+    (hasUpdate && availableRelease
+      ? `New APK available: v${availableRelease.version}${availableRelease.revision ? ` · ${availableRelease.revision}` : ""}`
+      : `Installed build: ${installedLabel}`);
+
+  return (
+    <View
+      style={[settingsStyles.row, settingsStyles.rowBorder]}
+      testID="settings-android-apk-update"
+    >
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>Android APK Updates</Text>
+        <Text style={[settingsStyles.rowHint, hasUpdate && styles.aboutVersionMismatch]}>
+          {hintText}
+        </Text>
+      </View>
+      <View style={styles.aboutUpdateActions}>
+        <Button variant="outline" onPress={handleCheckForUpdates} disabled={checking}>
+          {checking ? "Checking…" : "Check for updates"}
+        </Button>
+        {hasUpdate ? (
+          <Button variant="default" onPress={downloadAvailableRelease}>
+            Upgrade APK
+          </Button>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
@@ -766,6 +819,7 @@ interface SidebarSectionButtonProps {
   label: string;
   icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   isSelected: boolean;
+  badgeText?: string;
   onSelect: (section: SettingsSectionSlug) => void;
 }
 
@@ -777,6 +831,7 @@ function SidebarSectionButton({
   label,
   icon: IconComponent,
   isSelected,
+  badgeText,
   onSelect,
 }: SidebarSectionButtonProps) {
   const { theme, rt } = useUnistyles();
@@ -803,6 +858,11 @@ function SidebarSectionButton({
       <Text style={labelStyle} numberOfLines={1}>
         {label}
       </Text>
+      {badgeText ? (
+        <View style={sidebarStyles.updateBadge}>
+          <Text style={sidebarStyles.updateBadgeText}>{badgeText}</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -973,6 +1033,7 @@ function SettingsSidebar({
   const hasHosts = sortedHosts.length > 0;
   const enableBuiltInDaemonOption = useEnableBuiltInDaemonOption();
   const isDesktopApp = isElectronRuntime();
+  const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
   const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   const items = SIDEBAR_SECTION_ITEMS.filter((item) =>
     isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent),
@@ -1004,6 +1065,7 @@ function SettingsSidebar({
             label={t(item.labelKey)}
             icon={item.icon}
             isSelected={selectedSectionId === item.id}
+            badgeText={item.id === "about" && hasApkUpdate ? "Update" : undefined}
             onSelect={onSelectSection}
           />
         ))}
@@ -1571,5 +1633,16 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     height: densityIconBox("md"),
     alignItems: "center",
     justifyContent: "center",
+  },
+  updateBadge: {
+    borderRadius: 999,
+    backgroundColor: theme.colors.palette.amber[500],
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  updateBadgeText: {
+    color: "#111114",
+    fontSize: 11,
+    fontWeight: theme.fontWeight.bold,
   },
 }));

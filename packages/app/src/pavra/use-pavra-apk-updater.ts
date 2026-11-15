@@ -1,7 +1,7 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { AppState, Linking, Platform } from "react-native";
+import { create } from "zustand";
 import { resolveAppVersion } from "@/utils/app-version";
 import {
   fetchLatestPavraApkRelease,
@@ -9,8 +9,6 @@ import {
   type InstalledPavraBuildInfo,
   type PavraApkReleaseInfo,
 } from "./apk-updates";
-
-const DISMISSED_RELEASE_TAG_KEY = "pavra.dismissedApkReleaseTag.v1";
 
 export function getInstalledPavraBuildInfo(): InstalledPavraBuildInfo {
   const version = resolveAppVersion() ?? "0.0.0";
@@ -32,22 +30,6 @@ export function getInstalledPavraBuildInfo(): InstalledPavraBuildInfo {
   };
 }
 
-async function getDismissedReleaseTag(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(DISMISSED_RELEASE_TAG_KEY);
-  } catch {
-    return null;
-  }
-}
-
-async function setDismissedReleaseTag(tagName: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(DISMISSED_RELEASE_TAG_KEY, tagName);
-  } catch {
-    // Ignore storage failures
-  }
-}
-
 export async function openApkReleaseDownload(release: PavraApkReleaseInfo): Promise<void> {
   const targetUrl = release.apkDownloadUrl || release.htmlUrl;
   await Linking.openURL(targetUrl);
@@ -57,49 +39,86 @@ export function isAndroidApkUpdateSupported(): boolean {
   return Platform.OS === "android";
 }
 
+interface PavraApkUpdaterState {
+  installed: InstalledPavraBuildInfo;
+  availableRelease: PavraApkReleaseInfo | null;
+  checking: boolean;
+  statusMessage: string | null;
+  setChecking(checking: boolean): void;
+  setResult(release: PavraApkReleaseInfo | null, statusMessage: string | null): void;
+}
+
+export const usePavraApkUpdaterStore = create<PavraApkUpdaterState>((set) => ({
+  installed: getInstalledPavraBuildInfo(),
+  availableRelease: null,
+  checking: false,
+  statusMessage: null,
+  setChecking: (checking) => set({ checking }),
+  setResult: (availableRelease, statusMessage) =>
+    set({ availableRelease, statusMessage, checking: false }),
+}));
+
 export function usePavraApkUpdater(onNotice?: (message: string) => void) {
-  const [installed] = useState<InstalledPavraBuildInfo>(getInstalledPavraBuildInfo);
-  const [pendingRelease, setPendingRelease] = useState<PavraApkReleaseInfo | null>(null);
-  const [checking, setChecking] = useState(false);
+  const installed = usePavraApkUpdaterStore((state) => state.installed);
+  const availableRelease = usePavraApkUpdaterStore((state) => state.availableRelease);
+  const checking = usePavraApkUpdaterStore((state) => state.checking);
+  const statusMessage = usePavraApkUpdaterStore((state) => state.statusMessage);
 
   const checkForApkUpdate = useCallback(
     async (options?: { manual?: boolean }) => {
       const manual = Boolean(options?.manual);
       if (!isAndroidApkUpdateSupported() && !manual) return;
-      setChecking(true);
+      const store = usePavraApkUpdaterStore.getState();
+      if (store.checking) return;
+      store.setChecking(true);
       try {
         const latest = await fetchLatestPavraApkRelease();
         if (!latest) {
-          if (manual) onNotice?.("No APK release found on GitHub yet.");
+          const msg = "No APK release found on GitHub yet.";
+          store.setResult(null, msg);
+          if (manual) onNotice?.(msg);
           return;
         }
-        const newer = isReleaseNewerThanInstalled(latest, installed);
+        const newer = isReleaseNewerThanInstalled(latest, store.installed);
         if (!newer) {
-          if (manual) {
-            onNotice?.(
-              `Already on the latest Pavra build (${installed.version}${installed.revision ? ` · ${installed.revision}` : ""}).`,
-            );
-          }
+          const currentLabel = `${store.installed.version}${store.installed.revision ? ` · ${store.installed.revision}` : ""}`;
+          const msg = `Up to date (${currentLabel})`;
+          store.setResult(null, msg);
+          if (manual) onNotice?.(`Already on the latest Pavra build (${currentLabel}).`);
           return;
         }
-        if (!manual) {
-          const dismissed = await getDismissedReleaseTag();
-          if (dismissed === latest.tagName) return;
-        }
-        setPendingRelease(latest);
+        const newLabel = `v${latest.version}${latest.revision ? ` · ${latest.revision}` : ""}`;
+        const msg = `New APK available: ${newLabel}`;
+        store.setResult(latest, msg);
+        if (manual) onNotice?.(msg);
       } catch (failure) {
-        if (manual) {
-          onNotice?.(
-            failure instanceof Error ? failure.message : "Failed to check GitHub releases.",
-          );
-        }
-      } finally {
-        setChecking(false);
+        const msg = failure instanceof Error ? failure.message : "Failed to check GitHub releases.";
+        store.setResult(store.availableRelease, msg);
+        if (manual) onNotice?.(msg);
       }
     },
-    [installed, onNotice],
+    [onNotice],
   );
 
+  const downloadAvailableRelease = useCallback(() => {
+    const target = usePavraApkUpdaterStore.getState().availableRelease;
+    if (!target) return;
+    void openApkReleaseDownload(target);
+  }, []);
+
+  return {
+    installed,
+    availableRelease,
+    hasUpdate: Boolean(availableRelease),
+    checking,
+    statusMessage,
+    checkForApkUpdate,
+    downloadAvailableRelease,
+  };
+}
+
+export function usePavraApkBackgroundCheck() {
+  const { checkForApkUpdate } = usePavraApkUpdater();
   useEffect(() => {
     if (!isAndroidApkUpdateSupported()) return;
     void checkForApkUpdate({ manual: false });
@@ -112,28 +131,4 @@ export function usePavraApkUpdater(onNotice?: (message: string) => void) {
       sub.remove();
     };
   }, [checkForApkUpdate]);
-
-  const dismissPendingRelease = useCallback(() => {
-    const tag = pendingRelease?.tagName;
-    setPendingRelease(null);
-    if (tag) {
-      void setDismissedReleaseTag(tag);
-    }
-  }, [pendingRelease]);
-
-  const downloadPendingRelease = useCallback(() => {
-    const target = pendingRelease;
-    if (!target) return;
-    setPendingRelease(null);
-    void openApkReleaseDownload(target);
-  }, [pendingRelease]);
-
-  return {
-    installed,
-    pendingRelease,
-    checking,
-    checkForApkUpdate,
-    dismissPendingRelease,
-    downloadPendingRelease,
-  };
 }
