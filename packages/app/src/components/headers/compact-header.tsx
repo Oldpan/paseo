@@ -17,6 +17,7 @@ import {
   HEADER_INNER_HEIGHT_MOBILE,
   HEADER_TOP_PADDING_MOBILE,
 } from "@/constants/layout";
+import { IS_PAVRA } from "@/pavra/build";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { useTopBand } from "@/window-layout";
 
@@ -148,15 +149,17 @@ function BackButton({ onBack }: { onBack?: () => void }) {
 const styles = StyleSheet.create((theme) => ({
   root: {
     paddingHorizontal: theme.spacing[3],
+    backgroundColor: IS_PAVRA ? theme.colors.surface0 : "transparent",
+    ...(IS_PAVRA ? theme.chrome.headerRule : null),
   },
   row: {
-    height: HEADER_INNER_HEIGHT_MOBILE,
+    height: IS_PAVRA ? 52 : HEADER_INNER_HEIGHT_MOBILE,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
   },
   topBandRow: {
-    height: HEADER_INNER_HEIGHT,
+    height: IS_PAVRA ? 56 : HEADER_INNER_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
@@ -172,15 +175,15 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
   },
   title: {
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
+    fontSize: IS_PAVRA ? 14 : theme.fontSize.base,
+    fontWeight: IS_PAVRA ? theme.fontWeight.bold : theme.fontWeight.medium,
     color: theme.colors.foreground,
     textAlign: "left",
   },
   // A title without a subtitle has the header to itself, so it reads one step larger.
   singleLineTitle: {
-    fontSize: theme.fontSize.lg,
-    fontWeight: theme.fontWeight.medium,
+    fontSize: IS_PAVRA ? 15 : theme.fontSize.lg,
+    fontWeight: IS_PAVRA ? theme.fontWeight.bold : theme.fontWeight.medium,
     color: theme.colors.foreground,
     textAlign: "left",
   },

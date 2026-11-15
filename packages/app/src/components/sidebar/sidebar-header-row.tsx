@@ -4,6 +4,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { HEADER_INNER_HEIGHT, HEADER_INNER_HEIGHT_MOBILE } from "@/constants/layout";
 import { DensityIcon } from "@/components/ui/density-icon";
 import { Shortcut } from "@/components/ui/shortcut";
+import { IS_PAVRA } from "@/pavra/build";
 import { density, densityIconBox } from "@/styles/density";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 
@@ -119,13 +120,17 @@ const SELECTED_STATE = { selected: true } as const;
 const styles = StyleSheet.create((theme) => ({
   container: {
     height: {
-      xs: HEADER_INNER_HEIGHT_MOBILE,
-      md: HEADER_INNER_HEIGHT,
+      xs: IS_PAVRA ? 52 : HEADER_INNER_HEIGHT_MOBILE,
+      md: IS_PAVRA ? 56 : HEADER_INNER_HEIGHT,
     },
     paddingHorizontal: theme.spacing[2],
     justifyContent: "center",
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    ...(IS_PAVRA
+      ? theme.chrome.headerRule
+      : {
+          borderBottomWidth: 1,
+          borderBottomColor: theme.colors.border,
+        }),
     userSelect: "none",
   },
   containerCompact: {
@@ -169,8 +174,8 @@ const styles = StyleSheet.create((theme) => ({
   iconSpacerCompact: { width: densityIconBox("sm"), height: densityIconBox("sm") },
   label: {
     flexShrink: 1,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.normal,
+    fontSize: IS_PAVRA ? 13 : theme.fontSize.base,
+    fontWeight: IS_PAVRA ? theme.fontWeight.semibold : theme.fontWeight.normal,
     color: theme.colors.foregroundMuted,
   },
   labelHighlighted: {

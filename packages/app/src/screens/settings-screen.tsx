@@ -145,6 +145,8 @@ import {
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
 import { isNative, isWeb } from "@/constants/platform";
 import { useOpenOnboarding } from "@/onboarding";
+import { IS_PAVRA } from "@/pavra/build";
+import { PavraPage } from "@/pavra/page-frame";
 import {
   isAndroidApkUpdateSupported,
   usePavraApkUpdater,
@@ -826,6 +828,16 @@ interface SidebarSectionButtonProps {
 // Lighter than lucide's default 2px stroke so the nav reads quieter than the content.
 const SIDEBAR_ICON_STROKE_WIDTH = 1.5;
 
+function getSidebarIconColor(
+  isSelected: boolean,
+  colors: { accent: string; foreground: string; foregroundMuted: string },
+): string {
+  if (!isSelected) {
+    return colors.foregroundMuted;
+  }
+  return IS_PAVRA ? colors.accent : colors.foreground;
+}
+
 function SidebarSectionButton({
   itemId,
   label,
@@ -840,8 +852,8 @@ function SidebarSectionButton({
   }, [onSelect, itemId]);
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
-    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
-    [isSelected, theme.colors.foreground],
+    () => [sidebarStyles.label, isSelected && sidebarStyles.labelSelected],
+    [isSelected],
   );
   return (
     <Pressable
@@ -851,8 +863,8 @@ function SidebarSectionButton({
       style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
     >
       <IconComponent
-        size={densityIconSize(rt, "md")}
-        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        size={IS_PAVRA ? 16 : densityIconSize(rt, "md")}
+        color={getSidebarIconColor(isSelected, theme.colors)}
         strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
       />
       <Text style={labelStyle} numberOfLines={1}>
@@ -888,8 +900,8 @@ function SidebarHostSectionButton({
   }, [onSelect, itemId]);
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
-    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
-    [isSelected, theme.colors.foreground],
+    () => [sidebarStyles.label, isSelected && sidebarStyles.labelSelected],
+    [isSelected],
   );
   return (
     <Pressable
@@ -900,8 +912,8 @@ function SidebarHostSectionButton({
       style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
     >
       <IconComponent
-        size={densityIconSize(rt, "md")}
-        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        size={IS_PAVRA ? 16 : densityIconSize(rt, "md")}
+        color={getSidebarIconColor(isSelected, theme.colors)}
         strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
       />
       <Text style={labelStyle} numberOfLines={1}>
@@ -1409,40 +1421,46 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
 
   if (settingsLoading) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>{t("settings.loading")}</Text>
-      </View>
+      <PavraPage>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>{t("settings.loading")}</Text>
+        </View>
+      </PavraPage>
     );
   }
 
   // Mobile root: full-screen sidebar-as-list.
   if (isCompactLayout && view.kind === "root") {
     return (
-      <View style={styles.container}>
-        <BackHeader title={t("settings.title")} onBack={handleBackToWorkspace} />
-        <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
-          <SettingsSidebar
-            view={view}
-            onSelectSection={handleSelectSection}
-            onSelectHostSection={handleSelectHostSection}
-            onSelectHost={handleSelectHost}
-            onAddHost={handleAddHost}
-            onBackToWorkspace={handleBackToWorkspace}
-            activeHostServerId={activeHostServerId}
-            layout="mobile"
-          />
-        </ScrollView>
-      </View>
+      <PavraPage>
+        <View style={styles.container}>
+          <BackHeader title={t("settings.title")} onBack={handleBackToWorkspace} />
+          <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
+            <SettingsSidebar
+              view={view}
+              onSelectSection={handleSelectSection}
+              onSelectHostSection={handleSelectHostSection}
+              onSelectHost={handleSelectHost}
+              onAddHost={handleAddHost}
+              onBackToWorkspace={handleBackToWorkspace}
+              activeHostServerId={activeHostServerId}
+              layout="mobile"
+            />
+          </ScrollView>
+        </View>
+      </PavraPage>
     );
   }
 
   if (isCompactLayout) {
     return (
-      <View style={styles.container}>
-        <PageLayout title={detailTitle} onBack={handleBackFromDetail}>
-          {content}
-        </PageLayout>
-      </View>
+      <PavraPage>
+        <View style={styles.container}>
+          <PageLayout title={detailTitle} onBack={handleBackFromDetail}>
+            {content}
+          </PageLayout>
+        </View>
+      </PavraPage>
     );
   }
 
@@ -1450,33 +1468,35 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
   // region + traffic-light padding; detail pane renders whatever header the
   // selected section provides.
   return (
-    <View style={styles.container}>
-      <View style={desktopStyles.row}>
-        <WindowChromeRegion corners="top-left">
-          <SettingsSidebar
-            view={view}
-            onSelectSection={handleSelectSection}
-            onSelectHostSection={handleSelectHostSection}
-            onSelectHost={handleSelectHost}
-            onAddHost={handleAddHost}
-            onBackToWorkspace={handleBackToWorkspace}
-            activeHostServerId={activeHostServerId}
-            layout="desktop"
-          />
-        </WindowChromeRegion>
-        <WindowChromeRegion corners="top-right">
-          <View style={desktopStyles.contentPane} testID="settings-detail-pane">
-            <PageLayout
-              title={detailTitle}
-              titleTestID="settings-detail-header-title"
-              testID="settings-detail-scroll-body"
-            >
-              {content}
-            </PageLayout>
-          </View>
-        </WindowChromeRegion>
+    <PavraPage>
+      <View style={styles.container}>
+        <View style={desktopStyles.row}>
+          <WindowChromeRegion corners="top-left">
+            <SettingsSidebar
+              view={view}
+              onSelectSection={handleSelectSection}
+              onSelectHostSection={handleSelectHostSection}
+              onSelectHost={handleSelectHost}
+              onAddHost={handleAddHost}
+              onBackToWorkspace={handleBackToWorkspace}
+              activeHostServerId={activeHostServerId}
+              layout="desktop"
+            />
+          </WindowChromeRegion>
+          <WindowChromeRegion corners="top-right">
+            <View style={desktopStyles.contentPane} testID="settings-detail-pane">
+              <PageLayout
+                title={detailTitle}
+                titleTestID="settings-detail-header-title"
+                testID="settings-detail-scroll-body"
+              >
+                {content}
+              </PageLayout>
+            </View>
+          </WindowChromeRegion>
+        </View>
       </View>
-    </View>
+    </PavraPage>
   );
 }
 
@@ -1545,104 +1565,172 @@ const desktopStyles = StyleSheet.create({
   },
 });
 
-const sidebarStyles = StyleSheet.create((theme) => ({
-  desktopContainer: {
-    width: SETTINGS_DESKTOP_SIDEBAR_WIDTH,
-    flexShrink: 1,
-    borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceSidebar,
-  },
-  scrollBody: {
-    flex: 1,
-  },
-  sidebarDragArea: {
-    position: "relative",
-  },
-  mobileContainer: {
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[2],
-  },
-  // Compact values draw each group as an island of tiles; desktop keeps a plain list.
-  group: {
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[2],
-    gap: { xs: theme.spacing[1], md: theme.spacing[0.5] },
-  },
-  groupLabel: {
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.normal,
-    color: theme.colors.foregroundExtraMuted,
-    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
-    paddingVertical: theme.spacing[1],
-  },
-  island: {
-    gap: { xs: 2, md: theme.spacing[0.5] },
-    borderRadius: { xs: theme.borderRadius["2xl"], md: 0 },
-    overflow: "hidden",
-  },
-  item: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
-    minHeight: { xs: 52, md: density.tightRowHeight.md },
-    paddingVertical: theme.spacing[1],
-    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
-    borderRadius: { xs: 0, md: theme.borderRadius.lg },
-    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
-  },
-  itemHovered: {
-    backgroundColor: theme.colors.surfaceSidebarHover,
-  },
-  itemSelected: {
-    backgroundColor: theme.colors.surfaceSidebarHover,
-  },
-  // The workspace rows' pressed fill.
-  itemPressed: {
-    backgroundColor: theme.colors.surface2,
-  },
-  label: {
-    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
-    color: theme.colors.foregroundMuted,
-    fontWeight: theme.fontWeight.normal,
-    flex: 1,
-  },
-  pickerTrigger: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
-    minHeight: { xs: 52, md: density.tightRowHeight.md },
-    paddingVertical: theme.spacing[1],
-    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
-    borderRadius: { xs: 0, md: theme.borderRadius.lg },
-    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
-  },
-  pickerTriggerHovered: {
-    backgroundColor: theme.colors.surfaceSidebarHover,
-  },
-  pickerTriggerLabel: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
-    color: theme.colors.foreground,
-    fontWeight: theme.fontWeight.normal,
-  },
-  // Match the setting items' icon footprint so the host label aligns with them.
-  pickerTriggerDot: {
-    width: densityIconBox("md"),
-    height: densityIconBox("md"),
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  updateBadge: {
-    borderRadius: 999,
-    backgroundColor: theme.colors.palette.amber[500],
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  updateBadgeText: {
-    color: "#111114",
-    fontSize: 11,
-    fontWeight: theme.fontWeight.bold,
-  },
-}));
+const PAVRA_SIDEBAR_METRICS = {
+  desktopWidth: IS_PAVRA ? 228 : SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+  groupPaddingVertical: IS_PAVRA ? 6 : 8,
+  groupPaddingHorizontal: IS_PAVRA ? 8 : 8,
+  groupGapXs: IS_PAVRA ? 4 : 4,
+  groupLabelFontSize: IS_PAVRA ? 10 : 15,
+  groupLabelLetterSpacing: IS_PAVRA ? 1.2 : 0,
+  groupLabelTextTransform: (IS_PAVRA ? "uppercase" : "none") as "uppercase" | "none",
+  groupLabelPadXs: IS_PAVRA ? 10 : 16,
+  islandGapXs: IS_PAVRA ? 1 : 2,
+  islandRadiusXs: IS_PAVRA ? 12 : 16,
+  islandBorderWidthXs: IS_PAVRA ? 1 : 0,
+  itemGapXs: IS_PAVRA ? 10 : 12,
+  itemMinHeightXs: IS_PAVRA ? 42 : 52,
+  itemMinHeightMd: IS_PAVRA ? 34 : density.tightRowHeight.md,
+  itemPadVertical: IS_PAVRA ? 6 : 4,
+  itemPadHorizontalXs: IS_PAVRA ? 12 : 16,
+  itemPadHorizontalMd: IS_PAVRA ? 10 : 8,
+  itemRadiusMd: IS_PAVRA ? 10 : 8,
+  itemBorderWidthMd: IS_PAVRA ? 1 : 0,
+  labelFontSizeXs: IS_PAVRA ? 13 : 18,
+  labelFontSizeMd: IS_PAVRA ? 12.5 : 15,
+} as const;
+
+const sidebarStyles = StyleSheet.create((theme) => {
+  const hoverFill = IS_PAVRA ? theme.colors.surface1 : theme.colors.surfaceSidebarHover;
+  const mobileRowFill = IS_PAVRA ? theme.colors.surface2 : theme.colors.surface1;
+  return {
+    desktopContainer: {
+      width: PAVRA_SIDEBAR_METRICS.desktopWidth,
+      flexShrink: 1,
+      borderRightWidth: 1,
+      borderRightColor: IS_PAVRA ? theme.colors.borderAccent : theme.colors.border,
+      backgroundColor: IS_PAVRA ? theme.colors.surface0 : theme.colors.surfaceSidebar,
+    },
+    scrollBody: {
+      flex: 1,
+    },
+    sidebarDragArea: {
+      position: "relative",
+    },
+    mobileContainer: {
+      paddingVertical: theme.spacing[2],
+      paddingHorizontal: theme.spacing[2],
+    },
+    // Compact values draw each group as an island of tiles; desktop keeps a plain list.
+    group: {
+      paddingVertical: PAVRA_SIDEBAR_METRICS.groupPaddingVertical,
+      paddingHorizontal: PAVRA_SIDEBAR_METRICS.groupPaddingHorizontal,
+      gap: { xs: PAVRA_SIDEBAR_METRICS.groupGapXs, md: theme.spacing[0.5] },
+    },
+    groupLabel: {
+      fontSize: PAVRA_SIDEBAR_METRICS.groupLabelFontSize,
+      fontWeight: IS_PAVRA ? theme.fontWeight.bold : theme.fontWeight.normal,
+      letterSpacing: PAVRA_SIDEBAR_METRICS.groupLabelLetterSpacing,
+      textTransform: PAVRA_SIDEBAR_METRICS.groupLabelTextTransform,
+      color: IS_PAVRA ? theme.colors.foregroundMuted : theme.colors.foregroundExtraMuted,
+      paddingHorizontal: { xs: PAVRA_SIDEBAR_METRICS.groupLabelPadXs, md: theme.spacing[2] },
+      paddingVertical: theme.spacing[1],
+    },
+    island: {
+      gap: { xs: PAVRA_SIDEBAR_METRICS.islandGapXs, md: theme.spacing[0.5] },
+      borderRadius: { xs: PAVRA_SIDEBAR_METRICS.islandRadiusXs, md: 0 },
+      borderWidth: { xs: PAVRA_SIDEBAR_METRICS.islandBorderWidthXs, md: 0 },
+      borderColor: IS_PAVRA ? theme.colors.borderAccent : "transparent",
+      backgroundColor: {
+        xs: IS_PAVRA ? theme.colors.surface2 : "transparent",
+        md: "transparent",
+      },
+      overflow: "hidden",
+    },
+    item: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: { xs: PAVRA_SIDEBAR_METRICS.itemGapXs, md: theme.spacing[2] },
+      minHeight: {
+        xs: PAVRA_SIDEBAR_METRICS.itemMinHeightXs,
+        md: PAVRA_SIDEBAR_METRICS.itemMinHeightMd,
+      },
+      paddingVertical: PAVRA_SIDEBAR_METRICS.itemPadVertical,
+      paddingHorizontal: {
+        xs: PAVRA_SIDEBAR_METRICS.itemPadHorizontalXs,
+        md: PAVRA_SIDEBAR_METRICS.itemPadHorizontalMd,
+      },
+      borderRadius: { xs: 0, md: PAVRA_SIDEBAR_METRICS.itemRadiusMd },
+      borderWidth: { xs: 0, md: PAVRA_SIDEBAR_METRICS.itemBorderWidthMd },
+      borderColor: "transparent",
+      backgroundColor: {
+        xs: mobileRowFill,
+        md: "transparent",
+      },
+    },
+    itemHovered: {
+      backgroundColor: hoverFill,
+    },
+    itemSelected: {
+      backgroundColor: IS_PAVRA ? theme.colors.surface2 : theme.colors.surfaceSidebarHover,
+      borderColor: IS_PAVRA ? theme.colors.borderAccent : "transparent",
+      ...(IS_PAVRA ? theme.chrome.controlShadow : null),
+    },
+    // The workspace rows' pressed fill.
+    itemPressed: {
+      backgroundColor: theme.colors.surface2,
+    },
+    label: {
+      fontSize: {
+        xs: PAVRA_SIDEBAR_METRICS.labelFontSizeXs,
+        md: PAVRA_SIDEBAR_METRICS.labelFontSizeMd,
+      },
+      color: IS_PAVRA ? theme.colors.foreground : theme.colors.foregroundMuted,
+      fontWeight: IS_PAVRA ? theme.fontWeight.medium : theme.fontWeight.normal,
+      flex: 1,
+    },
+    labelSelected: {
+      color: theme.colors.foreground,
+      fontWeight: IS_PAVRA ? theme.fontWeight.semibold : theme.fontWeight.normal,
+    },
+    pickerTrigger: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: { xs: PAVRA_SIDEBAR_METRICS.itemGapXs, md: theme.spacing[2] },
+      minHeight: {
+        xs: PAVRA_SIDEBAR_METRICS.itemMinHeightXs,
+        md: PAVRA_SIDEBAR_METRICS.itemMinHeightMd,
+      },
+      paddingVertical: PAVRA_SIDEBAR_METRICS.itemPadVertical,
+      paddingHorizontal: {
+        xs: PAVRA_SIDEBAR_METRICS.itemPadHorizontalXs,
+        md: PAVRA_SIDEBAR_METRICS.itemPadHorizontalMd,
+      },
+      borderRadius: { xs: 0, md: PAVRA_SIDEBAR_METRICS.itemRadiusMd },
+      backgroundColor: {
+        xs: mobileRowFill,
+        md: "transparent",
+      },
+    },
+    pickerTriggerHovered: {
+      backgroundColor: hoverFill,
+    },
+    pickerTriggerLabel: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: {
+        xs: PAVRA_SIDEBAR_METRICS.labelFontSizeXs,
+        md: PAVRA_SIDEBAR_METRICS.labelFontSizeMd,
+      },
+      color: theme.colors.foreground,
+      fontWeight: IS_PAVRA ? theme.fontWeight.semibold : theme.fontWeight.normal,
+    },
+    // Match the setting items' icon footprint so the host label aligns with them.
+    pickerTriggerDot: {
+      width: densityIconBox("md"),
+      height: densityIconBox("md"),
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    updateBadge: {
+      borderRadius: 999,
+      backgroundColor: theme.colors.palette.amber[500],
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+    },
+    updateBadgeText: {
+      color: "#111114",
+      fontSize: 11,
+      fontWeight: theme.fontWeight.bold,
+    },
+  };
+});

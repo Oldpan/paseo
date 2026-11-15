@@ -6,6 +6,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { BackHeader } from "@/components/headers/back-header";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { IS_PAVRA } from "@/pavra/build";
 import { SPACING } from "@/styles/theme";
 
 const PageScrollView = Platform.OS === "android" ? KeyboardAwareScrollView : ScrollView;
@@ -38,14 +39,25 @@ export function PageLayout({
   const insets = useSafeAreaInsets();
   const scrollContentStyle = useMemo(() => ({ paddingBottom: insets.bottom }), [insets.bottom]);
   const showTitle = !isCompact && title !== undefined;
+  let header: ReactNode;
+  if (isCompact) {
+    header = <BackHeader title={title} onBack={onBack} rightContent={actions} />;
+  } else if (IS_PAVRA && showTitle) {
+    header = (
+      <View style={styles.pavraTopHeader} testID={titleTestID}>
+        <Text style={styles.pavraTopTitle} testID="page-title" numberOfLines={1}>
+          {title}
+        </Text>
+        {actions}
+      </View>
+    );
+  } else {
+    header = <MenuHeader borderless />;
+  }
 
   return (
     <View style={styles.container}>
-      {isCompact ? (
-        <BackHeader title={title} onBack={onBack} rightContent={actions} />
-      ) : (
-        <MenuHeader borderless />
-      )}
+      {header}
       <PageScrollView
         // Leave room for field borders and padding around the focused native input.
         {...(Platform.OS === "android" ? { bottomOffset: SPACING[4] } : {})}
@@ -54,7 +66,7 @@ export function PageLayout({
         testID={testID}
       >
         <View style={styles.content}>
-          {showTitle ? (
+          {showTitle && !IS_PAVRA ? (
             <View style={styles.titleRow} testID={titleTestID}>
               <Text style={styles.title} testID="page-title">
                 {title}
@@ -77,11 +89,28 @@ const styles = StyleSheet.create((theme) => ({
   scroll: {
     flex: 1,
   },
+  pavraTopHeader: {
+    minHeight: 56,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[3],
+    backgroundColor: theme.colors.surface0,
+    borderBottomWidth: theme.chrome.headerRule.width,
+    borderBottomColor: theme.chrome.headerRule.color,
+  },
+  pavraTopTitle: {
+    fontSize: 16,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.foreground,
+    flex: 1,
+  },
   content: {
     padding: theme.spacing[4],
-    paddingTop: theme.spacing[6],
+    paddingTop: IS_PAVRA ? theme.spacing[4] : theme.spacing[6],
     width: "100%",
-    maxWidth: 720,
+    maxWidth: IS_PAVRA ? 680 : 720,
     alignSelf: "center",
   },
   titleRow: {

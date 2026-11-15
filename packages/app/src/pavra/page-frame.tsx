@@ -2,11 +2,13 @@
 // own content; Pavra's rail replaces Paseo's left sidebar, and a phone opens the rail as a drawer.
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { View } from "react-native";
+import { usePathname } from "expo-router";
 import { SidebarMenuHostContext } from "@/components/headers/sidebar-menu-host";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { UsageSidebarRoot, useOpenSidebarUsage } from "@/usage/sidebar-item";
 import { IS_PAVRA } from "./build";
 import type { RailItem } from "./rail";
+import { usePavraApkUpdaterStore } from "./use-pavra-apk-updater";
 import { useRailNavigation } from "./use-rail";
 import { AnimatedDrawer } from "./ui/AnimatedDrawer";
 import { Rail } from "./ui/Rail";
@@ -59,7 +61,9 @@ function PageShell({ children }: { children: ReactNode }) {
 }
 
 function PageRail({ onDone }: { onDone(): void }) {
+  const pathname = usePathname();
   const { active, select: go, settings: openSettings } = useRailNavigation();
+  const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
   const openUsage = useOpenSidebarUsage();
   const select = useCallback(
     (item: RailItem) => {
@@ -76,5 +80,14 @@ function PageRail({ onDone }: { onDone(): void }) {
     onDone();
     openSettings();
   }, [onDone, openSettings]);
-  return <Rail active={active} onSelect={select} onUsage={usage} onSettings={settings} />;
+  return (
+    <Rail
+      active={active}
+      settingsActive={pathname.startsWith("/settings")}
+      settingsBadge={hasApkUpdate ? 1 : undefined}
+      onSelect={select}
+      onUsage={usage}
+      onSettings={settings}
+    />
+  );
 }

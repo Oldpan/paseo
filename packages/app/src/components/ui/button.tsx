@@ -24,6 +24,7 @@ import {
   createControlGeometry,
   type ControlSize,
 } from "@/components/ui/control-geometry";
+import { IS_PAVRA } from "@/pavra/build";
 import type { Theme } from "@/styles/theme";
 
 type ButtonVariant = "default" | "secondary" | "outline" | "ghost" | "destructive";
@@ -108,15 +109,18 @@ const styles = StyleSheet.create((theme) => {
     iconOnlyMd: geometry.buttonIconOnlyMd,
     default: {
       backgroundColor: theme.colors.accent,
-      borderColor: theme.colors.accent,
+      borderColor: IS_PAVRA ? theme.colors.borderAccent : theme.colors.accent,
+      ...(IS_PAVRA ? theme.chrome.controlShadow : null),
     },
     secondary: {
-      backgroundColor: theme.colors.surface3,
-      borderColor: theme.colors.surface3,
+      backgroundColor: IS_PAVRA ? theme.colors.surface2 : theme.colors.surface3,
+      borderColor: IS_PAVRA ? theme.colors.borderAccent : theme.colors.surface3,
+      ...(IS_PAVRA ? theme.chrome.controlShadow : null),
     },
     outline: {
-      backgroundColor: "transparent",
+      backgroundColor: IS_PAVRA ? theme.colors.surface2 : "transparent",
       borderColor: theme.colors.borderAccent,
+      ...(IS_PAVRA ? theme.chrome.controlShadow : null),
     },
     ghost: {
       backgroundColor: "transparent",
