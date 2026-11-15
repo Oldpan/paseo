@@ -133,36 +133,7 @@ export function isReleaseNewerThanInstalled(
   release: PavraApkReleaseInfo,
   installed: InstalledPavraBuildInfo,
 ): boolean {
-  const semverDiff = compareSemver(release.version, installed.version);
-  if (semverDiff > 0) return true;
-  if (semverDiff < 0) return false;
-
-  if (release.revision && installed.revision) {
-    if (
-      release.revision.startsWith(installed.revision) ||
-      installed.revision.startsWith(release.revision)
-    ) {
-      return false;
-    }
-    if (release.publishedAt && installed.buildTime) {
-      const releaseMs = Date.parse(release.publishedAt);
-      const installedMs = Date.parse(installed.buildTime);
-      if (Number.isFinite(releaseMs) && Number.isFinite(installedMs)) {
-        return releaseMs > installedMs + 60_000;
-      }
-    }
-    return true;
-  }
-
-  if (release.publishedAt && installed.buildTime) {
-    const releaseMs = Date.parse(release.publishedAt);
-    const installedMs = Date.parse(installed.buildTime);
-    if (Number.isFinite(releaseMs) && Number.isFinite(installedMs)) {
-      return releaseMs > installedMs + 60_000;
-    }
-  }
-
-  return false;
+  return compareSemver(release.version, installed.version) > 0;
 }
 
 export async function fetchLatestPavraApkRelease(options?: {

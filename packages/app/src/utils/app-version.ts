@@ -1,4 +1,6 @@
 import Constants from "expo-constants";
+import { IS_PAVRA } from "@/pavra/build";
+import pavraVersion from "@/pavra/version.json";
 import appPackage from "../../package.json";
 
 function toVersionOrNull(value: unknown): string | null {
@@ -15,6 +17,13 @@ function toVersionOrNull(value: unknown): string | null {
 }
 
 export function resolveAppVersion(): string | null {
+  if (IS_PAVRA) {
+    const pavraPkgVersion = toVersionOrNull(pavraVersion?.version);
+    if (pavraPkgVersion) {
+      return pavraPkgVersion;
+    }
+  }
+
   const packageVersion = toVersionOrNull(appPackage?.version);
   if (packageVersion) {
     return packageVersion;

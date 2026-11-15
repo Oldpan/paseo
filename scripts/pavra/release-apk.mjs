@@ -5,7 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const pkg = JSON.parse(readFileSync(path.join(root, "packages/app/package.json"), "utf8"));
+const pavraVersionPath = path.join(root, "packages/app/src/pavra/version.json");
+const appPkgPath = path.join(root, "packages/app/package.json");
+const versionSource = existsSync(pavraVersionPath)
+  ? JSON.parse(readFileSync(pavraVersionPath, "utf8"))
+  : JSON.parse(readFileSync(appPkgPath, "utf8"));
 const apkPath = path.join(root, "artifacts/pavra-arm64.apk");
 const repo = process.env.PAVRA_GITHUB_REPO ?? "Oldpan/paseo";
 
@@ -35,16 +39,16 @@ const shortSha = execFileSync("git", ["rev-parse", "--short=9", "HEAD"], {
   cwd: root,
   encoding: "utf8",
 }).trim();
-const version = String(pkg.version ?? "0.15.3").trim();
-const tagName = process.env.PAVRA_RELEASE_TAG ?? `pavra-v${version}-${shortSha}`;
-const title = `Pavra ${version} (${shortSha})`;
+const version = String(versionSource.version ?? "0.16.0").trim();
+const tagName = process.env.PAVRA_RELEASE_TAG ?? `pavra-v${version}`;
+const title = `Pavra v${version}`;
 
 const apkBytes = readFileSync(apkPath);
 const sha256 = createHash("sha256").update(apkBytes).digest("hex");
 const sizeMb = (statSync(apkPath).size / (1024 * 1024)).toFixed(1);
 
 const notes = [
-  `## Pavra Android ARM64 Release`,
+  `## Pavra v${version} (Android ARM64)`,
   `- **Version**: \`${version}\``,
   `- **Commit**: \`${shortSha}\``,
   `- **Size**: ${sizeMb} MB`,

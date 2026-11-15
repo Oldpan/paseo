@@ -99,7 +99,12 @@ const variants = {
 };
 
 const variant = variants[appVariant] ?? variants.production;
-const nativeReleaseVersion = getNativeReleaseVersion(pkg.version);
+const pavraVersionFile = path.resolve(__dirname, "./src/pavra/version.json");
+const effectivePackageVersion =
+  isPavra && fs.existsSync(pavraVersionFile)
+    ? (JSON.parse(fs.readFileSync(pavraVersionFile, "utf8")).version ?? pkg.version)
+    : pkg.version;
+const nativeReleaseVersion = getNativeReleaseVersion(effectivePackageVersion);
 
 const easProjectId = isPavra
   ? (process.env.PAVRA_EAS_PROJECT_ID ?? process.env.BIGBANG_EAS_PROJECT_ID)

@@ -48,9 +48,9 @@ describe("apk-updates", () => {
     });
   });
 
-  it("detects newer semver or newer commit revision on the same semver", () => {
+  it("detects updates strictly by higher semver version", () => {
     const release = parsePavraReleasePayload({
-      tag_name: "pavra-v0.15.3-999999999",
+      tag_name: "pavra-v0.16.0",
       body: "Commit: 999999999",
       published_at: "2026-11-15T10:00:00Z",
       assets: [
@@ -62,25 +62,25 @@ describe("apk-updates", () => {
     })!;
     expect(
       isReleaseNewerThanInstalled(release, {
-        version: "0.15.2",
+        version: "0.15.3",
         revision: "1600619d6",
         buildTime: "2026-11-15T08:00:00Z",
       }),
     ).toBe(true);
     expect(
       isReleaseNewerThanInstalled(release, {
-        version: "0.15.3",
-        revision: "999999999",
+        version: "0.16.0",
+        revision: "1600619d6",
         buildTime: "2026-11-15T08:00:00Z",
       }),
     ).toBe(false);
     expect(
       isReleaseNewerThanInstalled(release, {
-        version: "0.15.3",
+        version: "0.16.1",
         revision: "1600619d6",
         buildTime: "2026-11-15T08:00:00Z",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("fetches and returns the first release with an APK asset", async () => {
