@@ -5,22 +5,44 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 
 class PavraKeepaliveService : Service() {
+  private var screenOffReceiverRegistered = false
+
+  private val screenOffReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+        PavraPhoneRuntime.peekInstance()?.onPhysicalScreenTurnedOff()
+      }
+    }
+  }
+
   override fun onCreate() {
     super.onCreate()
     ensureNotificationChannel()
+    registerScreenOffWatcher()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (intent?.action == ACTION_STOP_PHONE_CONTROL) {
+      PavraPhoneRuntime.getInstance(applicationContext)
+        .floatingOverlayController
+        .triggerHardwareEmergencyStop(source = "keepalive_notification")
+      return START_STICKY
+    }
+
     ensureNotificationChannel()
     val title = intent?.getStringExtra(EXTRA_TITLE)?.takeIf { it.isNotBlank() } ?: DEFAULT_TITLE
     val body = intent?.getStringExtra(EXTRA_BODY)?.takeIf { it.isNotBlank() } ?: DEFAULT_BODY
-    val notification = buildNotification(title, body)
+    val phoneActive = intent?.getBooleanExtra(EXTRA_PHONE_CONTROL_ACTIVE, false) == true
+    val notification = buildNotification(title, body, phoneActive)
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         startForeground(
@@ -40,11 +62,35 @@ class PavraKeepaliveService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onDestroy() {
+    unregisterScreenOffWatcher()
     try {
       stopForeground(STOP_FOREGROUND_REMOVE)
     } catch (_: Throwable) {
     }
     super.onDestroy()
+  }
+
+  private fun registerScreenOffWatcher() {
+    if (screenOffReceiverRegistered) return
+    try {
+      val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        registerReceiver(screenOffReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+      } else {
+        registerReceiver(screenOffReceiver, filter)
+      }
+      screenOffReceiverRegistered = true
+    } catch (_: Throwable) {
+    }
+  }
+
+  private fun unregisterScreenOffWatcher() {
+    if (!screenOffReceiverRegistered) return
+    try {
+      unregisterReceiver(screenOffReceiver)
+    } catch (_: Throwable) {
+    }
+    screenOffReceiverRegistered = false
   }
 
   private fun ensureNotificationChannel() {
@@ -62,7 +108,11 @@ class PavraKeepaliveService : Service() {
     manager.createNotificationChannel(channel)
   }
 
-  private fun buildNotification(title: String, body: String): Notification {
+  private fun buildNotification(
+    title: String,
+    body: String,
+    phoneControlActive: Boolean
+  ): Notification {
     val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
       flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
@@ -91,6 +141,24 @@ class PavraKeepaliveService : Service() {
     if (pendingIntent != null) {
       builder.setContentIntent(pendingIntent)
     }
+    if (phoneControlActive) {
+      val stopPhoneIntent = Intent(this, PavraKeepaliveService::class.java).apply {
+        action = ACTION_STOP_PHONE_CONTROL
+        setPackage(packageName)
+      }
+      val stopPhonePending = PendingIntent.getService(
+        this,
+        REQUEST_CODE_STOP_PHONE,
+        stopPhoneIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      )
+      val stopAction = Notification.Action.Builder(
+        android.R.drawable.ic_media_pause,
+        "急停手机控制",
+        stopPhonePending
+      ).build()
+      builder.addAction(stopAction)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
     }
@@ -104,6 +172,9 @@ class PavraKeepaliveService : Service() {
     const val NOTIFICATION_ID = 6778
     const val EXTRA_TITLE = "title"
     const val EXTRA_BODY = "body"
+    const val EXTRA_PHONE_CONTROL_ACTIVE = "phoneControlActive"
+    const val ACTION_STOP_PHONE_CONTROL = "expo.modules.pavrakeepalive.ACTION_STOP_PHONE_CONTROL"
+    private const val REQUEST_CODE_STOP_PHONE = 6784
     const val DEFAULT_TITLE = "Pavra · Connected"
     const val DEFAULT_BODY = "Listening for assistant replies, tasks & reminders"
   }

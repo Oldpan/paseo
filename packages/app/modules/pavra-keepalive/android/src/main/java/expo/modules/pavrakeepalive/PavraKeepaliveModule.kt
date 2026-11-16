@@ -32,14 +32,34 @@ import java.util.concurrent.atomic.AtomicReference
 
 class PavraKeepaliveModule : Module() {
   private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val phoneScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val cancelRequested = AtomicBoolean(false)
   private val downloadActive = AtomicBoolean(false)
   private val activeConnection = AtomicReference<HttpURLConnection?>(null)
+  private val phoneListenersBound = AtomicBoolean(false)
+
+  private val phonePrivilegeListener: (Map<String, Any?>) -> Unit = { payload ->
+    try {
+      sendEvent(EVENT_PHONE_PRIVILEGE_CHANGED, payload)
+    } catch (_: Throwable) {
+    }
+  }
+
+  private val phoneOverlayActionListener: (Map<String, Any?>) -> Unit = { payload ->
+    try {
+      sendEvent(EVENT_PHONE_OVERLAY_ACTION, payload)
+    } catch (_: Throwable) {
+    }
+  }
 
   override fun definition() = ModuleDefinition {
     Name("PavraKeepalive")
 
-    Events(EVENT_DOWNLOAD_PROGRESS)
+    Events(
+      EVENT_DOWNLOAD_PROGRESS,
+      EVENT_PHONE_OVERLAY_ACTION,
+      EVENT_PHONE_PRIVILEGE_CHANGED
+    )
 
     OnDestroy {
       cancelRequested.set(true)
@@ -47,7 +67,13 @@ class PavraKeepaliveModule : Module() {
         activeConnection.getAndSet(null)?.disconnect()
       } catch (_: Throwable) {
       }
+      PavraPhoneRuntime.peekInstance()?.let { runtime ->
+        runtime.privilegeEngine.removeStatusListener(phonePrivilegeListener)
+        runtime.floatingOverlayController.removeActionListener(phoneOverlayActionListener)
+      }
+      phoneListenersBound.set(false)
       downloadScope.cancel()
+      phoneScope.cancel()
     }
 
     Function("startKeepalive") { title: String, body: String ->
@@ -188,6 +214,169 @@ class PavraKeepaliveModule : Module() {
       val context = requireAppContext()
       installApkSession(context, filePath)
     }.runOnQueue(downloadScope)
+
+    // -------------------------------------------------------------------------
+    // Phone Control: Privilege Engine (Shizuku + Built-in Wireless ADB Pairing)
+    // -------------------------------------------------------------------------
+
+    AsyncFunction("getPhonePrivilegeStatusAsync") { preferredChannel: String? ->
+      val runtime = requirePhoneRuntime()
+      runtime.getFullStatusMap(preferredChannel)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("requestShizukuPermissionAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.privilegeEngine.requestShizukuPermission(appContext.currentActivity)
+      runtime.getFullStatusMap(null)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("startWirelessAdbDiscoveryAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.privilegeEngine.startWirelessAdbDiscovery()
+      runtime.getFullStatusMap(null)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("stopWirelessAdbDiscoveryAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.privilegeEngine.stopWirelessAdbDiscovery()
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("openWirelessDebuggingWithPairingNotificationAsync") { openSettings: Boolean? ->
+      val runtime = requirePhoneRuntime()
+      runtime.privilegeEngine.openWirelessDebuggingWithPairingNotification(openSettings != false)
+      runtime.getFullStatusMap(null)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("submitWirelessAdbPairingCodeAsync") { pairingInput: String, host: String?, port: Int? ->
+      val runtime = requirePhoneRuntime()
+      runtime.privilegeEngine.submitWirelessPairingCode(pairingInput, host, port)
+      runtime.getFullStatusMap(null)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("executePrivilegedShellAsync") { command: String, channel: String?, timeoutMs: Int? ->
+      val runtime = requirePhoneRuntime()
+      val boundedTimeout = (timeoutMs ?: 15_000).toLong().coerceIn(500L, 28_000L)
+      runtime.privilegeEngine.executeShell(command, channel, boundedTimeout).toMap()
+    }.runOnQueue(phoneScope)
+
+    // -------------------------------------------------------------------------
+    // Phone Control: Background VirtualDisplay (displayId = N)
+    // -------------------------------------------------------------------------
+
+    AsyncFunction("ensurePhoneVirtualDisplayAsync") { width: Int?, height: Int?, dpi: Int? ->
+      val runtime = requirePhoneRuntime()
+      val w = width ?: PavraVirtualDisplayController.DEFAULT_WIDTH
+      val h = height ?: PavraVirtualDisplayController.DEFAULT_HEIGHT
+      val d = dpi ?: PavraVirtualDisplayController.DEFAULT_DPI
+      val displayId = runtime.virtualDisplayController.ensureVirtualDisplay(w, h, d)
+      val (actualW, actualH) = runtime.virtualDisplayController.getDisplayDimensions()
+      mapOf(
+        "ok" to true,
+        "displayId" to displayId,
+        "width" to actualW,
+        "height" to actualH,
+        "dpi" to d
+      )
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("releasePhoneVirtualDisplayAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.releaseVirtualDisplay()
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("capturePhoneFrameAsync") { maxLongEdge: Int?, quality: Int? ->
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.captureFrameJpegBase64(
+        maxLongEdge = maxLongEdge ?: 1080,
+        quality = quality ?: 72
+      )
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("launchAppOnVirtualDisplayAsync") { packageName: String ->
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.launchAppOnVirtualDisplay(packageName)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("moveAppToMainScreenForTakeoverAsync") { packageName: String ->
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.moveAppToMainScreenForTakeover(packageName)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("returnAppToVirtualDisplayAsync") { packageName: String ->
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.returnAppToVirtualDisplay(packageName)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("executePhoneDisplayActionAsync") { action: Map<String, Any?> ->
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.executeDisplayAction(action)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("listInstalledPhoneAppsAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.listInstalledApps()
+    }.runOnQueue(phoneScope)
+
+    // -------------------------------------------------------------------------
+    // Phone Control: Dual-Mode Floating Overlay (Capsule ⇄ Mini-Window)
+    // -------------------------------------------------------------------------
+
+    AsyncFunction("canDrawPhoneOverlaysAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.canDrawOverlays()
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("openPhoneOverlayPermissionSettingsAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.openOverlayPermissionSettings()
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("showPhoneFloatingOverlayAsync") { state: Map<String, Any?> ->
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.showOrUpdateOverlay(state)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("updatePhoneFloatingOverlayAsync") { state: Map<String, Any?> ->
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.showOrUpdateOverlay(state)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("setPhoneFloatingOverlayModeAsync") { mode: String ->
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.setOverlayMode(mode)
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("hidePhoneFloatingOverlayAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.hideOverlay()
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("setPhoneExecutionPausedAsync") { paused: Boolean ->
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.setPaused(paused)
+      runtime.floatingOverlayController.getOverlayStateMap()
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("clearPhoneEmergencyStopAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.virtualDisplayController.clearEmergencyStop()
+      true
+    }.runOnQueue(phoneScope)
+
+    AsyncFunction("triggerPhoneEmergencyStopAsync") {
+      val runtime = requirePhoneRuntime()
+      runtime.floatingOverlayController.triggerHardwareEmergencyStop(source = "js_bridge")
+    }.runOnQueue(phoneScope)
+  }
+
+  private fun requirePhoneRuntime(): PavraPhoneRuntime {
+    val context = requireAppContext()
+    val runtime = PavraPhoneRuntime.getInstance(context)
+    if (phoneListenersBound.compareAndSet(false, true)) {
+      runtime.privilegeEngine.addStatusListener(phonePrivilegeListener)
+      runtime.floatingOverlayController.addActionListener(phoneOverlayActionListener)
+    }
+    return runtime
   }
 
   private fun requireAppContext(): Context {
@@ -565,6 +754,8 @@ class PavraKeepaliveModule : Module() {
 
   companion object {
     const val EVENT_DOWNLOAD_PROGRESS = "onApkDownloadProgress"
+    const val EVENT_PHONE_OVERLAY_ACTION = "onPhoneOverlayAction"
+    const val EVENT_PHONE_PRIVILEGE_CHANGED = "onPhonePrivilegeChanged"
     private const val UPDATES_DIR_NAME = "updates"
     private const val PART_FILE_NAME = "pavra-update.apk.part"
     private const val FINAL_FILE_NAME = "pavra-update.apk"
@@ -573,6 +764,42 @@ class PavraKeepaliveModule : Module() {
     private const val PROGRESS_EMIT_INTERVAL_MS = 150L
     private const val BUFFER_SIZE = 32 * 1024
     private const val MAX_REDIRECTS = 8
+  }
+}
+
+class PavraPhoneRuntime private constructor(context: Context) {
+  private val appContext: Context = context.applicationContext
+  val privilegeEngine = PavraPhonePrivilegeEngine(appContext)
+  val virtualDisplayController = PavraVirtualDisplayController(appContext, privilegeEngine)
+  val floatingOverlayController = PavraFloatingOverlayController(appContext, virtualDisplayController)
+
+  fun getFullStatusMap(preferredChannel: String? = null): Map<String, Any?> {
+    return privilegeEngine.getStatusMap(
+      preferredChannel = preferredChannel,
+      virtualDisplayId = virtualDisplayController.getVirtualDisplayId(),
+      overlayPermissionGranted = floatingOverlayController.canDrawOverlays()
+    )
+  }
+
+  fun onPhysicalScreenTurnedOff() {
+    if (virtualDisplayController.getVirtualDisplayId() != null) {
+      floatingOverlayController.triggerHardwareEmergencyStop(source = "screen_off")
+    }
+  }
+
+  companion object {
+    @Volatile
+    private var instance: PavraPhoneRuntime? = null
+
+    fun getInstance(context: Context): PavraPhoneRuntime {
+      return instance ?: synchronized(this) {
+        instance ?: PavraPhoneRuntime(context.applicationContext).also { created ->
+          instance = created
+        }
+      }
+    }
+
+    fun peekInstance(): PavraPhoneRuntime? = instance
   }
 }
 

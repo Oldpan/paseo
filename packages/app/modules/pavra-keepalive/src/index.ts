@@ -44,9 +44,54 @@ export interface PavraKeepaliveNativeModule {
   ): Promise<ApkDownloadResult>;
   cancelApkDownloadAsync?(): Promise<boolean>;
   installApkSessionAsync?(filePath: string): Promise<boolean>;
+  getPhonePrivilegeStatusAsync?(preferredChannel?: string | null): Promise<Record<string, unknown>>;
+  requestShizukuPermissionAsync?(): Promise<Record<string, unknown>>;
+  startWirelessAdbDiscoveryAsync?(): Promise<Record<string, unknown>>;
+  stopWirelessAdbDiscoveryAsync?(): Promise<boolean>;
+  openWirelessDebuggingWithPairingNotificationAsync?(
+    openSettings?: boolean | null,
+  ): Promise<Record<string, unknown>>;
+  submitWirelessAdbPairingCodeAsync?(
+    pairingInput: string,
+    host?: string | null,
+    port?: number | null,
+  ): Promise<Record<string, unknown>>;
+  executePrivilegedShellAsync?(
+    command: string,
+    channel?: string | null,
+    timeoutMs?: number | null,
+  ): Promise<Record<string, unknown>>;
+  ensurePhoneVirtualDisplayAsync?(
+    width?: number | null,
+    height?: number | null,
+    dpi?: number | null,
+  ): Promise<Record<string, unknown>>;
+  releasePhoneVirtualDisplayAsync?(): Promise<boolean>;
+  capturePhoneFrameAsync?(
+    maxLongEdge?: number | null,
+    quality?: number | null,
+  ): Promise<Record<string, unknown>>;
+  launchAppOnVirtualDisplayAsync?(packageName: string): Promise<boolean>;
+  moveAppToMainScreenForTakeoverAsync?(packageName: string): Promise<boolean>;
+  returnAppToVirtualDisplayAsync?(packageName: string): Promise<boolean>;
+  executePhoneDisplayActionAsync?(
+    action: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  listInstalledPhoneAppsAsync?(): Promise<Array<Record<string, unknown>>>;
+  canDrawPhoneOverlaysAsync?(): Promise<boolean>;
+  openPhoneOverlayPermissionSettingsAsync?(): Promise<boolean>;
+  showPhoneFloatingOverlayAsync?(state: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updatePhoneFloatingOverlayAsync?(
+    state: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  setPhoneFloatingOverlayModeAsync?(mode: string): Promise<Record<string, unknown>>;
+  hidePhoneFloatingOverlayAsync?(): Promise<boolean>;
+  setPhoneExecutionPausedAsync?(paused: boolean): Promise<Record<string, unknown>>;
+  clearPhoneEmergencyStopAsync?(): Promise<boolean>;
+  triggerPhoneEmergencyStopAsync?(): Promise<Record<string, unknown>>;
   addListener?(
     eventName: string,
-    listener: (event: ApkDownloadProgressEvent) => void,
+    listener: (event: Record<string, unknown>) => void,
   ): { remove(): void };
 }
 
@@ -56,7 +101,7 @@ interface ExpoModulesCore {
 
 let cachedModule: PavraKeepaliveNativeModule | null | undefined;
 
-function getNativeKeepaliveModule(): PavraKeepaliveNativeModule | null {
+export function getNativeKeepaliveModule(): PavraKeepaliveNativeModule | null {
   if (cachedModule !== undefined) {
     return cachedModule;
   }
