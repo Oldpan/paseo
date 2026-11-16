@@ -290,7 +290,7 @@ function ResultLeadingIcon({
       badgeBg = theme.badgeAmber;
       break;
     case "playbook":
-      icon = <FileTextIcon color={theme.textPrimary} size={14} />;
+      icon = <FileTextIcon color={theme.onPink} size={14} />;
       badgeBg = theme.badgePink;
       break;
     case "studio":
@@ -875,7 +875,7 @@ function SearchFooterBar({ onClose }: { onClose: () => void }) {
 export function GlobalSearchModal(props: GlobalSearchModalProps) {
   const { open, onClose, onOpen, onToggle, onSearchServerMessages } = props;
 
-  const { palette: t, name } = useTheme();
+  const { palette: t } = useTheme();
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<SearchFilterCategory>("all");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -1025,7 +1025,7 @@ export function GlobalSearchModal(props: GlobalSearchModalProps) {
 
   if (!open) return null;
 
-  const highlightFg = name === "dark" ? t.onAccent : t.textPrimary;
+  const highlightFg = t.onAccent;
 
   return (
     <View testID="global-search-modal" accessibilityViewIsModal style={OVERLAY_CONTAINER_STYLE}>
