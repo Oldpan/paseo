@@ -69,8 +69,19 @@ import {
   type TaskOutcomeNoteInput,
 } from "./assistant-files";
 import type { Machine, MachinePort } from "./machines";
-import { ChatStore } from "./store";
-import { queueTurn, restoreChatSessions, supersededLaneTurns } from "./chat-sessions";
+import {
+  ChatStore,
+  applyAssistantSystemPromptPolicy,
+  formatAssistantEnvPreamble,
+  normalizeAssistantDisabledTools,
+  normalizeAssistantEnvVars,
+} from "./store";
+import {
+  assistantInstructions,
+  queueTurn,
+  restoreChatSessions,
+  supersededLaneTurns,
+} from "./chat-sessions";
 import { Fanout } from "./fanout";
 import { Roundtable, roundtableStartMembers } from "./roundtable";
 import { Dispatcher, KeyedQueue, agentKey, errorMessage, failureStatus } from "./dispatcher";
@@ -193,6 +204,43 @@ function permissionOf(permission: PermissionInfo | null): Task["pendingPermissio
   return permission ? { requestId: permission.requestId, title: permission.title } : null;
 }
 
+export { formatAssistantEnvPreamble };
+
+export function buildAssistantSystemPrompt(assistant: Assistant): string {
+  return applyAssistantSystemPromptPolicy(assistantInstructions(assistant), assistant);
+}
+
+function mergeSavedAssistant(input: Assistant, existing: Assistant | null): Assistant {
+  const resolvedEnvVars =
+    input.envVars !== undefined
+      ? normalizeAssistantEnvVars(input.envVars)
+      : normalizeAssistantEnvVars(existing?.envVars);
+  const resolvedDisabledTools =
+    input.disabledTools !== undefined
+      ? normalizeAssistantDisabledTools(input.disabledTools)
+      : normalizeAssistantDisabledTools(existing?.disabledTools);
+  const { envVars: _env, disabledTools: _disabled, ...baseInput } = input;
+  const merged: Assistant = existing
+    ? {
+        ...baseInput,
+        memory: existing.memory,
+        ...(input.browser === undefined && existing.browser ? { browser: existing.browser } : {}),
+      }
+    : baseInput;
+  return {
+    ...merged,
+    ...(resolvedEnvVars ? { envVars: resolvedEnvVars } : {}),
+    ...(resolvedDisabledTools ? { disabledTools: resolvedDisabledTools } : {}),
+  };
+}
+
+function hasAssistantPolicyChanged(existing: Assistant, next: Assistant): boolean {
+  return (
+    JSON.stringify(existing.envVars ?? null) !== JSON.stringify(next.envVars ?? null) ||
+    JSON.stringify(existing.disabledTools ?? null) !== JSON.stringify(next.disabledTools ?? null)
+  );
+}
+
 // Chat state lives in the SQLite ledger. Paseo agent hooks (and, for tasks on other hosts, agent
 // subscriptions) only enqueue work here; every settle is idempotent and re-reads the execution's
 // timeline, so duplicated, reordered or missed events converge on the same ledger.
@@ -287,13 +335,15 @@ export class Coordinator {
         try {
           snapshot = await this.readAssistantMemorySnapshot(assistant.id, slug);
         } catch {}
+        const envPreamble = isFreshSession ? formatAssistantEnvPreamble(assistant.envVars) : "";
         if (!isFreshSession && !snapshot?.playbooks?.length) return "";
-        return workspaceMemoryHint({
+        const baseHint = workspaceMemoryHint({
           conversationId: turn.conversationId,
           conversationName: conversation?.name,
           now: this.now(),
           snapshot,
         });
+        return envPreamble ? `${baseHint}\n\n${envPreamble}` : baseHint;
       },
     });
   }
@@ -376,15 +426,23 @@ export class Coordinator {
     if (!this.machineOf(input)) prepareHome(this.assistantDirectory(input.id), input.memory ?? "");
     // The agent owns its memory file afterwards; a later save never overwrites it. A remote
     // assistant's MEMORY.md is seeded from this ledger copy when its home is first prepared.
-    const assistant: Assistant = existing
-      ? {
-          ...input,
-          memory: existing.memory,
-          ...(input.browser === undefined && existing.browser ? { browser: existing.browser } : {}),
-        }
-      : input;
-    this.store.transaction(() => this.store.put("assistants", assistant));
+    const assistant = mergeSavedAssistant(input, existing);
+    this.store.transaction(() => {
+      this.store.put("assistants", assistant);
+      if (existing) this.syncAssistantChatSessions(existing, assistant);
+    });
     return assistant;
+  }
+  private syncAssistantChatSessions(existing: Assistant, assistant: Assistant): void {
+    const policyChanged = hasAssistantPolicyChanged(existing, assistant);
+    for (const session of this.store.listChatSessions()) {
+      if (session.assistantId !== assistant.id) continue;
+      this.store.putChatSession({
+        ...session,
+        systemPrompt: buildAssistantSystemPrompt(assistant),
+        ...(policyChanged ? { lastInstructions: "" } : {}),
+      });
+    }
   }
   // Creates (once) the home of an assistant on its machine and returns that machine's path.
   private async prepareAssistantHome(assistantId: string, subdirectory: boolean): Promise<string> {
@@ -675,6 +733,9 @@ export class Coordinator {
   ): Promise<unknown> {
     const assistant = this.store.get("assistants", assistantId);
     if (!assistant) throw new Error("Assistant no longer exists.");
+    if (assistant.disabledTools?.includes("browser")) {
+      throw new Error("Browser tool family is disabled for this assistant.");
+    }
     const { serverId, subdirectory } = await this.memoryTarget(assistantId);
     if (!serverId) {
       return executeMemberBrowserOperation(this.browserManager, {
@@ -1403,6 +1464,9 @@ export class Coordinator {
    * derived from the request, so asking twice returns the task the first call created.
    */
   startAssistantTask(input: AssistantTaskInput): Task {
+    if (input.assistant.disabledTools?.includes("tasks")) {
+      throw new Error("Tasks tool family is disabled for this assistant.");
+    }
     const existing = this.store.get("tasks", input.id);
     if (existing) return existing;
     const task: Task = {
@@ -2112,6 +2176,8 @@ export class Coordinator {
   }
   private async taskMemoryContext(task: Task): Promise<string | undefined> {
     try {
+      const assistant = this.store.get("assistants", task.assistantId);
+      const envPreamble = formatAssistantEnvPreamble(assistant?.envVars);
       const conversation = this.store.get("conversations", task.conversationId);
       const slug = channelSlug(task.conversationId, conversation?.name);
       const snapshot = await this.readAssistantMemorySnapshot(task.assistantId, slug);
@@ -2125,13 +2191,18 @@ export class Coordinator {
       if (snapshot.channelOutcomes.trim()) {
         parts.push(`[Recent Channel Outcomes]\n${snapshot.channelOutcomes.trim()}`);
       }
+      if (envPreamble) {
+        parts.push(envPreamble);
+      }
       return parts.length > 0 ? parts.join("\n\n") : undefined;
     } catch (error) {
       console.error(
         "Failed to load assistant memory snapshot for task; continuing without memory context",
         error,
       );
-      return undefined;
+      const assistant = this.store.get("assistants", task.assistantId);
+      const envPreamble = formatAssistantEnvPreamble(assistant?.envVars);
+      return envPreamble || undefined;
     }
   }
   private async runTask(taskId: string): Promise<void> {

@@ -10,6 +10,13 @@ export const assistantBrowserSchema = z.object({
 });
 export type AssistantBrowserConfig = z.infer<typeof assistantBrowserSchema>;
 
+export const assistantToolFamilyValues = ["mailbox", "tasks", "routines", "browser"] as const;
+export const assistantToolFamilySchema = z.enum(assistantToolFamilyValues);
+export type AssistantToolFamily = z.infer<typeof assistantToolFamilySchema>;
+
+export const assistantEnvVarsSchema = z.record(z.string(), z.string());
+export type AssistantEnvVars = z.infer<typeof assistantEnvVarsSchema>;
+
 export const assistantSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
@@ -37,6 +44,8 @@ export const assistantSchema = z.object({
     })
     .optional(),
   browser: assistantBrowserSchema.optional(),
+  envVars: z.record(z.string(), z.string()).optional(),
+  disabledTools: z.array(z.enum(["mailbox", "tasks", "routines", "browser"])).optional(),
 });
 export const conversationSchema = z.object({
   id: z.string(),

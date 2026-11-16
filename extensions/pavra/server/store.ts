@@ -2,9 +2,129 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { stateSchema, type ChatState, type Message } from "../shared/contracts";
+import {
+  assistantToolFamilyValues,
+  stateSchema,
+  type Assistant,
+  type AssistantToolFamily,
+  type ChatState,
+  type Message,
+  type Turn,
+} from "../shared/contracts";
 import type { ChatSession } from "./chat-sessions";
 import type { Epoch } from "./roundtable";
+
+const VALID_TOOL_FAMILIES = new Set<string>(assistantToolFamilyValues);
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAILBOX_INSTRUCTION_LINE =
+  "To ask another assistant privately (it may run on another machine), use pavra-send; pavra-peers lists who you can reach. Its answer comes back to you in a later turn, so tell the user you asked and end your reply.";
+const ROUTINES_INSTRUCTION_LINE =
+  "To manage scheduled routines and one-time reminders in this chat, use pavra-routine_list, pavra-routine_save (pass maxRuns: 1 for a one-time reminder, or reference playbooks/<slug>.md for recurring inspections; reply (pass) during a routine turn when everything is normal), and pavra-routine_delete.";
+
+export function normalizeAssistantEnvVars(
+  envVars: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined {
+  if (!envVars || typeof envVars !== "object" || Array.isArray(envVars)) return undefined;
+  const entries = Object.entries(envVars)
+    .map(([rawKey, rawValue]) => [rawKey.trim(), rawValue] as const)
+    .filter(
+      ([key, value]) =>
+        ENV_KEY_PATTERN.test(key) && (typeof value === "string" || typeof value === "number"),
+    )
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries.map(([key, value]) => [key, String(value)]));
+}
+
+export function normalizeAssistantDisabledTools(
+  disabledTools: readonly unknown[] | null | undefined,
+): AssistantToolFamily[] | undefined {
+  if (!Array.isArray(disabledTools)) return undefined;
+  const seen = new Set<AssistantToolFamily>();
+  for (const item of disabledTools) {
+    if (typeof item === "string" && VALID_TOOL_FAMILIES.has(item)) {
+      seen.add(item as AssistantToolFamily);
+    }
+  }
+  return seen.size > 0 ? [...seen] : undefined;
+}
+
+export function sanitizeAssistantRecord(raw: unknown): Assistant {
+  if (!raw || typeof raw !== "object") return raw as Assistant;
+  const record = { ...(raw as Record<string, unknown>) };
+  const envVars = normalizeAssistantEnvVars(
+    record.envVars as Record<string, unknown> | null | undefined,
+  );
+  const disabledTools = normalizeAssistantDisabledTools(
+    record.disabledTools as readonly unknown[] | null | undefined,
+  );
+  if (envVars) record.envVars = envVars;
+  else delete record.envVars;
+  if (disabledTools) record.disabledTools = disabledTools;
+  else delete record.disabledTools;
+  return record as Assistant;
+}
+
+function quoteShellEnvValue(value: string): string {
+  if (value === "") return '""';
+  if (/^[A-Za-z0-9_./:@%-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
+export function formatAssistantEnvPreamble(
+  envVars: Record<string, string> | null | undefined,
+): string {
+  const normalized = normalizeAssistantEnvVars(envVars);
+  if (!normalized) return "";
+  const lines = Object.entries(normalized).map(
+    ([key, value]) => `export ${key}=${quoteShellEnvValue(value)}`,
+  );
+  return `[Assistant Environment Variables]\n${lines.join("\n")}`;
+}
+
+export function applyAssistantSystemPromptPolicy(
+  systemPrompt: string,
+  assistant: Pick<Assistant, "envVars" | "disabledTools"> | null | undefined,
+): string {
+  if (!assistant || !systemPrompt) return systemPrompt;
+  const disabled = new Set(normalizeAssistantDisabledTools(assistant.disabledTools) ?? []);
+  let next = systemPrompt;
+  if (disabled.has("mailbox")) {
+    next = next
+      .split("\n")
+      .filter((line) => line.trim() !== MAILBOX_INSTRUCTION_LINE)
+      .join("\n");
+  }
+  if (disabled.has("routines")) {
+    next = next
+      .split("\n")
+      .filter((line) => line.trim() !== ROUTINES_INSTRUCTION_LINE)
+      .join("\n");
+  }
+  if (disabled.has("tasks")) {
+    next = next
+      .split("\n")
+      .filter((line) => !line.includes("pavra-start_task"))
+      .join("\n");
+  }
+  if (disabled.has("browser")) {
+    next = next
+      .split("\n")
+      .filter((line) => !line.includes("pavra-browser_open"))
+      .join("\n");
+  }
+  if (disabled.size > 0) {
+    const disabledNote = `Disabled tool families for you (do not call these tools): ${[...disabled].join(", ")}.`;
+    if (!next.includes(disabledNote)) {
+      next = `${next.trimEnd()}\n${disabledNote}`;
+    }
+  }
+  const envPreamble = formatAssistantEnvPreamble(assistant.envVars);
+  if (envPreamble && !next.includes("[Assistant Environment Variables]")) {
+    next = `${next.trimEnd()}\n\n${envPreamble}`;
+  }
+  return next;
+}
 
 type Collection = Exclude<keyof ChatState, "cursor" | "generation">;
 /** A peer message waiting to be batched into one peer_inbox turn for `assistantId`. */
@@ -93,6 +213,10 @@ export class ChatStore {
     );
     this.db.exec("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     this.db.exec(
+      "CREATE TABLE IF NOT EXISTS assistants (id TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    this.indexAssistantsTable();
+    this.db.exec(
       "CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL)",
     );
     this.indexChatSessionsByAgent();
@@ -140,7 +264,12 @@ export class ChatStore {
     const rows = this.db
       .prepare("SELECT collection, value FROM records WHERE seq > ? ORDER BY seq")
       .all(after) as Array<{ collection: Collection; value: string }>;
-    for (const row of rows) (result[row.collection] as unknown[]).push(JSON.parse(row.value));
+    for (const row of rows) {
+      const parsedValue = JSON.parse(row.value);
+      (result[row.collection] as unknown[]).push(
+        row.collection === "assistants" ? sanitizeAssistantRecord(parsedValue) : parsedValue,
+      );
+    }
     const parsed = stateSchema.parse(result);
     if (after === 0) {
       this.snapshotCache = parsed;
@@ -152,19 +281,38 @@ export class ChatStore {
     const row = this.db
       .prepare("SELECT value FROM records WHERE collection=? AND id=?")
       .get(collection, id) as { value: string } | undefined;
-    return row ? JSON.parse(row.value) : null;
+    if (!row) return null;
+    const parsed = JSON.parse(row.value);
+    return (collection === "assistants" ? sanitizeAssistantRecord(parsed) : parsed) as NonNullable<
+      ChatState[K]
+    >[number];
   }
   put<K extends Collection>(collection: K, value: NonNullable<ChatState[K]>[number]): void {
     this.snapshotCache = null;
+    let storedValue: NonNullable<ChatState[K]>[number] = value;
+    if (collection === "assistants") {
+      const sanitized = sanitizeAssistantRecord(value);
+      storedValue = sanitized as NonNullable<ChatState[K]>[number];
+      this.upsertAssistantRow(sanitized);
+    } else if (collection === "turns") {
+      const turn = value as Turn;
+      if (turn.systemPrompt) {
+        const assistant = this.get("assistants", turn.assistantId);
+        storedValue = {
+          ...turn,
+          systemPrompt: applyAssistantSystemPromptPolicy(turn.systemPrompt, assistant),
+        } as NonNullable<ChatState[K]>[number];
+      }
+    }
     const event = this.db
       .prepare("INSERT INTO changes(collection,id) VALUES (?,?)")
-      .run(collection, value.id);
+      .run(collection, storedValue.id);
     this.db.prepare("DELETE FROM changes WHERE seq < ?").run(event.lastInsertRowid);
     this.db
       .prepare(
         "INSERT INTO records(collection,id,value,seq) VALUES (?,?,?,?) ON CONFLICT(collection,id) DO UPDATE SET value=excluded.value,seq=excluded.seq",
       )
-      .run(collection, value.id, JSON.stringify(value), event.lastInsertRowid);
+      .run(collection, storedValue.id, JSON.stringify(storedValue), event.lastInsertRowid);
     this.markChanged();
   }
   delete<K extends Collection>(collection: K, id: string): boolean {
@@ -172,6 +320,9 @@ export class ChatStore {
     const removed = this.db
       .prepare("DELETE FROM records WHERE collection=? AND id=?")
       .run(collection, id);
+    if (collection === "assistants") {
+      this.db.prepare("DELETE FROM assistants WHERE id=?").run(id);
+    }
     if (removed.changes === 0) return false;
     const event = this.db
       .prepare("INSERT INTO changes(collection,id) VALUES (?,?)")
@@ -291,6 +442,40 @@ export class ChatStore {
       }
     }
   }
+  private indexAssistantsTable(): void {
+    const columns = this.db.prepare("PRAGMA table_info(assistants)").all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "env_vars")) {
+      this.db.exec("ALTER TABLE assistants ADD COLUMN env_vars TEXT");
+    }
+    if (!columns.some((column) => column.name === "disabled_tools")) {
+      this.db.exec("ALTER TABLE assistants ADD COLUMN disabled_tools TEXT");
+    }
+    const existingRows = this.db
+      .prepare("SELECT id, value FROM records WHERE collection='assistants'")
+      .all() as Array<{ id: string; value: string }>;
+    for (const row of existingRows) {
+      try {
+        const sanitized = sanitizeAssistantRecord(JSON.parse(row.value));
+        this.upsertAssistantRow(sanitized);
+      } catch {
+        // Ignore unparseable legacy rows during index backfill.
+      }
+    }
+  }
+  private upsertAssistantRow(assistant: Assistant): void {
+    this.db
+      .prepare(
+        "INSERT INTO assistants(id,value,env_vars,disabled_tools) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,env_vars=excluded.env_vars,disabled_tools=excluded.disabled_tools",
+      )
+      .run(
+        assistant.id,
+        JSON.stringify(assistant),
+        assistant.envVars ? JSON.stringify(assistant.envVars) : null,
+        assistant.disabledTools ? JSON.stringify(assistant.disabledTools) : null,
+      );
+  }
   private indexChatSessionsByAgent(): void {
     const columns = this.db.prepare("PRAGMA table_info(chat_sessions)").all() as Array<{
       name: string;
@@ -322,6 +507,9 @@ export class ChatStore {
     ).map((row) => JSON.parse(row.value));
   }
   putChatSession(session: ChatSession): void {
+    const assistant = this.get("assistants", session.assistantId);
+    const systemPrompt = applyAssistantSystemPromptPolicy(session.systemPrompt, assistant);
+    session.systemPrompt = systemPrompt;
     this.db
       .prepare(
         "INSERT INTO chat_sessions(id,value,agent_id) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,agent_id=excluded.agent_id",

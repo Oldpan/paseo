@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatStore } from "./store";
-import { Coordinator } from "./coordinator";
+import { Coordinator, buildAssistantSystemPrompt, formatAssistantEnvPreamble } from "./coordinator";
 import { bindChatSession, chatPrompt, runnableChatTurns, unseenMessages } from "./chat-sessions";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -795,5 +795,145 @@ describe("Chat ledger v2 store", () => {
     expect(created.deadline).toBeGreaterThanOrEqual(before + 120 * 60_000 - 1_000);
     expect(created.deadline).toBeLessThanOrEqual(Date.now() + 120 * 60_000 + 1_000);
     expect(store.get("tasks", taskId)?.title).toBe("Fix flaky migration");
+  });
+
+  it("persists assistant envVars and disabledTools across SQLite reopen and migrates legacy assistants table", () => {
+    const { directory, store, coordinator, assistant } = fixture();
+    const updated = coordinator.saveAssistant({
+      ...assistant,
+      envVars: {
+        RUST_LOG: "info",
+        API_BASE_URL: "https://api.example.com/v1",
+      },
+      disabledTools: ["mailbox", "browser"],
+    });
+    expect(updated.envVars).toEqual({
+      API_BASE_URL: "https://api.example.com/v1",
+      RUST_LOG: "info",
+    });
+    expect(updated.disabledTools).toEqual(["mailbox", "browser"]);
+    expect(store.get("assistants", assistant.id)).toEqual(updated);
+
+    const row = store.database
+      .prepare("SELECT env_vars, disabled_tools FROM assistants WHERE id=?")
+      .get(assistant.id) as { env_vars: string | null; disabled_tools: string | null };
+    expect(JSON.parse(row.env_vars!)).toEqual({
+      API_BASE_URL: "https://api.example.com/v1",
+      RUST_LOG: "info",
+    });
+    expect(JSON.parse(row.disabled_tools!)).toEqual(["mailbox", "browser"]);
+
+    const reopened = new ChatStore(path.join(directory, "chat.sqlite"));
+    cleanup.push(() => reopened.close());
+    expect(reopened.get("assistants", assistant.id)?.envVars).toEqual({
+      API_BASE_URL: "https://api.example.com/v1",
+      RUST_LOG: "info",
+    });
+    expect(reopened.get("assistants", assistant.id)?.disabledTools).toEqual(["mailbox", "browser"]);
+
+    // Clearing envVars and disabledTools removes them cleanly.
+    const cleared = coordinator.saveAssistant({
+      ...updated,
+      envVars: {},
+      disabledTools: [],
+    });
+    expect(cleared.envVars).toBeUndefined();
+    expect(cleared.disabledTools).toBeUndefined();
+
+    // Legacy SQLite database before env_vars / disabled_tools columns existed.
+    const legacyPath = path.join(directory, "legacy-assistants.sqlite");
+    const legacyDb = new DatabaseSync(legacyPath);
+    legacyDb.exec(
+      "CREATE TABLE assistants (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE records (collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(collection,id)); CREATE TABLE changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, id TEXT NOT NULL); CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    );
+    legacyDb
+      .prepare("INSERT INTO records(collection,id,value,seq) VALUES ('assistants',?,?,1)")
+      .run(
+        assistant.id,
+        JSON.stringify({
+          ...assistant,
+          envVars: { LEGACY_FLAG: "1" },
+          disabledTools: ["routines", "unknown_legacy_tool"],
+        }),
+      );
+    legacyDb.close();
+
+    const migrated = new ChatStore(legacyPath);
+    cleanup.push(() => migrated.close());
+    const migratedAssistant = migrated.get("assistants", assistant.id);
+    expect(migratedAssistant?.envVars).toEqual({ LEGACY_FLAG: "1" });
+    expect(migratedAssistant?.disabledTools).toEqual(["routines"]);
+  });
+
+  it("omits disabled tool instructions and injects envVars preamble into assistant systemPrompt", async () => {
+    const { store, coordinator } = fixture();
+    const configured = coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Nova",
+      provider: "codex/test-model",
+      persona: "Careful systems engineer",
+      autonomy: {
+        enabled: true,
+        targets: [
+          {
+            serverId: "local",
+            directory: "/tmp/project",
+            isolation: "worktree",
+          },
+        ],
+      },
+      browser: { enabled: true },
+      envVars: {
+        FEATURE_GATE: "enabled",
+        SERVICE_ORIGIN: "https://internal.example.test",
+      },
+      disabledTools: ["mailbox", "routines", "tasks", "browser"],
+    });
+
+    const systemPrompt = buildAssistantSystemPrompt(configured);
+    expect(systemPrompt).not.toContain("pavra-send");
+    expect(systemPrompt).not.toContain("pavra-routine_list");
+    expect(systemPrompt).not.toContain("pavra-start_task");
+    expect(systemPrompt).not.toContain("pavra-browser_open");
+    expect(systemPrompt).toContain(
+      "Disabled tool families for you (do not call these tools): mailbox, routines, tasks, browser.",
+    );
+    expect(systemPrompt).toContain(
+      formatAssistantEnvPreamble({
+        FEATURE_GATE: "enabled",
+        SERVICE_ORIGIN: "https://internal.example.test",
+      }),
+    );
+
+    const dm = coordinator.createConversation({
+      id: randomUUID(),
+      name: "Nova",
+      kind: "dm",
+      members: [configured.id],
+      roundtable: false,
+    });
+    const session = bindChatSession(store, dm.id, null, configured);
+    expect(session.systemPrompt).toBe(systemPrompt);
+    expect(store.getChatSession(session.id)?.systemPrompt).toBe(systemPrompt);
+
+    expect(() =>
+      coordinator.startAssistantTask({
+        id: randomUUID(),
+        conversationId: dm.id,
+        threadId: null,
+        assistant: configured,
+        title: "Blocked task",
+        prompt: "Should not start",
+        serverId: "local",
+        directory: "/tmp/project",
+        provider: configured.provider,
+        isolation: "worktree",
+        requestedByTurnId: randomUUID(),
+      }),
+    ).toThrow("Tasks tool family is disabled");
+
+    await expect(coordinator.callAssistantBrowser(configured.id, "tabs")).rejects.toThrow(
+      "Browser tool family is disabled",
+    );
   });
 });
