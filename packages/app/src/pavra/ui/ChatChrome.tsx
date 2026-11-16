@@ -1,11 +1,12 @@
 import { isWeb } from "@/constants/platform";
 // Presentation extracted/adapted from Bigbang Chat.tsx MessageRow and header.
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
-import { useRef, useEffect, useState, type ReactNode } from "react";
+import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { ForwardedFrom } from "../../../../../extensions/pavra/shared/contracts";
 import { formatForwardedBadge } from "../chat-actions";
 import { AgentAvatar, StatusDot, UserAvatar } from "./avatars";
+import { shouldCollapseLongMessage } from "./EmptyState";
 import type { ParsedFileRef } from "./fileRefParser";
 import { GlobalSearchButton } from "./GlobalSearchModal";
 import {
@@ -929,6 +930,28 @@ function MessageHeaderRow({
   );
 }
 
+function MessageHighlightRing({ id, highlighted }: { id: string; highlighted?: boolean }) {
+  const { palette: t } = useTheme();
+  if (!highlighted) return null;
+  return (
+    <View
+      testID={`message-highlighted-${id}`}
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        borderRadius: 14,
+        borderWidth: 2,
+        borderColor: t.brandAccent,
+        backgroundColor: t.brandAccentSoft,
+      }}
+    />
+  );
+}
+
 export function ChatMessage({
   id,
   content,
@@ -955,6 +978,7 @@ export function ChatMessage({
   onQuoteTableSelection,
   quote,
   routineBadge,
+  highlighted = false,
   children,
 }: {
   id: string;
@@ -986,6 +1010,8 @@ export function ChatMessage({
   quote?: { sender: string; text: string };
   /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
   routineBadge?: string;
+  /** Whether this message row is temporarily highlighted after a jump-to-message action. */
+  highlighted?: boolean;
   children?: ReactNode;
 }) {
   const { palette: t, name } = useTheme();
@@ -1059,6 +1085,7 @@ export function ChatMessage({
           maxWidth: "100%",
         }}
       >
+        <MessageHighlightRing id={id} highlighted={highlighted} />
         {!user ? avatar : null}
         <View
           style={{
@@ -1190,17 +1217,23 @@ function MessageBody({
   onOpenPortPreview?: (url: string) => void;
   onQuoteTableSelection?: (markdown: string) => void;
 }) {
-  const { palette: t } = useTheme();
+  const { palette: t, name } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const collapseInfo = useMemo(() => shouldCollapseLongMessage(content), [content]);
+  const displayedContent =
+    collapseInfo.collapsible && !expanded ? collapseInfo.previewContent : content;
+  const toggleLabel = expanded ? "Show less" : `Show more (${collapseInfo.lineCount} lines)`;
+
   return (
     <>
       {quote ? <QuoteBlock id={id} quote={quote} user={user} /> : null}
       {user ? (
         <Text selectable style={type(t.userBubbleInk, 14, { lineHeight: 20 })}>
-          {content}
+          {displayedContent}
         </Text>
       ) : (
         <MessageMarkdown
-          content={content}
+          content={displayedContent}
           color={t.textPrimary}
           narrow={false}
           workspaceCwd={workspaceCwd}
@@ -1210,6 +1243,38 @@ function MessageBody({
           onQuoteTableSelection={onQuoteTableSelection}
         />
       )}
+      {collapseInfo.collapsible ? (
+        <Pressable
+          testID={`message-expand-toggle-${id}`}
+          role="button"
+          accessibilityLabel={toggleLabel}
+          onPress={(event) => {
+            event.stopPropagation?.();
+            setExpanded((prev) => !prev);
+          }}
+          style={(state) => {
+            const hovered = Boolean((state as { hovered?: boolean }).hovered);
+            return [
+              {
+                marginTop: 6,
+                alignSelf: "flex-start",
+                minHeight: 24,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
+                paddingHorizontal: 10,
+                paddingVertical: 2,
+                justifyContent: "center",
+                ...webTransition("background-color 120ms ease"),
+              },
+              ctrlShadow(t, name),
+            ];
+          }}
+        >
+          <Text style={type(t.textPrimary, 11, { fontWeight: "700" })}>{toggleLabel}</Text>
+        </Pressable>
+      ) : null}
     </>
   );
 }

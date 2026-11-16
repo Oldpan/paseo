@@ -171,6 +171,7 @@ export interface PendingAttachment {
   attachmentId: string | null;
   name: string;
   previewUrl: string | null;
+  dataUrl?: string | null;
   mimeType?: string;
   sizeBytes?: number;
   textContent?: string | null;
@@ -182,6 +183,19 @@ export interface PickedNativeAsset {
   mimeType?: string | null;
   size?: number | null;
   base64?: string | null;
+  file?: File | null;
+}
+
+export interface PickedNativeImageAsset {
+  uri: string;
+  fileName?: string | null;
+  name?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+  size?: number | null;
+  base64?: string | null;
+  width?: number;
+  height?: number;
   file?: File | null;
 }
 
@@ -284,6 +298,7 @@ export async function readPickedFile(file: File, index: number): Promise<Pending
     attachmentId: localId,
     name: file.name,
     previewUrl,
+    dataUrl: previewUrl,
     mimeType,
     sizeBytes: file.size,
     textContent,
@@ -313,10 +328,105 @@ export async function readPickedNativeAsset(
     attachmentId: localId,
     name,
     previewUrl,
+    dataUrl: previewUrl?.startsWith("data:") ? previewUrl : null,
     mimeType,
     sizeBytes: typeof asset.size === "number" ? asset.size : undefined,
     textContent,
   };
+}
+
+function resolvePickedImageMeta(
+  asset: PickedNativeImageAsset,
+  index: number,
+): { name: string; mimeType: string; sizeBytes: number | undefined } {
+  const rawName = (
+    asset.fileName ||
+    asset.name ||
+    asset.uri.split("/").pop()?.split("?")[0] ||
+    ""
+  ).trim();
+  const { mimeType: resolvedMime } = resolvePickedAttachmentKind(
+    asset.mimeType,
+    rawName || asset.uri,
+  );
+  const mimeType = resolvedMime?.startsWith("image/") ? resolvedMime : "image/jpeg";
+  const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "jpg";
+  const name = rawName || `photo-${index + 1}.${ext}`;
+  const sizeBytes = typeof asset.fileSize === "number" ? asset.fileSize : (asset.size ?? undefined);
+  return { name, mimeType, sizeBytes };
+}
+
+export async function readPickedNativeImageAsset(
+  asset: PickedNativeImageAsset,
+  index: number,
+  reader?: NativeAssetFileReader,
+): Promise<PendingAttachment> {
+  if (asset.file) {
+    return await readPickedFile(asset.file, index);
+  }
+  const localId = `local-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+  const { name, mimeType, sizeBytes } = resolvePickedImageMeta(asset, index);
+  const previewUrl = reader
+    ? await readNativeImagePreviewUrl({ ...asset, name }, mimeType, reader)
+    : asset.base64
+      ? asset.base64.startsWith("data:")
+        ? asset.base64
+        : `data:${mimeType};base64,${asset.base64}`
+      : asset.uri || null;
+
+  return {
+    localId,
+    attachmentId: localId,
+    name,
+    previewUrl,
+    dataUrl: previewUrl,
+    mimeType,
+    sizeBytes,
+    textContent: null,
+  };
+}
+
+export interface ClipboardPasteDataLike {
+  files?: ArrayLike<File> | null;
+  items?: ArrayLike<{
+    kind?: string;
+    type?: string;
+    getAsFile?: () => File | null;
+  }> | null;
+}
+
+export function extractClipboardImageFiles(
+  clipboardData: ClipboardPasteDataLike | null | undefined,
+): File[] {
+  if (!clipboardData) return [];
+  const results: File[] = [];
+  const seen = new Set<File>();
+
+  if (clipboardData.items) {
+    for (const item of Array.from(clipboardData.items)) {
+      if (!item || (item.kind && item.kind !== "file")) continue;
+      const file = item.getAsFile?.();
+      if (!file || seen.has(file)) continue;
+      const { isImage } = resolvePickedAttachmentKind(item.type || file.type, file.name);
+      if (isImage) {
+        seen.add(file);
+        results.push(file);
+      }
+    }
+  }
+
+  if (results.length === 0 && clipboardData.files) {
+    for (const file of Array.from(clipboardData.files)) {
+      if (!file || seen.has(file)) continue;
+      const { isImage } = resolvePickedAttachmentKind(file.type, file.name);
+      if (isImage) {
+        seen.add(file);
+        results.push(file);
+      }
+    }
+  }
+
+  return results;
 }
 
 export function formatMessageWithAttachments(
@@ -324,6 +434,7 @@ export function formatMessageWithAttachments(
   attachments: ReadonlyArray<{
     name: string;
     previewUrl?: string | null;
+    dataUrl?: string | null;
     textContent?: string | null;
     mimeType?: string;
   }>,
@@ -334,7 +445,7 @@ export function formatMessageWithAttachments(
     if (item.textContent && item.textContent.trim()) {
       return `[Attachment: ${item.name}]\n\`\`\`\n${item.textContent.trim()}\n\`\`\``;
     }
-    if (item.previewUrl || item.mimeType?.startsWith("image/")) {
+    if (item.dataUrl || item.previewUrl || item.mimeType?.startsWith("image/")) {
       return `[Attachment: ${item.name} (image)]`;
     }
     return `[Attachment: ${item.name}]`;

@@ -18,6 +18,7 @@ import { Composer, type ComposerSendExtras } from "./Composer";
 import type { ParsedFileRef } from "./fileRefParser";
 import type { GroupComposerState } from "./GroupComposer";
 import { ChatMessage, Chip, NoteRow } from "./ChatChrome";
+import { PavraEmptyState } from "./EmptyState";
 import { PendingQueueBar, type PendingQueueItem } from "./PendingQueueBar";
 import { TaskCard, TaskEventRow, type TaskCardActions } from "./TaskChrome";
 import type { TaskEventNote } from "../task-view";
@@ -62,6 +63,8 @@ export interface MessageRow {
   quote?: { sender: string; text: string };
   /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
   routineBadge?: string;
+  /** Whether this message row is highlighted (e.g. after a jump-to-message action). */
+  highlighted?: boolean;
   /** Display text of a system or task_event row. */
   note?: string;
   /** A `task_event` receipt row; set instead of `note`. */
@@ -85,32 +88,7 @@ export interface LiveTurn {
   /** The host-rendered live bubble (stream text, approvals); keyed by `turn.id`. */
   node: ReactNode;
 }
-const EMPTY_FILES: never[] = [];
-function ignoreFile() {}
-export function ChatPane({
-  rows,
-  turns,
-  draft,
-  setDraft,
-  draftKey,
-  pending,
-  error,
-  phone,
-  connected,
-  onSend,
-  onTask,
-  group,
-  locked = false,
-  peers,
-  takeovers,
-  queue,
-  onSteerQueued,
-  onRemoveQueued,
-  onStop,
-  cancelling = false,
-  onPressFileRef,
-  contextUsageBar,
-}: {
+export interface ChatPaneProps {
   rows: MessageRow[];
   turns: LiveTurn[];
   draft: string;
@@ -139,13 +117,74 @@ export function ChatPane({
   onPressFileRef?(ref: ParsedFileRef, row: MessageRow): void;
   /** Compact context usage indicator rendered above the composer. */
   contextUsageBar?: ReactNode;
-}) {
+  /** Target message ID to scroll to and flash-highlight for 2.2 seconds. */
+  focusMessageId?: string | null;
+  /** Called once `focusMessageId` has been located, scrolled to, and highlighted. */
+  onFocusMessageHandled?: () => void;
+}
+const EMPTY_FILES: never[] = [];
+function ignoreFile() {}
+export function ChatPane({
+  rows,
+  turns,
+  draft,
+  setDraft,
+  draftKey,
+  pending,
+  error,
+  phone,
+  connected,
+  onSend,
+  onTask,
+  group,
+  locked = false,
+  peers,
+  takeovers,
+  queue,
+  onSteerQueued,
+  onRemoveQueued,
+  onStop,
+  cancelling = false,
+  onPressFileRef,
+  contextUsageBar,
+  focusMessageId,
+  onFocusMessageHandled,
+}: ChatPaneProps) {
   const { palette: t } = useTheme();
   const list = useRef<FlatList<MessageRow>>(null);
   const atBottom = useRef(true);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (atBottom.current) list.current?.scrollToEnd({ animated: false });
   }, [rows.length, turns.length]);
+
+  useEffect(() => {
+    if (!focusMessageId) return;
+    const index = rows.findIndex((row) => row.message.id === focusMessageId);
+    if (index < 0) return;
+    atBottom.current = false;
+    try {
+      list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
+    } catch {
+      list.current?.scrollToOffset({ offset: Math.max(0, index * 84), animated: true });
+    }
+    setHighlightedId(focusMessageId);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedId((current) => (current === focusMessageId ? null : current));
+    }, 2200);
+    onFocusMessageHandled?.();
+  }, [focusMessageId, onFocusMessageHandled, rows]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    },
+    [],
+  );
+
   // Streaming text grows the content without changing the row count.
   const followContent = useCallback(() => {
     if (atBottom.current) list.current?.scrollToEnd({ animated: false });
@@ -199,12 +238,13 @@ export function ChatPane({
           onQuoteTableSelection={row.onQuoteTableSelection}
           quote={row.quote}
           routineBadge={row.routineBadge}
+          highlighted={highlightedId === row.message.id || Boolean(row.highlighted)}
         >
           {row.taskCard ? <TaskCard {...row.taskCard} /> : null}
         </ChatMessage>
       );
     },
-    [onPressFileRef],
+    [highlightedId, onPressFileRef],
   );
   const footer = useMemo(
     () =>
@@ -222,22 +262,12 @@ export function ChatPane({
   const empty = useMemo(
     () =>
       !rows.length ? (
-        <View
-          style={{
-            flex: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 32,
-            gap: 10,
-          }}
-        >
-          <Text style={type(t.textPrimary, 22, { fontWeight: "700" })}>Start a conversation</Text>
-          <Text style={type(t.textMuted, 13, { textAlign: "center" })}>
-            Your assistant keeps its identity and memory across projects.
-          </Text>
-        </View>
+        <PavraEmptyState
+          title="No messages yet"
+          subtitle="Send a message or @mention an assistant to start collaborating."
+        />
       ) : null,
-    [rows.length, t.textMuted, t.textPrimary],
+    [rows.length],
   );
   return (
     <View style={{ flex: 1, minWidth: 0, minHeight: 0, backgroundColor: t.chatSurface }}>
@@ -245,6 +275,7 @@ export function ChatPane({
         ref={list}
         testID="chat-message-scroll"
         data={rows}
+        extraData={highlightedId}
         keyExtractor={keyExtractor}
         renderItem={renderRow}
         ListFooterComponent={footer}
@@ -257,6 +288,23 @@ export function ChatPane({
         contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 12, flexGrow: 1 }}
         scrollEventThrottle={100}
         onContentSizeChange={followContent}
+        onScrollToIndexFailed={(info) => {
+          const offset = Math.max(0, info.averageItemLength * info.index);
+          list.current?.scrollToOffset({ offset, animated: true });
+          setTimeout(() => {
+            if (info.index < rows.length) {
+              try {
+                list.current?.scrollToIndex({
+                  index: info.index,
+                  animated: true,
+                  viewPosition: 0.3,
+                });
+              } catch {
+                // Ignore secondary scrollToIndex failure if item is still unmeasured
+              }
+            }
+          }, 100);
+        }}
         onScroll={({ nativeEvent: e }) => {
           atBottom.current =
             e.contentSize.height - e.layoutMeasurement.height - e.contentOffset.y < 80;

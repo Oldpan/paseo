@@ -5,6 +5,8 @@ import { Platform, ActivityIndicator, Image, Pressable, Text, View } from "react
 import * as DocumentPicker from "expo-document-picker";
 import { File as ExpoFile } from "expo-file-system";
 import * as LegacyFileSystem from "expo-file-system/legacy";
+import * as ImagePicker from "expo-image-picker";
+import { Image as LucideImage } from "lucide-react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { PaperclipIcon, SendIcon, StopIcon } from "./icons";
 import { bubbleShadow, ctrlShadow, text as type, webTransition } from "./theme";
@@ -26,18 +28,26 @@ import {
   formatMessageWithAttachments,
   readPickedFile,
   readPickedNativeAsset,
+  readPickedNativeImageAsset,
+  extractClipboardImageFiles,
+  type ClipboardPasteDataLike,
   type NativeAssetFileReader,
   type PendingAttachment,
   type PickedNativeAsset,
+  type PickedNativeImageAsset,
 } from "./slashCommands";
 
 export {
   formatMessageWithAttachments,
   readPickedFile,
   readPickedNativeAsset,
+  readPickedNativeImageAsset,
+  extractClipboardImageFiles,
+  type ClipboardPasteDataLike,
   type NativeAssetFileReader,
   type PendingAttachment,
   type PickedNativeAsset,
+  type PickedNativeImageAsset,
 };
 
 export interface ComposerSendExtras {
@@ -121,6 +131,7 @@ export function Composer({
   const { palette: t, name } = useTheme();
   const editor = useRef<EditingTextInputHandle>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const pickingNativeRef = useRef(false);
   const [localFiles, setLocalFiles] = useState<PendingAttachment[]>([]);
   const [localUploadError, setLocalUploadError] = useState("");
@@ -258,6 +269,33 @@ export function Composer({
     setLocalFiles((current) => [...current, ...items]);
   }
 
+  const pasteFilesRef = useRef(handlePickedFiles);
+  pasteFilesRef.current = handlePickedFiles;
+
+  useEffect(() => {
+    if (!isWeb) return;
+    const inputEl = editor.current?.getNativeRef() as HTMLElement | null;
+    const targetEl =
+      (inputEl?.closest?.("[data-testid='chat-composer']") as HTMLElement | null) ??
+      inputEl ??
+      (typeof document !== "undefined"
+        ? (document.querySelector("[data-testid='chat-composer']") as HTMLElement | null)
+        : null);
+    if (!targetEl || typeof targetEl.addEventListener !== "function") return;
+    const onPaste = (event: Event) => {
+      if (locked || uploading) return;
+      const clipboardData = (event as ClipboardEvent).clipboardData;
+      const imageFiles = extractClipboardImageFiles(clipboardData);
+      if (imageFiles.length === 0) return;
+      event.preventDefault();
+      void pasteFilesRef.current(imageFiles);
+    };
+    targetEl.addEventListener("paste", onPaste);
+    return () => {
+      targetEl.removeEventListener("paste", onPaste);
+    };
+  }, [locked, uploading]);
+
   async function handlePickNativeDocuments() {
     if (pickingNativeRef.current || locked || uploading) return;
     pickingNativeRef.current = true;
@@ -281,6 +319,31 @@ export function Composer({
     }
   }
 
+  async function handlePickNativeImages() {
+    if (pickingNativeRef.current || locked || uploading) return;
+    pickingNativeRef.current = true;
+    setLocalUploadError("");
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        base64: true,
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const items = await Promise.all(
+        result.assets.map((asset, index) =>
+          readPickedNativeImageAsset(asset, index, defaultNativeAssetFileReader),
+        ),
+      );
+      setLocalFiles((current) => [...current, ...items]);
+    } catch (err) {
+      setLocalUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      pickingNativeRef.current = false;
+    }
+  }
+
   function handleRemoveAttachment(localId: string) {
     setLocalFiles((current) => current.filter((item) => item.localId !== localId));
     onRemovePending(localId);
@@ -293,6 +356,14 @@ export function Composer({
       return;
     }
     void handlePickNativeDocuments();
+  }
+
+  function handleAttachImagePress() {
+    if (isWeb) {
+      imageInputRef.current?.click();
+      return;
+    }
+    void handlePickNativeImages();
   }
 
   function submit() {
@@ -393,21 +464,38 @@ export function Composer({
       }}
     >
       {isWeb ? (
-        <input
-          ref={fileInputRef}
-          data-testid="composer-file-input"
-          type="file"
-          multiple
-          accept="image/*,.txt,.md,.json,.ts,.tsx,.py"
-          style={{ display: "none" }}
-          onChange={(event) => {
-            const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
-            event.currentTarget.value = "";
-            if (files.length > 0) {
-              void handlePickedFiles(files);
-            }
-          }}
-        />
+        <>
+          <input
+            ref={fileInputRef}
+            data-testid="composer-file-input"
+            type="file"
+            multiple
+            accept="image/*,.txt,.md,.json,.ts,.tsx,.py"
+            style={{ display: "none" }}
+            onChange={(event) => {
+              const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+              event.currentTarget.value = "";
+              if (files.length > 0) {
+                void handlePickedFiles(files);
+              }
+            }}
+          />
+          <input
+            ref={imageInputRef}
+            data-testid="composer-image-input"
+            type="file"
+            multiple
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(event) => {
+              const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+              event.currentTarget.value = "";
+              if (files.length > 0) {
+                void handlePickedFiles(files);
+              }
+            }}
+          />
+        </>
       ) : null}
       {allPendingFiles.length ? (
         <View
@@ -676,6 +764,38 @@ export function Composer({
             }}
           >
             <PaperclipIcon color={t.textPrimary} size={phone ? 16 : 12} />
+          </Pressable>
+          <Pressable
+            testID="attach-image"
+            role="button"
+            accessibilityLabel="Attach image"
+            hitSlop={8}
+            disabled={locked || uploading}
+            onPress={handleAttachImagePress}
+            style={(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              return [
+                {
+                  width: phone ? 36 : 26,
+                  height: phone ? 36 : 26,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor:
+                    hovered && !locked && !uploading ? t.surfaceHover : t.surfaceElevated,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: locked || uploading ? 0.45 : 1,
+                  transform: [{ translateY: hovered && !locked && !uploading ? -2 : 0 }],
+                  ...webTransition(
+                    "transform 100ms cubic-bezier(0.4,0,0.2,1), background-color 100ms",
+                  ),
+                },
+                ctrlShadow(t, name),
+              ];
+            }}
+          >
+            <LucideImage color={t.textPrimary} size={phone ? 16 : 12} strokeWidth={2} aria-hidden />
           </Pressable>
           {footerAction}
         </View>
