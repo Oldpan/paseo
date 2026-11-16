@@ -94,10 +94,12 @@ export function StudioBar({
   const activeColumnObj = columns.find((col) => studioKey(col) === active);
 
   useEffect(() => {
-    if (activeColumnObj?.group) {
+    if (storeActiveGroup) {
+      setSelectedGroup(storeActiveGroup);
+    } else if (activeColumnObj?.group) {
       setSelectedGroup(activeColumnObj.group);
     }
-  }, [activeColumnObj?.group]);
+  }, [activeColumnObj?.group, storeActiveGroup]);
 
   const currentGroup = resolveCurrentStudioGroup({
     activeGroupProp,

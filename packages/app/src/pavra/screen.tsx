@@ -20,7 +20,7 @@ import {
 } from "../../../../extensions/pavra/shared/contracts";
 import { useAssistantMachines, usePavraData, useMachines, type PavraData } from "./data";
 import { deriveInboxState } from "./inbox";
-import { resolveDefaultChatId, resolveDefaultCoordinatorId } from "./model";
+import { resolveDefaultChatId, resolveDefaultCoordinatorId, studioKey } from "./model";
 import { taskIdOfThread, taskTitle } from "./task-view";
 import { usePavraTitle } from "./title";
 import { CoordinatorNotice } from "./coordinator-notice";
@@ -294,6 +294,10 @@ export function PavraScreen() {
     [openForm],
   );
   const showWorkspaces = useCallback(() => {
+    const view = usePavraView.getState();
+    const activeCol = view.columns.find((col) => studioKey(col) === view.activeColumn);
+    const currentStudioGroup = view.activeGroup ?? activeCol?.group;
+    if (currentStudioGroup) setGroup(currentStudioGroup);
     setForm("workspaces");
     setSidebarOpen(false);
   }, []);

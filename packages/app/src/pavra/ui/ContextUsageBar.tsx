@@ -1,8 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useShallow } from "zustand/shallow";
 import type { AgentUsage } from "@getpaseo/protocol/agent-types";
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
+import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import type { Assistant, Turn } from "../../../../../extensions/pavra/shared/contracts";
 import {
   type ContextUsageMetrics,
@@ -164,6 +166,40 @@ export function useAssistantContextUsage(params: {
       }),
     [turns, assistant?.id, assistant?.serverId, conversationId, threadId, coordinatorId],
   );
+
+  const latestTurnStatus = useMemo(() => {
+    if (!execution) return null;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      if (turns[index]?.agentId === execution.agentId) return turns[index]?.status ?? null;
+    }
+    return null;
+  }, [execution, turns]);
+
+  const hasClient = useSessionStore((state) =>
+    Boolean(execution && state.sessions[execution.serverId]?.client),
+  );
+
+  useEffect(() => {
+    if (!execution || !hasClient) return;
+    const client = getHostRuntimeStore().getClient(execution.serverId);
+    if (!client) return;
+    let cancelled = false;
+    void client
+      .fetchAgent({ agentId: execution.agentId })
+      .then((result) => {
+        if (!cancelled && result?.agent) {
+          getHostRuntimeStore().acceptAgentSnapshot(
+            execution.serverId,
+            normalizeAgentSnapshot(result.agent, execution.serverId),
+          );
+        }
+        return null;
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
+  }, [execution, hasClient, latestTurnStatus]);
 
   return useSessionStore(
     useShallow((state) => {
