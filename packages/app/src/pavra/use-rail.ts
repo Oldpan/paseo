@@ -9,6 +9,9 @@ import { usePavraApkUpdaterStore } from "./use-pavra-apk-updater";
 const MAIN_AREA: Partial<Record<RailItem, "chat" | "studio">> = {
   chat: "chat",
   inbox: "chat",
+  tasks: "chat",
+  activity: "chat",
+  saved: "chat",
   studio: "studio",
 };
 

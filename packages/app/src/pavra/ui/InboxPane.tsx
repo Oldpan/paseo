@@ -1,6 +1,7 @@
 import { randomUUID } from "expo-crypto";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { useRetainedPanelActive } from "@/components/retained-panel";
 import {
   cancelTakeover,
   cancelTask,
@@ -24,19 +25,21 @@ import type {
   InboxSuggestionItem,
   InboxUpcomingItem,
 } from "../inbox";
+import { filterSavedMessages } from "../saved-messages";
 import { BrowserTakeoverModal, TakeoverCard } from "./BrowserTakeoverModal";
 import { HeaderIconButton } from "./ChatChrome";
 import { MenuIcon } from "./icons";
+import { SavedMessagesPane } from "./SavedMessagesPane";
 import { ctrlShadow, selectedFillProps, text as type, webTransition, type Palette } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
-type InboxFilter = "all" | "needs_action" | "activity" | "upcoming" | "suggestions";
+type InboxFilter = "all" | "needs_action" | "activity" | "upcoming" | "suggestions" | "saved";
 
 export interface InboxPaneProps {
-  data: Pick<PavraData, "call" | "connected">;
+  data: Pick<PavraData, "call" | "connected"> & Partial<Pick<PavraData, "state">>;
   inbox: InboxState;
   compact?: boolean;
-  onOpenConversation(conversationId: string, threadId: string | null): void;
+  onOpenConversation(conversationId: string, threadId: string | null, messageId?: string): void;
   onOpenTask(task: Task): void;
   onOpenTurn(turn: Turn): void;
   onSidebar?(): void;
@@ -243,6 +246,7 @@ export function InboxPane({
   onSidebar,
 }: InboxPaneProps) {
   const { palette: t, name } = useTheme();
+  const panelActive = useRetainedPanelActive();
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -359,12 +363,25 @@ export function InboxPane({
     [data, runAction],
   );
 
+  const savedCount = useMemo(
+    () =>
+      data.state
+        ? filterSavedMessages({
+            messages: data.state.messages,
+            conversations: data.state.conversations,
+            assistants: data.state.assistants,
+          }).length
+        : 0,
+    [data.state],
+  );
+
   const filters: Array<{ id: InboxFilter; label: string }> = [
     { id: "all", label: "All" },
     { id: "needs_action", label: `Needs action (${inbox.needsAction.length})` },
     { id: "activity", label: `Activity (${inbox.recentActivity.length})` },
     { id: "upcoming", label: `Upcoming (${inbox.upcoming.length})` },
     { id: "suggestions", label: `Suggestions (${inbox.suggestions.length})` },
+    { id: "saved", label: `Saved (${savedCount})` },
   ];
 
   const showNeedsAction = filter === "all" || filter === "needs_action";
@@ -487,98 +504,108 @@ export function InboxPane({
         </View>
       ) : null}
 
-      <ScrollView
-        style={{ flex: 1, minHeight: 0 }}
-        contentContainerStyle={{ padding: 16, gap: 16 }}
-      >
-        {showNeedsAction ? (
-          <SectionFrame
-            testID="inbox-section-needs-action"
-            title="Needs your action · 待你处理"
-            count={inbox.needsAction.length}
-            emptyText="Nothing waiting on you right now."
-          >
-            {inbox.needsAction.map((item) => (
-              <NeedsActionCard
-                key={item.id}
-                item={item}
-                busyKey={busyKey}
-                onRespondPermission={handleRespondPermission}
-                onCancelTurn={handleCancelTurn}
-                onContinueBudgetTask={handleContinueBudgetTask}
-                onOpenTakeover={handleOpenTakeover}
-                onResolveTakeover={handleResolveTakeover}
-                onCancelTakeover={handleCancelTakeover}
-                onOpenConversation={onOpenConversation}
-                onOpenTask={onOpenTask}
-                onOpenTurn={onOpenTurn}
-              />
-            ))}
-          </SectionFrame>
-        ) : null}
+      {filter === "saved" && data.state && panelActive ? (
+        <SavedMessagesPane
+          data={{ state: data.state, call: data.call, connected: data.connected }}
+          compact={compact}
+          embedded
+          onJumpToMessage={onOpenConversation}
+          onSidebar={onSidebar}
+        />
+      ) : (
+        <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
+          contentContainerStyle={{ padding: 16, gap: 16 }}
+        >
+          {showNeedsAction ? (
+            <SectionFrame
+              testID="inbox-section-needs-action"
+              title="Needs your action · 待你处理"
+              count={inbox.needsAction.length}
+              emptyText="Nothing waiting on you right now."
+            >
+              {inbox.needsAction.map((item) => (
+                <NeedsActionCard
+                  key={item.id}
+                  item={item}
+                  busyKey={busyKey}
+                  onRespondPermission={handleRespondPermission}
+                  onCancelTurn={handleCancelTurn}
+                  onContinueBudgetTask={handleContinueBudgetTask}
+                  onOpenTakeover={handleOpenTakeover}
+                  onResolveTakeover={handleResolveTakeover}
+                  onCancelTakeover={handleCancelTakeover}
+                  onOpenConversation={onOpenConversation}
+                  onOpenTask={onOpenTask}
+                  onOpenTurn={onOpenTurn}
+                />
+              ))}
+            </SectionFrame>
+          ) : null}
 
-        {showActivity ? (
-          <SectionFrame
-            testID="inbox-section-recent-activity"
-            title="Recent activity · 最近动态"
-            count={inbox.recentActivity.length}
-            emptyText="No recent routine runs or task receipts yet."
-          >
-            {inbox.recentActivity.map((item) => (
-              <RecentActivityCard
-                key={item.id}
-                item={item}
-                onOpenConversation={onOpenConversation}
-                onOpenTask={onOpenTask}
-              />
-            ))}
-          </SectionFrame>
-        ) : null}
+          {showActivity ? (
+            <SectionFrame
+              testID="inbox-section-recent-activity"
+              title="Recent activity · 最近动态"
+              count={inbox.recentActivity.length}
+              emptyText="No recent routine runs or task receipts yet."
+            >
+              {inbox.recentActivity.map((item) => (
+                <RecentActivityCard
+                  key={item.id}
+                  item={item}
+                  onOpenConversation={onOpenConversation}
+                  onOpenTask={onOpenTask}
+                />
+              ))}
+            </SectionFrame>
+          ) : null}
 
-        {showUpcoming ? (
-          <SectionFrame
-            testID="inbox-section-upcoming"
-            title="Upcoming · 即将运行"
-            count={inbox.upcoming.length}
-            emptyText="No active routines or reminders scheduled."
-          >
-            {inbox.upcoming.map((item) => (
-              <UpcomingRoutineCard
-                key={item.id}
-                item={item}
-                busyKey={busyKey}
-                onRunNow={handleRunRoutine}
-                onPause={handlePauseRoutine}
-                onOpenConversation={onOpenConversation}
-              />
-            ))}
-          </SectionFrame>
-        ) : null}
+          {showUpcoming ? (
+            <SectionFrame
+              testID="inbox-section-upcoming"
+              title="Upcoming · 即将运行"
+              count={inbox.upcoming.length}
+              emptyText="No active routines or reminders scheduled."
+            >
+              {inbox.upcoming.map((item) => (
+                <UpcomingRoutineCard
+                  key={item.id}
+                  item={item}
+                  busyKey={busyKey}
+                  onRunNow={handleRunRoutine}
+                  onPause={handlePauseRoutine}
+                  onOpenConversation={onOpenConversation}
+                />
+              ))}
+            </SectionFrame>
+          ) : null}
 
-        {showSuggestions ? (
-          <SectionFrame
-            testID="inbox-section-suggestions"
-            title="Suggestions · 建议"
-            count={inbox.suggestions.length}
-            emptyText="No stale tasks, failed turns, or paused routines found in the ledger."
-          >
-            {inbox.suggestions.map((item) => (
-              <SuggestionCard
-                key={item.id}
-                item={item}
-                busyKey={busyKey}
-                onCancelTask={handleCancelTask}
-                onResumeRoutine={handleResumeRoutine}
-                onDeleteRoutine={handleDeleteRoutine}
-                onRunRoutine={handleRunRoutine}
-                onPauseRoutine={handlePauseRoutine}
-                onOpenConversation={onOpenConversation}
-                onOpenTurn={onOpenTurn}
-              />
-            ))}
-          </SectionFrame>
-        ) : null}
-      </ScrollView>
+          {showSuggestions ? (
+            <SectionFrame
+              testID="inbox-section-suggestions"
+              title="Suggestions · 建议"
+              count={inbox.suggestions.length}
+              emptyText="No stale tasks, failed turns, or paused routines found in the ledger."
+            >
+              {inbox.suggestions.map((item) => (
+                <SuggestionCard
+                  key={item.id}
+                  item={item}
+                  busyKey={busyKey}
+                  onCancelTask={handleCancelTask}
+                  onResumeRoutine={handleResumeRoutine}
+                  onDeleteRoutine={handleDeleteRoutine}
+                  onRunRoutine={handleRunRoutine}
+                  onPauseRoutine={handlePauseRoutine}
+                  onOpenConversation={onOpenConversation}
+                  onOpenTurn={onOpenTurn}
+                />
+              ))}
+            </SectionFrame>
+          ) : null}
+        </ScrollView>
+      )}
       {activeTakeover ? (
         <BrowserTakeoverModal
           takeover={activeTakeover.takeover}

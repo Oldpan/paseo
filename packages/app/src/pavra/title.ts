@@ -9,6 +9,9 @@ function formatPavraTitle(
 ): string {
   if (mode === "studio") return "Studio · Pavra";
   if (section === "inbox") return "Inbox · Pavra";
+  if (section === "tasks") return "Tasks · Pavra";
+  if (section === "activity") return "Activity · Pavra";
+  if (section === "saved") return "Saved · Pavra";
   return `${label ?? "Chat"} · Pavra`;
 }
 

@@ -19,9 +19,10 @@ import {
   type Turn,
 } from "../../../../extensions/pavra/shared/contracts";
 import { useAssistantMachines, usePavraData, useMachines, type PavraData } from "./data";
+import { buildGlobalActivitySnapshot } from "./activity-watch";
 import { deriveInboxState } from "./inbox";
 import { resolveDefaultChatId, resolveDefaultCoordinatorId, studioKey } from "./model";
-import { taskIdOfThread, taskTitle } from "./task-view";
+import { taskIdOfThread, taskThreadId, taskTitle } from "./task-view";
 import { usePavraTitle } from "./title";
 import { CoordinatorNotice } from "./coordinator-notice";
 import { usePavraView, type SidebarSection } from "./store";
@@ -35,7 +36,10 @@ import { PavraTheme, usePavraDark } from "./ui/ThemeProvider";
 import { AnimatedDrawer } from "./ui/AnimatedDrawer";
 import { AssistantSheet } from "./ui/AssistantSheet";
 import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
+import { GlobalActivityPane } from "./ui/GlobalActivityPane";
+import { GlobalTasksPane } from "./ui/GlobalTasksPane";
 import { InboxPane } from "./ui/InboxPane";
+import { SavedMessagesPane } from "./ui/SavedMessagesPane";
 import { Sidebar } from "./ui/Sidebar";
 import {
   isAndroidApkUpdateSupported,
@@ -66,7 +70,15 @@ const DISMISS_TEXT = { fontSize: 12, marginLeft: 8 } as const;
 
 // Option value for "no default responder": a plain message then goes to the first member.
 const NO_DEFAULT_RESPONDER = "first";
-const VALID_SECTIONS = new Set<SidebarSection>(["chat", "inbox", "members", "search"]);
+const VALID_SECTIONS = new Set<SidebarSection>([
+  "chat",
+  "inbox",
+  "tasks",
+  "activity",
+  "saved",
+  "members",
+  "search",
+]);
 
 function usePavraUrlLocationSync(viewHydrated: boolean) {
   const searchParams = useLocalSearchParams<{
@@ -177,8 +189,17 @@ function resolveActivePavraPanels(
 ) {
   const hasCoordinator = Boolean(coordinatorId);
   return {
-    chatActive: mode === "chat" && section !== "inbox" && hasCoordinator,
+    chatActive:
+      mode === "chat" &&
+      section !== "inbox" &&
+      section !== "tasks" &&
+      section !== "activity" &&
+      section !== "saved" &&
+      hasCoordinator,
     inboxActive: mode === "chat" && section === "inbox" && hasCoordinator,
+    tasksActive: mode === "chat" && section === "tasks" && hasCoordinator,
+    activityActive: mode === "chat" && section === "activity" && hasCoordinator,
+    savedActive: mode === "chat" && section === "saved" && hasCoordinator,
     studioActive: mode === "studio",
   };
 }
@@ -233,6 +254,8 @@ export function PavraScreen() {
   const [group, setGroup] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [processTurnId, setProcessTurnId] = useState<string | null>(null);
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
+  const clearFocusMessage = useCallback(() => setFocusMessageId(null), []);
   const closeProcessDrawer = useCallback(() => setProcessTurnId(null), []);
   const dismissError = useCallback(() => setError(null), []);
   const errorBannerStyle = useMemo(
@@ -457,11 +480,22 @@ export function PavraScreen() {
     [changeChat],
   );
   const openInboxConversation = useCallback(
-    (targetChatId: string, targetThreadId: string | null) => {
+    (targetChatId: string, targetThreadId: string | null, targetMessageId?: string) => {
       selectChat(targetChatId);
       usePavraView.getState().setThread(targetThreadId);
+      if (targetMessageId) setFocusMessageId(targetMessageId);
     },
     [selectChat],
+  );
+  const openTaskDetails = useCallback(
+    (task: Task) => {
+      if (task.execution) {
+        openTask(task);
+        return;
+      }
+      openInboxConversation(task.conversationId, taskThreadId(task.id));
+    },
+    [openInboxConversation, openTask],
   );
   const editAssistant = useCallback(
     (id: string) => {
@@ -592,6 +626,10 @@ export function PavraScreen() {
     [directoryMachines, hosts],
   );
   const inboxState = useMemo(() => deriveInboxState(data.state), [data.state]);
+  const activitySnapshot = useMemo(
+    () => buildGlobalActivitySnapshot({ state: data.state, coordinatorId, hostLabels }),
+    [coordinatorId, data.state, hostLabels],
+  );
   const processTurn = useMemo(
     () =>
       mode === "chat" && processTurnId
@@ -620,6 +658,7 @@ export function PavraScreen() {
     messages: data.state.messages,
     hostLabels,
     inboxBadge: inboxState.needsAction.length,
+    activityBadge: activitySnapshot.activeRunCount,
     inboxState,
     onSelect: selectChat,
     onAssistant: showAssistant,
@@ -668,6 +707,9 @@ export function PavraScreen() {
                   data={data}
                   palette={palette}
                   hostLabels={hostLabels}
+                  focusMessageId={focusMessageId}
+                  onFocusMessage={setFocusMessageId}
+                  onFocusMessageHandled={clearFocusMessage}
                   onTask={showTask}
                   onOpenTask={openTask}
                   onOpenTurn={openTurn}
@@ -683,10 +725,47 @@ export function PavraScreen() {
                   inbox={inboxState}
                   compact={compact}
                   onOpenConversation={openInboxConversation}
-                  onOpenTask={openTask}
+                  onOpenTask={openTaskDetails}
                   onOpenTurn={openTurn}
                   onSidebar={compact ? showSidebar : undefined}
                 />
+              </RetainedPanel>
+              <RetainedPanel active={panels.tasksActive}>
+                <GlobalTasksPane
+                  data={data}
+                  machines={directoryMachines}
+                  hostLabels={hostLabels}
+                  activeConversationId={chatId}
+                  compact={compact}
+                  onOpenTask={openTaskDetails}
+                  onOpenChat={openInboxConversation}
+                  onOpenInStudio={openTask}
+                  onCreateTask={showTask}
+                  onSidebar={compact ? showSidebar : undefined}
+                />
+              </RetainedPanel>
+              <RetainedPanel active={panels.activityActive}>
+                <GlobalActivityPane
+                  data={data}
+                  coordinatorId={coordinatorId}
+                  hostLabels={hostLabels}
+                  machines={directoryMachines}
+                  compact={compact}
+                  onOpenConversation={openInboxConversation}
+                  onOpenTurn={openTurn}
+                  onOpenTask={openTaskDetails}
+                  onSidebar={compact ? showSidebar : undefined}
+                />
+              </RetainedPanel>
+              <RetainedPanel active={panels.savedActive}>
+                {panels.savedActive ? (
+                  <SavedMessagesPane
+                    data={data}
+                    compact={compact}
+                    onJumpToMessage={openInboxConversation}
+                    onSidebar={compact ? showSidebar : undefined}
+                  />
+                ) : null}
               </RetainedPanel>
               <RetainedPanel active={panels.studioActive}>
                 <Studio

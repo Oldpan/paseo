@@ -51,7 +51,8 @@ import type { Palette } from "./palette";
 import { AnimatedDrawer, usePresenceId } from "./ui/AnimatedDrawer";
 import { BrowserTakeoverModal, TakeoverCard } from "./ui/BrowserTakeoverModal";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
-import { ChatPane, MemoryPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
+import { ChatPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
+import { MemoryNotesSection } from "./ui/MemoryNotesSection";
 import type { ComposerSendExtras } from "./ui/Composer";
 import { ContextUsageBar, useAssistantContextUsage } from "./ui/ContextUsageBar";
 import type { ParsedFileRef } from "./ui/fileRefParser";
@@ -71,7 +72,6 @@ import { TaskCard, type TaskCardActions } from "./ui/TaskChrome";
 import { LiveTurnItem } from "./live-turn-item";
 import { buildTurnLineage, openExchanges } from "./peer-activity";
 import { PeerActivity } from "./ui/PeerActivity";
-import { useAssistantMemory } from "./memory";
 import { useAssistantPlaybooks } from "./playbooks";
 import { formatMessageRoutineBadge, useAssistantRoutines } from "./routines";
 import { isNoteMessage, sortMessages } from "./model";
@@ -102,6 +102,9 @@ interface ChatProps {
   data: PavraData;
   palette: Palette;
   hostLabels?: Record<string, string>;
+  focusMessageId?: string | null;
+  onFocusMessage?(messageId: string): void;
+  onFocusMessageHandled?(): void;
   onTask(initialPrompt?: string): void;
   onOpenTask(task: Task): void;
   onOpenTurn(turn: Turn): void;
@@ -418,6 +421,33 @@ function CompactThreadDrawer({
   );
 }
 
+function useFocusMessageState(
+  externalFocusId: string | null | undefined,
+  onFocusMessage: ((messageId: string) => void) | undefined,
+  onFocusMessageHandled: (() => void) | undefined,
+  onSetTab: (tab: string) => void,
+) {
+  const [localFocusMessageId, setLocalFocusMessageId] = useState<string | null>(null);
+  const focusMessageId = externalFocusId ?? localFocusMessageId;
+  const handleFocusMessage = useCallback(
+    (messageId: string) => {
+      setLocalFocusMessageId(messageId);
+      onFocusMessage?.(messageId);
+    },
+    [onFocusMessage],
+  );
+  const handleFocusMessageHandled = useCallback(() => {
+    setLocalFocusMessageId(null);
+    onFocusMessageHandled?.();
+  }, [onFocusMessageHandled]);
+  useEffect(() => {
+    if (focusMessageId) {
+      onSetTab("chat");
+    }
+  }, [focusMessageId, onSetTab]);
+  return { focusMessageId, handleFocusMessage, handleFocusMessageHandled };
+}
+
 export function PavraChat(props: ChatProps) {
   const { data, palette, onEditAssistant, onSidebar } = props;
   const compact = useIsCompactFormFactor();
@@ -430,6 +460,16 @@ export function PavraChat(props: ChatProps) {
   const [containerWidth, setContainerWidth] = useState(0);
   const [tab, setTab] = useState("chat");
   const [searchOpen, setSearchOpen] = useState(false);
+  const {
+    focusMessageId: effectiveFocusMessageId,
+    handleFocusMessage,
+    handleFocusMessageHandled,
+  } = useFocusMessageState(
+    props.focusMessageId,
+    props.onFocusMessage,
+    props.onFocusMessageHandled,
+    setTab,
+  );
   const openSearch = useCallback(() => setSearchOpen(true), []);
   const closeSearch = useCallback(() => setSearchOpen(false), []);
   const toggleSearch = useCallback(() => setSearchOpen((prev) => !prev), []);
@@ -500,6 +540,8 @@ export function PavraChat(props: ChatProps) {
     <ConversationPane
       key={renderedThreadId}
       {...props}
+      focusMessageId={effectiveFocusMessageId}
+      onFocusMessageHandled={handleFocusMessageHandled}
       threadId={renderedThreadId}
       phone={compact}
       roundtable={activeRoundtable}
@@ -527,6 +569,8 @@ export function PavraChat(props: ChatProps) {
           <ConversationPane
             key="root"
             {...props}
+            focusMessageId={effectiveFocusMessageId}
+            onFocusMessageHandled={handleFocusMessageHandled}
             threadId={null}
             phone={compact}
             roundtable={null}
@@ -578,6 +622,7 @@ export function PavraChat(props: ChatProps) {
         chatId={chatId}
         hostLabels={props.hostLabels}
         onSetTab={setTab}
+        onFocusMessage={handleFocusMessage}
         onOpenTask={props.onOpenTask}
         onOpenAssistant={props.onOpenAssistant}
       />
@@ -594,6 +639,7 @@ function PavraGlobalSearchHost({
   chatId,
   hostLabels,
   onSetTab,
+  onFocusMessage,
   onOpenTask,
   onOpenAssistant,
 }: {
@@ -605,16 +651,18 @@ function PavraGlobalSearchHost({
   chatId: string;
   hostLabels?: Record<string, string>;
   onSetTab(tab: string): void;
+  onFocusMessage(messageId: string): void;
   onOpenTask(task: Task): void;
   onOpenAssistant?(assistantId: string): void;
 }) {
   const handleSelectConversation = useCallback(
-    (targetConversationId: string, _messageId?: string, targetThreadId?: string | null) => {
+    (targetConversationId: string, messageId?: string, targetThreadId?: string | null) => {
       usePavraView.getState().selectChat(targetConversationId);
       usePavraView.getState().setThread(targetThreadId ?? null);
       onSetTab("chat");
+      if (messageId) onFocusMessage(messageId);
     },
-    [onSetTab],
+    [onFocusMessage, onSetTab],
   );
   const handleSelectTask = useCallback(
     (targetConversationId: string, targetTaskId: string) => {
@@ -717,21 +765,8 @@ function MemoryTab({
   assistant?: Assistant;
   onEdit?(): void;
 }) {
-  const memory = useAssistantMemory(data, assistant?.id);
   return (
-    <MemoryPane
-      assistant={assistant}
-      content={memory.content}
-      editorKey={memory.editorKey}
-      loading={memory.loading}
-      saving={memory.saving}
-      dirty={memory.dirty}
-      error={memory.error}
-      onChange={memory.change}
-      onSave={memory.save}
-      onReload={memory.reload}
-      onEdit={assistant ? onEdit : undefined}
-    />
+    <MemoryNotesSection data={data} assistant={assistant} onEdit={assistant ? onEdit : undefined} />
   );
 }
 function PlaybooksTab({ data, assistant }: { data: PavraData; assistant?: Assistant }) {
@@ -783,6 +818,8 @@ function RoutinesTab({
 }
 function ConversationPane({
   data,
+  focusMessageId,
+  onFocusMessageHandled,
   onTask,
   onOpenTurn,
   threadId,
@@ -1388,6 +1425,8 @@ function ConversationPane({
         onStop={stopPress}
         cancelling={cancelling}
         contextUsageBar={contextUsageBarNode}
+        focusMessageId={focusMessageId}
+        onFocusMessageHandled={onFocusMessageHandled}
       />
       <ConversationActionModals
         data={data}

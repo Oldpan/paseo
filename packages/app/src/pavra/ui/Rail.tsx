@@ -4,7 +4,16 @@ import type { ReactNode } from "react";
 import { Image, Pressable, View } from "react-native";
 import { CalendarClock, CircleGauge, History, Inbox } from "lucide-react-native";
 import type { RailItem } from "../rail";
-import { BoxesIcon, ChatIcon, SearchIcon, SettingsIcon, UsersIcon } from "./icons";
+import {
+  ActivityIcon,
+  BookmarkIcon,
+  BoxesIcon,
+  BriefcaseIcon,
+  ChatIcon,
+  SearchIcon,
+  SettingsIcon,
+  UsersIcon,
+} from "./icons";
 import { RailNavButton } from "./SidebarControls";
 import { useTheme } from "./ThemeProvider";
 
@@ -16,6 +25,13 @@ interface RailEntry {
 const ENTRIES: RailEntry[] = [
   { item: "chat", label: "Chat", icon: (color) => <ChatIcon color={color} size={20} /> },
   { item: "inbox", label: "Inbox", icon: (color) => <Inbox color={color} size={20} /> },
+  { item: "tasks", label: "Tasks", icon: (color) => <BriefcaseIcon color={color} size={20} /> },
+  {
+    item: "activity",
+    label: "Activity",
+    icon: (color) => <ActivityIcon color={color} size={20} />,
+  },
+  { item: "saved", label: "Saved", icon: (color) => <BookmarkIcon color={color} size={20} /> },
   { item: "members", label: "Member", icon: (color) => <UsersIcon color={color} size={20} /> },
   {
     item: "search",
@@ -34,6 +50,7 @@ const ENTRIES: RailEntry[] = [
 export function Rail({
   active,
   inboxBadge,
+  activityBadge,
   settingsBadge,
   settingsActive = false,
   onSelect,
@@ -43,6 +60,7 @@ export function Rail({
 }: {
   active: RailItem | null;
   inboxBadge?: number;
+  activityBadge?: number;
   settingsBadge?: number;
   settingsActive?: boolean;
   onSelect(item: RailItem): void;
@@ -91,7 +109,12 @@ export function Rail({
       <View style={{ gap: 6, alignItems: "center", paddingVertical: 4 }}>
         {expand}
         {ENTRIES.map((entry) => {
-          const badge = entry.item === "inbox" ? inboxBadge : undefined;
+          const badge =
+            entry.item === "inbox"
+              ? inboxBadge
+              : entry.item === "activity"
+                ? activityBadge
+                : undefined;
           return (
             <RailNavButton
               key={entry.item}

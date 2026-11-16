@@ -17,7 +17,14 @@ import {
   THREAD_DEFAULT_WIDTH,
 } from "./panel-resize";
 
-export type SidebarSection = "chat" | "inbox" | "members" | "search";
+export type SidebarSection =
+  | "chat"
+  | "inbox"
+  | "tasks"
+  | "activity"
+  | "saved"
+  | "members"
+  | "search";
 
 interface PavraViewState {
   coordinatorId: string;
@@ -77,7 +84,13 @@ export const usePavraView = create<PavraViewState>()(
           chatId,
           threadId: null,
           mode: "chat",
-          section: state.section === "inbox" ? "chat" : state.section,
+          section:
+            state.section === "inbox" ||
+            state.section === "tasks" ||
+            state.section === "activity" ||
+            state.section === "saved"
+              ? "chat"
+              : state.section,
         })),
       setMode: (mode) => set({ mode }),
       setSection: (section) => set({ section, sidebarCollapsed: false }),

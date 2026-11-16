@@ -46,6 +46,9 @@ const COMPACT_SIDEBAR_WIDTH = 290;
 const SIDEBAR_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 const SECTION_TITLES: Record<string, string> = {
   inbox: "Inbox",
+  tasks: "Tasks",
+  activity: "Activity",
+  saved: "Saved",
   members: "Member",
   search: "Search",
   chat: "Chat",
@@ -63,6 +66,7 @@ interface SidebarProps {
   messages: Message[];
   hostLabels: Record<string, string>;
   inboxBadge?: number;
+  activityBadge?: number;
   inboxState?: InboxState;
   onSelect(id: string): void;
   onAssistant(): void;
@@ -85,7 +89,15 @@ export function Sidebar(props: SidebarProps) {
 
   const select = (item: RailItem) => {
     rail.select(item);
-    if (item === "chat" || item === "inbox" || item === "members" || item === "search") {
+    if (
+      item === "chat" ||
+      item === "inbox" ||
+      item === "tasks" ||
+      item === "activity" ||
+      item === "saved" ||
+      item === "members" ||
+      item === "search"
+    ) {
       setCollapsed(false);
     }
   };
@@ -140,6 +152,7 @@ export function Sidebar(props: SidebarProps) {
       <Rail
         active={rail.active}
         inboxBadge={props.inboxBadge}
+        activityBadge={props.activityBadge}
         settingsBadge={hasApkUpdate ? 1 : undefined}
         onSelect={select}
         onUsage={openUsage}

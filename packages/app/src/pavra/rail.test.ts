@@ -11,6 +11,9 @@ describe("railActive", () => {
     expect(railActive("/pavra", "studio", "search")).toBe("studio");
     expect(railActive("/pavra", "chat", "search")).toBe("search");
     expect(railActive("/pavra", "chat", "inbox")).toBe("inbox");
+    expect(railActive("/pavra", "chat", "tasks")).toBe("tasks");
+    expect(railActive("/pavra", "chat", "activity")).toBe("activity");
+    expect(railActive("/pavra", "chat", "saved")).toBe("saved");
     expect(railActive("/pavra", "chat", "chat")).toBe("chat");
   });
 
@@ -25,6 +28,9 @@ describe("isPageItem", () => {
     expect(isPageItem("schedules")).toBe(true);
     expect(isPageItem("studio")).toBe(false);
     expect(isPageItem("inbox")).toBe(false);
+    expect(isPageItem("tasks")).toBe(false);
+    expect(isPageItem("activity")).toBe(false);
+    expect(isPageItem("saved")).toBe(false);
     expect(isPageItem("chat")).toBe(false);
   });
 });
