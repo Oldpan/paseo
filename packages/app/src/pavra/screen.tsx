@@ -39,6 +39,8 @@ import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
 import { GlobalActivityPane } from "./ui/GlobalActivityPane";
 import { GlobalTasksPane } from "./ui/GlobalTasksPane";
 import { InboxPane } from "./ui/InboxPane";
+import { PhoneControlModal } from "./ui/PhoneControlModal";
+import { PhoneFloatingMiniWindow } from "./ui/PhoneFloatingMiniWindow";
 import { SavedMessagesPane } from "./ui/SavedMessagesPane";
 import { Sidebar } from "./ui/Sidebar";
 import {
@@ -46,6 +48,7 @@ import {
   usePavraApkBackgroundCheck,
   usePavraApkUpdater,
 } from "./use-pavra-apk-updater";
+import { usePhoneControlWorker } from "./use-phone-control-worker";
 import { usePavraNotifications } from "./use-pavra-notifications";
 
 const FILL = { flex: 1, minHeight: 0, position: "relative" } as const;
@@ -209,6 +212,30 @@ function resolveActivePavraPanels(
   };
 }
 
+function usePavraPhoneControlShell(
+  data: PavraData,
+  coordinatorId: string,
+  setSidebarOpen: (open: boolean) => void,
+) {
+  const workerOptions = useMemo(
+    () => ({
+      serverId: coordinatorId,
+      data: coordinatorId ? data : undefined,
+    }),
+    [coordinatorId, data],
+  );
+  const worker = usePhoneControlWorker(workerOptions);
+  const [modalOpen, setModalOpen] = useState(false);
+  const openModal = useCallback(() => {
+    setModalOpen(true);
+    setSidebarOpen(false);
+  }, [setSidebarOpen]);
+  const closeModal = useCallback(() => {
+    setModalOpen(false);
+  }, []);
+  return { isRelay: worker.isRelay, modalOpen, openModal, closeModal };
+}
+
 export function PavraScreen() {
   const hosts = useHosts();
   const hostRegistryStatus = useHostRegistryStatus();
@@ -258,6 +285,7 @@ export function PavraScreen() {
   }, [apkUpdater]);
   const [group, setGroup] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const phoneControl = usePavraPhoneControlShell(data, coordinatorId, setSidebarOpen);
   const [processTurnId, setProcessTurnId] = useState<string | null>(null);
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   const clearFocusMessage = useCallback(() => setFocusMessageId(null), []);
@@ -721,6 +749,7 @@ export function PavraScreen() {
                   onOpenStudio={openChatStudio}
                   onEditAssistant={editAssistant}
                   onOpenAssistant={openAssistantChat}
+                  onOpenPhoneControl={phoneControl.openModal}
                   onSidebar={compact ? showSidebar : undefined}
                 />
               </RetainedPanel>
@@ -793,6 +822,7 @@ export function PavraScreen() {
                 onClose={closeProcessDrawer}
                 onOpenStudio={openTurnInStudio}
                 onSelectTask={openTask}
+                onOpenPhoneControl={phoneControl.openModal}
               />
               {showCoordinatorModal ? (
                 <CoordinatorPickerModal
@@ -825,6 +855,9 @@ export function PavraScreen() {
                 coordinatorId={coordinatorId}
                 hostLabels={hostLabels}
                 onError={setError}
+                phoneControlModalOpen={phoneControl.modalOpen}
+                onClosePhoneControlModal={phoneControl.closeModal}
+                phoneIsRelay={phoneControl.isRelay}
               />
             </View>
             <AnimatedDrawer
@@ -836,6 +869,7 @@ export function PavraScreen() {
             >
               <Sidebar {...sidebarProps} />
             </AnimatedDrawer>
+            <PhoneFloatingMiniWindow />
           </View>
         </View>
       </UsageSidebarRoot>
@@ -863,6 +897,9 @@ interface FormHostProps {
   coordinatorId?: string;
   hostLabels?: Record<string, string>;
   onError?(error: string | null): void;
+  phoneControlModalOpen?: boolean;
+  onClosePhoneControlModal?(): void;
+  phoneIsRelay?: boolean;
 }
 function FormHost({
   form,
@@ -884,9 +921,15 @@ function FormHost({
   coordinatorId,
   hostLabels,
   onError,
+  phoneControlModalOpen,
+  onClosePhoneControlModal,
+  phoneIsRelay,
 }: FormHostProps) {
   return (
     <>
+      {phoneControlModalOpen && onClosePhoneControlModal ? (
+        <PhoneControlModal onClose={onClosePhoneControlModal} data={data} isRelay={phoneIsRelay} />
+      ) : null}
       {form === "assistant" && data ? (
         <AssistantSheet
           key={editing ?? "new-assistant"}

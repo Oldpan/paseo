@@ -2,9 +2,11 @@ import { isWeb } from "@/constants/platform";
 // Presentation extracted/adapted from Bigbang Chat.tsx MessageRow and header.
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
 import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
+import { Smartphone } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 import type { ForwardedFrom } from "../../../../../extensions/pavra/shared/contracts";
 import { formatForwardedBadge } from "../chat-actions";
+import { usePhoneControlStore } from "../phone-control";
 import { AgentAvatar, StatusDot, UserAvatar } from "./avatars";
 import { shouldCollapseLongMessage } from "./EmptyState";
 import type { ParsedFileRef } from "./fileRefParser";
@@ -110,6 +112,94 @@ export function StudioButton({ label, onPress }: { label: string; onPress(): voi
   );
 }
 
+export function PhoneControlHeaderButton({ onPress }: { onPress(): void }) {
+  const { palette: t, name } = useTheme();
+  const enabled = usePhoneControlStore((state) => state.enabled);
+  const active = usePhoneControlStore((state) => Boolean(state.liveExecution?.active));
+  let iconColor = t.textSecondary;
+  if (active) {
+    iconColor = t.onAccent;
+  } else if (enabled) {
+    iconColor = t.success;
+  }
+  return (
+    <Pressable
+      testID="chat-header-phone-control-btn"
+      role="button"
+      accessibilityLabel="Phone control"
+      onPress={onPress}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        let bg = t.surfaceElevated;
+        if (active) {
+          bg = hovered ? t.brandAccentHover : t.brandAccent;
+        } else if (hovered) {
+          bg = t.surfaceHover;
+        }
+        return [
+          {
+            height: 32,
+            paddingHorizontal: 10,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: t.retroBorder,
+            backgroundColor: bg,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            transform: [{ translateY: hovered ? -1 : 0 }],
+            ...webTransition("transform 120ms ease, background-color 120ms ease"),
+          },
+          ctrlShadow(t, name),
+        ];
+      }}
+    >
+      <Smartphone color={iconColor} size={13} strokeWidth={2} aria-hidden />
+      <Text style={type(active ? t.onAccent : t.textSecondary, 11, { fontWeight: "600" })}>
+        Phone
+      </Text>
+    </Pressable>
+  );
+}
+
+function ChatHeaderTrailingActions({
+  label,
+  onOpenSearch,
+  onOpenPhoneControl,
+  onOpenStudio,
+  onEdit,
+}: {
+  label: string;
+  onOpenSearch?: () => void;
+  onOpenPhoneControl?: () => void;
+  onOpenStudio?: () => void;
+  onEdit?: () => void;
+}) {
+  const { palette: t } = useTheme();
+  const hasAny = Boolean(onOpenSearch || onOpenPhoneControl || onOpenStudio || onEdit);
+  if (!hasAny) return null;
+  return (
+    <>
+      <View
+        style={{
+          width: 1,
+          height: 18,
+          backgroundColor: t.dividerLine,
+          marginHorizontal: 2,
+        }}
+      />
+      {onOpenSearch ? <GlobalSearchButton onPress={onOpenSearch} /> : null}
+      {onOpenPhoneControl ? <PhoneControlHeaderButton onPress={onOpenPhoneControl} /> : null}
+      {onOpenStudio ? <StudioButton label="Open in Studio" onPress={onOpenStudio} /> : null}
+      {onEdit ? (
+        <HeaderIconButton label={`Edit ${label}`} onPress={onEdit} size={32}>
+          <SettingsIcon color={t.textSecondary} size={15} />
+        </HeaderIconButton>
+      ) : null}
+    </>
+  );
+}
+
 export function ChatHeader({
   label,
   seed,
@@ -122,6 +212,7 @@ export function ChatHeader({
   onEdit,
   onOpenStudio,
   onOpenSearch,
+  onOpenPhoneControl,
 }: {
   label: string;
   seed: string;
@@ -134,6 +225,7 @@ export function ChatHeader({
   onEdit?: () => void;
   onOpenStudio?: () => void;
   onOpenSearch?: () => void;
+  onOpenPhoneControl?: () => void;
 }) {
   const { palette: t, name } = useTheme();
   const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
@@ -277,23 +369,13 @@ export function ChatHeader({
               </Pressable>
             );
           })}
-          {onOpenSearch || onOpenStudio || onEdit ? (
-            <View
-              style={{
-                width: 1,
-                height: 18,
-                backgroundColor: t.dividerLine,
-                marginHorizontal: 2,
-              }}
-            />
-          ) : null}
-          {onOpenSearch ? <GlobalSearchButton onPress={onOpenSearch} /> : null}
-          {onOpenStudio ? <StudioButton label="Open in Studio" onPress={onOpenStudio} /> : null}
-          {onEdit ? (
-            <HeaderIconButton label={`Edit ${label}`} onPress={onEdit} size={32}>
-              <SettingsIcon color={t.textSecondary} size={15} />
-            </HeaderIconButton>
-          ) : null}
+          <ChatHeaderTrailingActions
+            label={label}
+            onOpenSearch={onOpenSearch}
+            onOpenPhoneControl={onOpenPhoneControl}
+            onOpenStudio={onOpenStudio}
+            onEdit={onEdit}
+          />
         </View>
       </View>
     </View>

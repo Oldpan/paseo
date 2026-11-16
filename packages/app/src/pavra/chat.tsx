@@ -30,16 +30,20 @@ import {
   cancelTakeover,
   cancelTask,
   cancelTurn,
+  phoneConfigureDevice,
+  phoneGetLiveState,
   resolveTakeover,
   respondTaskPermission,
   type Assistant,
   type Message,
+  type PhoneLiveState,
   type Takeover,
   type Task,
   type Turn,
 } from "../../../../extensions/pavra/shared/contracts";
 import { buildSaveMessageRequest, isMessageSaved } from "./chat-actions";
 import type { PavraData } from "./data";
+import { usePhoneControlStore, type PhoneLiveExecution } from "./phone-control";
 import {
   clampThreadWidth,
   maxAllowedThreadWidth,
@@ -64,6 +68,7 @@ import {
 import { ForwardMessageModal } from "./ui/ForwardMessageModal";
 import { GlobalSearchModal } from "./ui/GlobalSearchModal";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
+import { PhoneLiveCard } from "./ui/PhoneLiveCard";
 import { PortPreviewModal, type PortPreviewTarget } from "./ui/PortPreviewModal";
 import { PromoteToTaskModal } from "./ui/PromoteToTaskModal";
 import { SavePlaybookModal } from "./ui/SavePlaybookModal";
@@ -111,6 +116,7 @@ interface ChatProps {
   onOpenStudio?(conversationId: string, threadId: string | null): void;
   onEditAssistant(id: string): void;
   onOpenAssistant?(assistantId: string): void;
+  onOpenPhoneControl?(): void;
   onSidebar?(): void;
 }
 /** What task cards and receipt rows need from the screen: navigation and the task RPCs. */
@@ -564,6 +570,7 @@ export function PavraChat(props: ChatProps) {
           onEdit={editHandler}
           onOpenStudio={onOpenStudioRootProp}
           onOpenSearch={openSearch}
+          onOpenPhoneControl={props.onOpenPhoneControl}
         />
         {tab === "chat" ? (
           <ConversationPane
@@ -816,12 +823,302 @@ function RoutinesTab({
     />
   );
 }
+function resolveLiveStateLabels(live: PhoneLiveState) {
+  const latestStep = live.recentSteps[live.recentSteps.length - 1];
+  return {
+    assistantName: live.activeAssistantName ?? latestStep?.assistantName ?? "Assistant",
+    appName: live.appName ?? latestStep?.appName ?? "Android App",
+    packageName: live.packageName ?? latestStep?.packageName ?? "com.tencent.mm",
+    stepText:
+      latestStep?.label ?? live.latestObservation?.summary ?? "Operating background display…",
+    stepIndex: latestStep?.step ?? live.recentSteps.length,
+  };
+}
+
+function toPhoneExecutionFromLiveState(live: PhoneLiveState | null): PhoneLiveExecution | null {
+  if (!live || !live.active) return null;
+  const labels = resolveLiveStateLabels(live);
+  return {
+    active: true,
+    ...labels,
+    screenshotBase64: live.screenshotBase64 ?? live.screenshotDataUrl ?? null,
+    lastTapX: live.lastTapX,
+    lastTapY: live.lastTapY,
+    screenWidth: live.screenWidth || 1080,
+    screenHeight: live.screenHeight || 2400,
+    history: live.recentSteps.slice(-10).map((s, idx) => ({
+      step: s.step || idx + 1,
+      label: s.label,
+      timestamp: s.timestamp,
+    })),
+  };
+}
+
+function syncMiniWindowFromLiveOrTakeover(
+  execution: PhoneLiveExecution | null,
+  takeover: Takeover | null,
+  fallbackAssistantName: string,
+): void {
+  const store = usePhoneControlStore.getState();
+  if (execution?.active) {
+    store.setLiveExecution(execution);
+  } else if (!store.liveExecution?.active && takeover?.screenshotDataUrl) {
+    store.updateLiveExecution({
+      active: true,
+      assistantName: fallbackAssistantName,
+      appName: takeover.appName ?? takeover.title ?? "Android App",
+      packageName: takeover.packageName ?? takeover.url ?? "com.tencent.mm",
+      stepText: takeover.reason,
+      screenshotBase64: takeover.screenshotDataUrl,
+    });
+  }
+  store.setOverlayMode("mini_window");
+}
+
+function syncCoordinatorTakeoverFlag(
+  data: Pick<PavraData, "invoke">,
+  deviceId: string | null | undefined,
+): void {
+  const store = usePhoneControlStore.getState();
+  const targetDeviceId = deviceId ?? store.deviceId;
+  if (!targetDeviceId) return;
+  void data
+    .invoke(phoneConfigureDevice, {
+      deviceId: targetDeviceId,
+      onMainScreenTakeover: store.onMainScreenTakeover,
+    })
+    .catch(() => undefined);
+}
+
+function useChatPhoneLiveSession(
+  data: PavraData,
+  chatId: string,
+  threadId: string | null,
+  hasLiveTurns: boolean,
+  laneTakeovers: readonly Takeover[],
+) {
+  const storeExecution = usePhoneControlStore((state) => state.liveExecution);
+  const [remoteLive, setRemoteLive] = useState<PhoneLiveState | null>(null);
+  const shouldPollRemote = hasLiveTurns && !storeExecution?.active && Boolean(data.connected);
+
+  useEffect(() => {
+    if (!shouldPollRemote) {
+      setRemoteLive(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await data.invoke(phoneGetLiveState, { conversationId: chatId });
+        if (!cancelled) setRemoteLive(next);
+      } catch {
+        // Ignore transient live_state errors.
+      }
+    };
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [chatId, data, shouldPollRemote]);
+
+  const remoteExecution = useMemo(() => toPhoneExecutionFromLiveState(remoteLive), [remoteLive]);
+  const activeExecution = storeExecution?.active ? storeExecution : remoteExecution;
+  const hasPendingPhoneTakeover = laneTakeovers.some((item) => item.kind === "phone");
+  const showLivePhoneCard =
+    threadId === null && !hasPendingPhoneTakeover && Boolean(activeExecution?.active);
+
+  return {
+    activeExecution,
+    remoteDisplayId: remoteLive?.displayId ?? null,
+    remoteDeviceId: remoteLive?.activeDeviceId ?? null,
+    showLivePhoneCard,
+  };
+}
+
+function LanePhoneTakeoverRow({
+  takeover,
+  phoneCardIndex,
+  execution,
+  assistantName,
+  conversationName,
+  busy,
+  data,
+  onResolve,
+  onCancel,
+  onOpenSettings,
+}: {
+  takeover: Takeover;
+  phoneCardIndex: number;
+  execution: PhoneLiveExecution | null;
+  assistantName: string;
+  conversationName?: string;
+  busy: boolean;
+  data: PavraData;
+  onResolve(id: string): void;
+  onCancel(id: string): void;
+  onOpenSettings?(): void;
+}) {
+  const normalizedTakeover = useMemo(
+    () => ({
+      ...takeover,
+      url: takeover.url ?? takeover.packageName ?? null,
+      title: takeover.title ?? takeover.appName ?? null,
+    }),
+    [takeover],
+  );
+  const handleOpenMiniWindow = useCallback(() => {
+    syncMiniWindowFromLiveOrTakeover(execution, normalizedTakeover, assistantName);
+  }, [assistantName, execution, normalizedTakeover]);
+  const handleTakeover = useCallback(() => {
+    syncCoordinatorTakeoverFlag(data, takeover.deviceId);
+  }, [data, takeover.deviceId]);
+  const resolvedTestId =
+    phoneCardIndex === 0 ? "phone-live-card" : `phone-live-card-${takeover.id}`;
+
+  return (
+    <PhoneLiveCard
+      testID={resolvedTestId}
+      takeover={normalizedTakeover}
+      execution={execution ?? undefined}
+      assistantName={assistantName}
+      conversationName={conversationName}
+      displayId={takeover.displayId ?? undefined}
+      busy={busy}
+      onOpenMiniWindow={handleOpenMiniWindow}
+      onTakeover={handleTakeover}
+      onResolveTakeover={onResolve}
+      onCancelTakeover={onCancel}
+      onOpenSettings={onOpenSettings}
+    />
+  );
+}
+
+function ActivePhoneExecutionRow({
+  execution,
+  displayId,
+  deviceId,
+  conversationName,
+  data,
+  onOpenSettings,
+}: {
+  execution: PhoneLiveExecution;
+  displayId: number | null;
+  deviceId: string | null;
+  conversationName?: string;
+  data: PavraData;
+  onOpenSettings?(): void;
+}) {
+  const handleOpenMiniWindow = useCallback(() => {
+    syncMiniWindowFromLiveOrTakeover(execution, null, execution.assistantName);
+  }, [execution]);
+  const handleTakeover = useCallback(() => {
+    syncCoordinatorTakeoverFlag(data, deviceId);
+  }, [data, deviceId]);
+
+  return (
+    <PhoneLiveCard
+      testID="phone-live-card"
+      execution={execution}
+      assistantName={execution.assistantName}
+      conversationName={conversationName}
+      displayId={displayId ?? undefined}
+      onOpenMiniWindow={handleOpenMiniWindow}
+      onTakeover={handleTakeover}
+      onOpenSettings={onOpenSettings}
+    />
+  );
+}
+
+function LaneTakeoversSection({
+  laneTakeovers,
+  assistantsById,
+  takeoverBusyId,
+  conversationName,
+  data,
+  activeExecution,
+  remoteDisplayId,
+  remoteDeviceId,
+  showLivePhoneCard,
+  onOpenTakeover,
+  onResolve,
+  onCancel,
+  onOpenPhoneControl,
+}: {
+  laneTakeovers: readonly Takeover[];
+  assistantsById: ReadonlyMap<string, Assistant>;
+  takeoverBusyId: string | null;
+  conversationName?: string;
+  data: PavraData;
+  activeExecution: PhoneLiveExecution | null;
+  remoteDisplayId: number | null;
+  remoteDeviceId: string | null;
+  showLivePhoneCard: boolean;
+  onOpenTakeover(takeover: Takeover): void;
+  onResolve(id: string): void;
+  onCancel(id: string): void;
+  onOpenPhoneControl?(): void;
+}) {
+  let phoneIndex = 0;
+  return (
+    <View style={TAKEOVERS_CONTAINER}>
+      {laneTakeovers.map((item) => {
+        const assistantName = assistantsById.get(item.assistantId)?.name ?? "Assistant";
+        if (item.kind === "phone") {
+          const currentIndex = phoneIndex;
+          phoneIndex += 1;
+          return (
+            <LanePhoneTakeoverRow
+              key={item.id}
+              takeover={item}
+              phoneCardIndex={currentIndex}
+              execution={activeExecution}
+              assistantName={assistantName}
+              conversationName={conversationName}
+              busy={takeoverBusyId === item.id}
+              data={data}
+              onResolve={onResolve}
+              onCancel={onCancel}
+              onOpenSettings={onOpenPhoneControl}
+            />
+          );
+        }
+        return (
+          <TakeoverCard
+            key={item.id}
+            takeover={item}
+            assistantName={assistantName}
+            busy={takeoverBusyId === item.id}
+            onOpenTakeover={onOpenTakeover}
+            onResolve={onResolve}
+            onCancel={onCancel}
+          />
+        );
+      })}
+      {showLivePhoneCard && activeExecution ? (
+        <ActivePhoneExecutionRow
+          execution={activeExecution}
+          displayId={remoteDisplayId}
+          deviceId={remoteDeviceId}
+          conversationName={conversationName}
+          data={data}
+          onOpenSettings={onOpenPhoneControl}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 function ConversationPane({
   data,
   focusMessageId,
   onFocusMessageHandled,
   onTask,
   onOpenTurn,
+  onOpenPhoneControl,
   threadId,
   phone,
   roundtable,
@@ -1282,10 +1579,15 @@ function ConversationPane({
   );
   const handleOpenTakeover = useCallback(
     (takeover: Takeover) => {
+      if (takeover.kind === "phone") {
+        usePhoneControlStore.getState().setOnMainScreenTakeover(true);
+        syncCoordinatorTakeoverFlag(data, takeover.deviceId);
+        return;
+      }
       const assistantName = assistantsById.get(takeover.assistantId)?.name ?? "Assistant";
       setActiveTakeover({ takeover, assistantName });
     },
-    [assistantsById],
+    [assistantsById, data],
   );
   const handleResolveTakeoverPress = useCallback(
     (id: string) => {
@@ -1302,32 +1604,47 @@ function ConversationPane({
   const closeTakeoverModal = useCallback(() => {
     setActiveTakeover(null);
   }, []);
+  const phoneSession = useChatPhoneLiveSession(
+    data,
+    chatId,
+    threadId,
+    turns.length > 0,
+    laneTakeovers,
+  );
+  const hasTakeoversOrPhone = laneTakeovers.length > 0 || phoneSession.showLivePhoneCard;
   const takeoversNode = useMemo(
     () =>
-      laneTakeovers.length > 0 ? (
-        <View style={TAKEOVERS_CONTAINER}>
-          {laneTakeovers.map((item) => {
-            const assistantName = assistantsById.get(item.assistantId)?.name ?? "Assistant";
-            return (
-              <TakeoverCard
-                key={item.id}
-                takeover={item}
-                assistantName={assistantName}
-                busy={takeoverBusyId === item.id}
-                onOpenTakeover={handleOpenTakeover}
-                onResolve={handleResolveTakeoverPress}
-                onCancel={handleCancelTakeoverPress}
-              />
-            );
-          })}
-        </View>
+      hasTakeoversOrPhone ? (
+        <LaneTakeoversSection
+          laneTakeovers={laneTakeovers}
+          assistantsById={assistantsById}
+          takeoverBusyId={takeoverBusyId}
+          conversationName={conversation?.name}
+          data={data}
+          activeExecution={phoneSession.activeExecution}
+          remoteDisplayId={phoneSession.remoteDisplayId}
+          remoteDeviceId={phoneSession.remoteDeviceId}
+          showLivePhoneCard={phoneSession.showLivePhoneCard}
+          onOpenTakeover={handleOpenTakeover}
+          onResolve={handleResolveTakeoverPress}
+          onCancel={handleCancelTakeoverPress}
+          onOpenPhoneControl={onOpenPhoneControl}
+        />
       ) : null,
     [
       assistantsById,
+      conversation?.name,
+      data,
       handleCancelTakeoverPress,
       handleOpenTakeover,
       handleResolveTakeoverPress,
+      hasTakeoversOrPhone,
       laneTakeovers,
+      onOpenPhoneControl,
+      phoneSession.activeExecution,
+      phoneSession.remoteDeviceId,
+      phoneSession.remoteDisplayId,
+      phoneSession.showLivePhoneCard,
       takeoverBusyId,
     ],
   );
@@ -1876,7 +2193,7 @@ function ConversationActionModals({
 
   return (
     <>
-      {activeTakeover ? (
+      {activeTakeover && activeTakeover.takeover.kind !== "phone" ? (
         <BrowserTakeoverModal
           takeover={activeTakeover.takeover}
           assistantName={activeTakeover.assistantName}

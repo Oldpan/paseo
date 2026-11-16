@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { Smartphone } from "lucide-react-native";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { shallow, useShallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
@@ -10,7 +11,16 @@ import { selectAgentTimelineTurnPresentation, useSessionStore } from "@/stores/s
 import type { TurnPresentation } from "@/timeline/turn-liveness";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
-import type { Takeover, Task, Turn } from "../../../../../extensions/pavra/shared/contracts";
+import {
+  cancelTakeover,
+  phoneConfigureDevice,
+  phoneGetLiveState,
+  resolveTakeover,
+  type PhoneLiveState,
+  type Takeover,
+  type Task,
+  type Turn,
+} from "../../../../../extensions/pavra/shared/contracts";
 import type { PavraData } from "../data";
 import {
   selectLiveTurn,
@@ -27,6 +37,7 @@ import {
   type TaskSummary,
   type TurnLineage,
 } from "../peer-activity";
+import { usePhoneControlStore, type PhoneLiveExecution } from "../phone-control";
 import { AnimatedDrawer, usePresenceId } from "./AnimatedDrawer";
 import { AgentAvatar } from "./avatars";
 import { HeaderIconButton, StudioButton } from "./ChatChrome";
@@ -38,6 +49,7 @@ import {
   MessagesSquareIcon,
   MonitorIcon,
 } from "./icons";
+import { PhoneLiveCard } from "./PhoneLiveCard";
 import { ctrlShadow, text as type, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
@@ -575,16 +587,22 @@ function TakeoverLineagePill({
   onOpenTakeover?: (takeover: Takeover) => void;
 }) {
   const { palette: t, name } = useTheme();
+  const isPhone = item.kind === "phone";
+  const canPress = Boolean(onOpenTakeover || isPhone);
   const handlePress = useCallback(() => {
+    if (isPhone) {
+      usePhoneControlStore.getState().setOverlayMode("mini_window");
+    }
     onOpenTakeover?.(item.takeover);
-  }, [item.takeover, onOpenTakeover]);
+  }, [isPhone, item.takeover, onOpenTakeover]);
   const badge = takeoverBadgeColors(item.status, t);
+  const kindLabel = isPhone ? "Phone" : "Browser";
   return (
     <Pressable
       testID={`lineage-takeover-${item.id}`}
       role="button"
-      accessibilityLabel={`Browser takeover ${item.displayLabel}, status ${item.status}`}
-      disabled={!onOpenTakeover}
+      accessibilityLabel={`${kindLabel} takeover ${item.displayLabel}, status ${item.status}`}
+      disabled={!canPress}
       onPress={handlePress}
       style={(state) => {
         const hovered = Boolean((state as { hovered?: boolean }).hovered);
@@ -592,14 +610,18 @@ function TakeoverLineagePill({
           LINEAGE_PILL,
           {
             borderColor: t.retroBorder,
-            backgroundColor: hovered && onOpenTakeover ? t.surfaceHover : t.surfaceElevated,
+            backgroundColor: hovered && canPress ? t.surfaceHover : t.surfaceElevated,
             ...webTransition("background-color 120ms ease"),
           },
           ctrlShadow(t, name),
         ];
       }}
     >
-      <MonitorIcon color={t.textSecondary} size={12} />
+      {isPhone ? (
+        <Smartphone color={t.textSecondary} size={12} strokeWidth={2} aria-hidden />
+      ) : (
+        <MonitorIcon color={t.textSecondary} size={12} />
+      )}
       <Text numberOfLines={1} style={type(t.textPrimary, 11, { fontWeight: "600", flexShrink: 1 })}>
         {item.displayLabel}
       </Text>
@@ -755,6 +777,224 @@ function deriveHeaderMetadata(input: {
   };
 }
 
+const PHONE_SECTION_WRAPPER = {
+  paddingHorizontal: 14,
+  paddingVertical: 10,
+  borderBottomWidth: 2,
+} as const;
+
+function resolveDrawerLiveLabels(live: PhoneLiveState) {
+  const latestStep = live.recentSteps[live.recentSteps.length - 1];
+  return {
+    assistantName: live.activeAssistantName ?? latestStep?.assistantName ?? "Assistant",
+    appName: live.appName ?? latestStep?.appName ?? "Android App",
+    packageName: live.packageName ?? latestStep?.packageName ?? "com.tencent.mm",
+    stepText:
+      latestStep?.label ?? live.latestObservation?.summary ?? "Operating background display…",
+    stepIndex: latestStep?.step ?? live.recentSteps.length,
+  };
+}
+
+function mapPhoneLiveStateToExecution(live: PhoneLiveState | null): PhoneLiveExecution | null {
+  if (!live || !live.active) return null;
+  const labels = resolveDrawerLiveLabels(live);
+  return {
+    active: true,
+    ...labels,
+    screenshotBase64: live.screenshotBase64 ?? live.screenshotDataUrl ?? null,
+    lastTapX: live.lastTapX,
+    lastTapY: live.lastTapY,
+    screenWidth: live.screenWidth || 1080,
+    screenHeight: live.screenHeight || 2400,
+    history: live.recentSteps.slice(-10).map((s, idx) => ({
+      step: s.step || idx + 1,
+      label: s.label,
+      timestamp: s.timestamp,
+    })),
+  };
+}
+
+function findPendingTurnPhoneTakeover(
+  activeTurn: Turn | null,
+  lineage: TurnLineage | null,
+  takeovers: readonly Takeover[] | undefined,
+): Takeover | null {
+  if (!activeTurn) return null;
+  const fromLineage = lineage?.takeovers.find(
+    (item) => item.kind === "phone" && item.status === "pending",
+  )?.takeover;
+  if (fromLineage) return fromLineage;
+  return (
+    (takeovers ?? []).find(
+      (item) => item.kind === "phone" && item.status === "pending" && item.turnId === activeTurn.id,
+    ) ?? null
+  );
+}
+
+function resolveDrawerPhoneExecution(
+  isTurnLive: boolean,
+  assistantName: string,
+  storeExecution: PhoneLiveExecution | null,
+  remoteExecution: PhoneLiveExecution | null,
+): PhoneLiveExecution | null {
+  if (storeExecution?.active) {
+    if (isTurnLive || storeExecution.assistantName === assistantName) {
+      return storeExecution;
+    }
+  }
+  return remoteExecution;
+}
+
+function TurnProcessPhoneSection({
+  open,
+  activeTurn,
+  isTurnLive,
+  assistantName,
+  lineage,
+  data,
+  onOpenPhoneControl,
+}: {
+  open: boolean;
+  activeTurn: Turn | null;
+  isTurnLive: boolean;
+  assistantName: string;
+  lineage: TurnLineage | null;
+  data: PavraData;
+  onOpenPhoneControl?: () => void;
+}) {
+  const { palette: t } = useTheme();
+  const storeExecution = usePhoneControlStore((state) => state.liveExecution);
+  const [remoteLive, setRemoteLive] = useState<PhoneLiveState | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const pendingTakeover = useMemo(
+    () => findPendingTurnPhoneTakeover(activeTurn, lineage, data.state.takeovers),
+    [activeTurn, data.state.takeovers, lineage],
+  );
+
+  const assistantId = activeTurn?.assistantId ?? null;
+  const shouldPollRemote =
+    open && isTurnLive && Boolean(assistantId) && !storeExecution?.active && data.connected;
+
+  useEffect(() => {
+    if (!shouldPollRemote || !assistantId) {
+      setRemoteLive(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await data.invoke(phoneGetLiveState, { assistantId });
+        if (!cancelled) setRemoteLive(next);
+      } catch {
+        // Ignore transient live_state errors.
+      }
+    };
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [assistantId, data, shouldPollRemote]);
+
+  const remoteExecution = useMemo(() => mapPhoneLiveStateToExecution(remoteLive), [remoteLive]);
+  const execution = resolveDrawerPhoneExecution(
+    isTurnLive,
+    assistantName,
+    storeExecution,
+    remoteExecution,
+  );
+
+  const normalizedTakeover = useMemo(
+    () =>
+      pendingTakeover
+        ? {
+            ...pendingTakeover,
+            url: pendingTakeover.url ?? pendingTakeover.packageName ?? null,
+            title: pendingTakeover.title ?? pendingTakeover.appName ?? null,
+          }
+        : null,
+    [pendingTakeover],
+  );
+
+  const handleOpenMiniWindow = useCallback(() => {
+    const store = usePhoneControlStore.getState();
+    if (execution?.active) {
+      store.setLiveExecution(execution);
+    }
+    store.setOverlayMode("mini_window");
+  }, [execution]);
+
+  const handleTakeover = useCallback(() => {
+    const store = usePhoneControlStore.getState();
+    const deviceId = pendingTakeover?.deviceId ?? remoteLive?.activeDeviceId ?? store.deviceId;
+    if (!deviceId) return;
+    void data
+      .invoke(phoneConfigureDevice, {
+        deviceId,
+        onMainScreenTakeover: store.onMainScreenTakeover,
+      })
+      .catch(() => undefined);
+  }, [data, pendingTakeover?.deviceId, remoteLive?.activeDeviceId]);
+
+  const handleResolve = useCallback(
+    (takeoverId: string) => {
+      setBusy(true);
+      void data
+        .call(resolveTakeover, { id: takeoverId })
+        .catch(() => undefined)
+        .finally(() => {
+          setBusy(false);
+        });
+    },
+    [data],
+  );
+
+  const handleCancel = useCallback(
+    (takeoverId: string) => {
+      setBusy(true);
+      void data
+        .call(cancelTakeover, { id: takeoverId })
+        .catch(() => undefined)
+        .finally(() => {
+          setBusy(false);
+        });
+    },
+    [data],
+  );
+
+  if (!normalizedTakeover && !execution?.active) return null;
+
+  return (
+    <View
+      style={[
+        PHONE_SECTION_WRAPPER,
+        {
+          backgroundColor: t.surfacePrimary,
+          borderBottomColor: t.black,
+        },
+      ]}
+    >
+      <PhoneLiveCard
+        testID="turn-process-phone-live-card"
+        takeover={normalizedTakeover}
+        execution={execution ?? undefined}
+        assistantName={assistantName}
+        displayId={pendingTakeover?.displayId ?? remoteLive?.displayId ?? undefined}
+        busy={busy}
+        onOpenMiniWindow={handleOpenMiniWindow}
+        onTakeover={handleTakeover}
+        onResolveTakeover={handleResolve}
+        onCancelTakeover={handleCancel}
+        onOpenSettings={onOpenPhoneControl}
+      />
+    </View>
+  );
+}
+
 export interface TurnProcessDrawerProps {
   turn: Turn | null;
   data: PavraData;
@@ -767,8 +1007,10 @@ export interface TurnProcessDrawerProps {
   onOpenStudio(turn: Turn): void;
   /** Invoked when a spawned task pill is clicked in the Collaboration & Evidence Lineage section. */
   onSelectTask?(task: Task): void;
-  /** Invoked when a browser takeover pill is clicked in the Collaboration & Evidence Lineage section. */
+  /** Invoked when a browser/phone takeover pill is clicked in the Collaboration & Evidence Lineage section. */
   onOpenTakeover?(takeover: Takeover): void;
+  /** Opens PhoneControlModal from the drawer's live phone card. */
+  onOpenPhoneControl?(): void;
 }
 
 export function TurnProcessDrawer({
@@ -782,6 +1024,7 @@ export function TurnProcessDrawer({
   onOpenStudio,
   onSelectTask,
   onOpenTakeover,
+  onOpenPhoneControl,
 }: TurnProcessDrawerProps) {
   const { palette: t } = useTheme();
   const hosts = useHosts();
@@ -920,6 +1163,15 @@ export function TurnProcessDrawer({
           onOpenStudio={handleOpenStudio}
         />
         <TurnProcessCallouts error={activeTurn?.error} disconnectedEmpty={disconnectedEmpty} />
+        <TurnProcessPhoneSection
+          open={open}
+          activeTurn={activeTurn}
+          isTurnLive={isTurnLive}
+          assistantName={assistantName}
+          lineage={resolvedLineage}
+          data={data}
+          onOpenPhoneControl={onOpenPhoneControl}
+        />
         {resolvedLineage && resolvedLineage.hasLineage ? (
           <TurnLineageSection
             lineage={resolvedLineage}
