@@ -1002,33 +1002,45 @@ export class Coordinator {
     return this.phoneManager.reportCommandResult(input);
   }
 
+  private collectEmergencyStopTurns(
+    input: RpcInput<typeof phoneEmergencyStop>,
+    activeTurnIds: readonly string[],
+    activeAssistantIds: readonly string[],
+  ): Set<string> {
+    const turnIds = new Set<string>(activeTurnIds);
+    if (input.turnId) turnIds.add(input.turnId);
+    const deviceAssistantSet = new Set<string>(activeAssistantIds);
+    const cancelAllUnscoped =
+      !input.deviceId && !input.assistantId && !input.conversationId && !input.turnId;
+
+    for (const turn of this.store.snapshot().turns) {
+      if (turn.taskId || !LIVE.has(turn.status)) continue;
+      if (input.assistantId && turn.assistantId === input.assistantId) {
+        turnIds.add(turn.id);
+      } else if (input.conversationId && turn.conversationId === input.conversationId) {
+        turnIds.add(turn.id);
+      } else if (input.deviceId && turnIds.size === 0 && deviceAssistantSet.has(turn.assistantId)) {
+        turnIds.add(turn.id);
+      } else if (cancelAllUnscoped && turnIds.size === 0) {
+        turnIds.add(turn.id);
+      }
+    }
+    return turnIds;
+  }
+
   async phoneEmergencyStop(
     input: RpcInput<typeof phoneEmergencyStop>,
   ): Promise<RpcOutput<typeof phoneEmergencyStop>> {
-    const { cancelledCommandIds, activeTurnIds } = this.phoneManager.emergencyStop({
-      deviceId: input.deviceId,
-      reason: input.reason,
-    });
-    const turnIdsToCancel = new Set<string>(activeTurnIds);
-    if (input.turnId) {
-      turnIdsToCancel.add(input.turnId);
-    }
-    const snapshot = this.store.snapshot();
-    for (const turn of snapshot.turns) {
-      if (turn.taskId || !LIVE.has(turn.status)) continue;
-      if (input.assistantId && turn.assistantId === input.assistantId) {
-        turnIdsToCancel.add(turn.id);
-      } else if (input.conversationId && turn.conversationId === input.conversationId) {
-        turnIdsToCancel.add(turn.id);
-      } else if (
-        turnIdsToCancel.size === 0 &&
-        !input.assistantId &&
-        !input.conversationId &&
-        !input.turnId
-      ) {
-        turnIdsToCancel.add(turn.id);
-      }
-    }
+    const { cancelledCommandIds, activeTurnIds, activeAssistantIds } =
+      this.phoneManager.emergencyStop({
+        deviceId: input.deviceId,
+        reason: input.reason,
+      });
+    const turnIdsToCancel = this.collectEmergencyStopTurns(
+      input,
+      activeTurnIds,
+      activeAssistantIds,
+    );
 
     const cancelledTurnIds: string[] = [];
     for (const turnId of turnIdsToCancel) {
@@ -1067,6 +1079,10 @@ export class Coordinator {
   phoneGetLiveState(
     input?: RpcInput<typeof phoneGetLiveState>,
   ): RpcOutput<typeof phoneGetLiveState> {
+    this.phoneManager.pruneInactiveTurns((turnId) => {
+      const turn = this.store.get("turns", turnId);
+      return Boolean(turn && LIVE.has(turn.status));
+    });
     const live = this.phoneManager.getLiveState(input);
     if (live.active) return live;
     const pending = (this.store.snapshot().takeovers ?? []).findLast(
@@ -1618,12 +1634,14 @@ export class Coordinator {
         ...(input.quoteOf ? { quoteOf: input.quoteOf } : {}),
         ...(input.forwardedFrom ? { forwardedFrom: input.forwardedFrom } : {}),
       });
-      for (const previous of superseded)
+      for (const previous of superseded) {
+        this.phoneManager.clearTurn(previous.id);
         this.store.put("turns", {
           ...previous,
           status: "cancelled",
           error: SUPERSEDED,
         });
+      }
       // Peer messages waiting for a batch belong to the conversation this message just replaced.
       this.store.clearInbox(conversation.id, input.threadId);
       if (followupTask) this.queueFollowup(followupTask, message);
@@ -1913,6 +1931,7 @@ export class Coordinator {
       status: "cancelled",
       error: null,
     };
+    this.phoneManager.clearTurn(turn.id);
     this.store.transaction(() => {
       this.store.put("turns", cancelled);
       this.settleRoutineTurn({ ...cancelled, error: "Cancelled" }, "");
@@ -2044,6 +2063,7 @@ export class Coordinator {
   }
   // A turn ended outside the settle path: the roundtable moves on to its next speaker.
   private afterTurn(turn: Turn): void {
+    this.phoneManager.clearTurn(turn.id);
     // A failed dispatch is retried by the sweep, not here, so a host that is down is not hammered.
     if (turn.routineId && turn.status === "failed")
       this.store.transaction(() => this.settleRoutineTurn(turn, ""));
@@ -2188,6 +2208,7 @@ export class Coordinator {
         ...(final ? { finalMessageId: final.id } : {}),
       };
       this.store.put("turns", settled);
+      this.phoneManager.clearTurn(turn.id);
       this.settleRoutineTurn(settled, text);
       this.mailbox.turnEnded(settled, text);
       // What the assistant said may wake others; what the roundtable does next depends on it.
@@ -2365,6 +2386,7 @@ export class Coordinator {
       if ("agentId" in target) {
         const failed: Turn = { ...target, status: "failed", error };
         this.store.put("turns", failed);
+        this.phoneManager.clearTurn(target.id);
         this.settleRoutineTurn(failed, "");
         this.mailbox.turnEnded(failed, "");
         if (target.epochId) this.roundtable.advance(target.epochId);

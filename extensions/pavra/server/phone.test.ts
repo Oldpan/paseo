@@ -669,4 +669,55 @@ describe("Coordinator Phone Control 14-Tool Suite, Long-Poll Queue & Takeover Li
     expect(stopInput.deviceId).toBe("pavra-android-local");
     mgr.close();
   });
+
+  it("clears phoneGetLiveState().active when a phone turn completes normally and scopes deviceId emergency_stop to that device", async () => {
+    const ctx = setupCoordinator();
+    await ctx.coordinator.idle();
+    const skyTurn = ctx.store.snapshot().turns[0]!;
+
+    ctx.coordinator.phoneRegisterDevice({
+      deviceId: "pixel-active-test",
+      deviceName: "Pixel Active Test",
+      mode: "virtual",
+    });
+    ctx.coordinator.phoneRegisterDevice({
+      deviceId: "idle-secondary-phone",
+      deviceName: "Secondary Idle Phone",
+      mode: "virtual",
+    });
+
+    await callPhoneAgentTool(ctx.coordinator, { agentId: skyTurn.agentId }, "phone_observe", {
+      device: "pixel-active-test",
+    });
+
+    // During the live turn, live_state.active is true for pixel-active-test
+    const duringTurn = ctx.coordinator.phoneGetLiveState({ deviceId: "pixel-active-test" });
+    expect(duringTurn.active).toBe(true);
+    expect(duringTurn.activeTurnId).toBe(skyTurn.id);
+
+    // Emergency stop on an unrelated idle phone does NOT cancel Sky's live turn!
+    const unrelatedStop = await ctx.coordinator.phoneEmergencyStop({
+      deviceId: "idle-secondary-phone",
+      reason: "Idle device test stop",
+    });
+    expect(unrelatedStop.cancelledTurnIds).toEqual([]);
+    expect(ctx.store.get("turns", skyTurn.id)?.status).toBe("running");
+
+    // Finish Sky's turn normally (no pending takeover) -> live_state.active transitions back to false!
+    ctx.execution.say(skyTurn.agentId, "Battery and home screen look healthy.");
+    ctx.execution.finish(skyTurn.agentId);
+    ctx.coordinator.onTurnEnded({
+      agent: { id: skyTurn.agentId },
+      outcome: { kind: "completed" },
+    });
+    await ctx.coordinator.idle();
+
+    expect(ctx.store.get("turns", skyTurn.id)?.status).toBe("completed");
+    const afterTurn = ctx.coordinator.phoneGetLiveState({ deviceId: "pixel-active-test" });
+    expect(afterTurn.active).toBe(false);
+    expect(afterTurn.activeTurnId).toBeNull();
+
+    await ctx.coordinator.close();
+    ctx.store.close();
+  });
 });

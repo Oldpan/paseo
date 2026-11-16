@@ -1413,32 +1413,51 @@ export class AssistantPhoneManager {
     return { accepted: true, duplicate: false };
   }
 
+  clearTurn(turnId: string): void {
+    for (const record of this.devices.values()) {
+      if (record.activeTurnId !== turnId) continue;
+      record.activeTurnId = null;
+      if (!record.device.onMainScreenTakeover) {
+        record.activeAssistantId = null;
+        record.activeAssistantName = null;
+      }
+    }
+  }
+
+  pruneInactiveTurns(isTurnLive: (turnId: string) => boolean): void {
+    for (const record of this.devices.values()) {
+      if (!record.activeTurnId || isTurnLive(record.activeTurnId)) continue;
+      record.activeTurnId = null;
+      if (!record.device.onMainScreenTakeover) {
+        record.activeAssistantId = null;
+        record.activeAssistantName = null;
+      }
+    }
+  }
+
   emergencyStop(input: { deviceId?: string; reason?: string }): {
     cancelledCommandIds: string[];
     activeTurnIds: string[];
+    activeAssistantIds: string[];
   } {
     const reason = input.reason?.trim() || "Emergency stop triggered on phone.";
     const cancelledCommandIds: string[] = [];
     const activeTurnIds = new Set<string>();
+    const activeAssistantIds = new Set<string>();
     const targets = input.deviceId
       ? [this.devices.get(input.deviceId)].filter((x): x is DeviceRuntimeRecord => Boolean(x))
       : [...this.devices.values()];
 
     for (const record of targets) {
       if (record.activeTurnId) activeTurnIds.add(record.activeTurnId);
-      for (const entry of record.queue.splice(0)) {
-        clearTimeout(entry.timer);
-        cancelledCommandIds.push(entry.command.commandId);
-        if (entry.command.turnId) activeTurnIds.add(entry.command.turnId);
-        entry.reject(new Error(reason));
-      }
-      for (const [commandId, entry] of record.inFlight) {
-        clearTimeout(entry.timer);
-        record.inFlight.delete(commandId);
-        cancelledCommandIds.push(commandId);
-        if (entry.command.turnId) activeTurnIds.add(entry.command.turnId);
-        entry.reject(new Error(reason));
-      }
+      if (record.activeAssistantId) activeAssistantIds.add(record.activeAssistantId);
+      this.drainRecordCommandsForStop(
+        record,
+        reason,
+        cancelledCommandIds,
+        activeTurnIds,
+        activeAssistantIds,
+      );
       for (const waiter of record.pollWaiters) {
         waiter.resolve({ command: null });
       }
@@ -1457,7 +1476,32 @@ export class AssistantPhoneManager {
     return {
       cancelledCommandIds,
       activeTurnIds: [...activeTurnIds],
+      activeAssistantIds: [...activeAssistantIds],
     };
+  }
+
+  private drainRecordCommandsForStop(
+    record: DeviceRuntimeRecord,
+    reason: string,
+    cancelledCommandIds: string[],
+    activeTurnIds: Set<string>,
+    activeAssistantIds: Set<string>,
+  ): void {
+    for (const entry of record.queue.splice(0)) {
+      clearTimeout(entry.timer);
+      cancelledCommandIds.push(entry.command.commandId);
+      if (entry.command.turnId) activeTurnIds.add(entry.command.turnId);
+      if (entry.command.assistantId) activeAssistantIds.add(entry.command.assistantId);
+      entry.reject(new Error(reason));
+    }
+    for (const [commandId, entry] of record.inFlight) {
+      clearTimeout(entry.timer);
+      record.inFlight.delete(commandId);
+      cancelledCommandIds.push(commandId);
+      if (entry.command.turnId) activeTurnIds.add(entry.command.turnId);
+      if (entry.command.assistantId) activeAssistantIds.add(entry.command.assistantId);
+      entry.reject(new Error(reason));
+    }
   }
 
   private pickLiveStateTarget(
