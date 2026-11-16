@@ -103,23 +103,37 @@ export interface PhoneUiElementNode {
 
 export type PhoneDisplayActionInput =
   | {
+      type: "launch_app";
+      packageName: string;
+      unlocked?: boolean;
+      includeScreenshot?: boolean;
+      maxLongEdge?: number;
+      quality?: number;
+    }
+  | {
+      type: "list_apps";
+    }
+  | {
       type: "tap";
       x?: number;
       y?: number;
       elementId?: string;
       ref?: string;
+      unlocked?: boolean;
     }
   | {
       type: "type";
       text: string;
       submit?: boolean;
       elementId?: string;
+      unlocked?: boolean;
     }
   | {
       type: "scroll";
       direction?: "up" | "down" | "left" | "right";
       distance?: number;
       durationMs?: number;
+      unlocked?: boolean;
     }
   | {
       type: "swipe";
@@ -128,9 +142,11 @@ export type PhoneDisplayActionInput =
       endX: number;
       endY: number;
       durationMs?: number;
+      unlocked?: boolean;
     }
   | {
       type: "back";
+      unlocked?: boolean;
     }
   | {
       type: "intent";
@@ -138,6 +154,7 @@ export type PhoneDisplayActionInput =
       dataUri?: string;
       packageName?: string;
       extras?: Record<string, string | number | boolean>;
+      unlocked?: boolean;
     }
   | {
       type: "clipboard";
@@ -149,6 +166,7 @@ export type PhoneDisplayActionInput =
       includeScreenshot?: boolean;
       maxLongEdge?: number;
       quality?: number;
+      unlocked?: boolean;
     };
 
 export interface PhoneDisplayActionResult {
@@ -177,6 +195,7 @@ export interface PhoneDisplayActionResult {
   screenHeight?: number;
   capturedAt?: number;
   elements?: PhoneUiElementNode[];
+  apps?: InstalledPhoneApp[];
   screenshotBase64?: string | null;
   mimeType?: string | null;
   mode?: string;
@@ -259,7 +278,7 @@ export interface NativePhoneBridge {
   ensureVirtualDisplay(width?: number, height?: number, dpi?: number): Promise<VirtualDisplayInfo>;
   releaseVirtualDisplay(): Promise<boolean>;
   captureFrameJpegBase64(maxLongEdge?: number, quality?: number): Promise<PhoneFrameCaptureResult>;
-  launchAppOnVirtualDisplay(packageName: string): Promise<boolean>;
+  launchAppOnVirtualDisplay(packageName: string, unlocked?: boolean): Promise<boolean>;
   moveAppToMainScreenForTakeover(packageName: string): Promise<boolean>;
   returnAppToVirtualDisplay(packageName: string): Promise<boolean>;
   executeDisplayAction(action: PhoneDisplayActionInput): Promise<PhoneDisplayActionResult>;
@@ -298,6 +317,50 @@ const MINIMAL_VALID_JPEG_BASE64 =
 const SIX_DIGITS_RE = /^\d{6}$/;
 const CODE_PORT_RE = /^(\d{6})\s*[:\s]\s*(\d{1,5})$/;
 const HOST_PORT_CODE_RE = /^([A-Za-z0-9._-]+):(\d{1,5})\s*[:\s]\s*(\d{6})$/;
+
+const HARD_BLOCKED_PACKAGES = new Set([
+  "com.icbc",
+  "com.chinamworld.main",
+  "com.cmbchina.ccd.pluto.cmbactivity",
+  "com.abchina.ebank",
+  "com.bankcomm.bankcomm",
+  "com.boc.bocsoft.phone",
+  "com.pingan.paces.ccms",
+  "com.eastmoney.android.berlin",
+  "com.hexin.plat.android",
+  "com.android.permissioncontroller",
+  "com.google.android.permissioncontroller",
+  "com.oldpan.pavra",
+  "sh.paseo",
+  "sh.paseo.debug",
+]);
+
+const HARD_BLOCKED_PREFIXES = [
+  "com.icbc.",
+  "com.chinamworld.",
+  "com.cmbchina.",
+  "com.abchina.",
+  "com.bankcomm.",
+  "com.eastmoney.",
+] as const;
+
+const CN_RESIDENT_ID_RE =
+  /(?<!\d)\d{6}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)/g;
+const BANK_CARD_RE = /(?<!\d)(?:\d[ -]?){15,18}\d(?!\d)/g;
+
+export function isBlockedPhonePackage(packageName: string | null | undefined): boolean {
+  if (typeof packageName !== "string") return false;
+  const clean = packageName.trim().toLowerCase();
+  if (!clean) return false;
+  if (HARD_BLOCKED_PACKAGES.has(clean)) return true;
+  return HARD_BLOCKED_PREFIXES.some((prefix) => clean.startsWith(prefix));
+}
+
+export function redactPiiText(rawText: string): string {
+  if (!rawText) return rawText;
+  const idRedacted = rawText.replace(CN_RESIDENT_ID_RE, "[REDACTED_ID]");
+  return idRedacted.replace(BANK_CARD_RE, "[REDACTED_CARD]");
+}
 
 export function parseWirelessPairingInput(
   rawInput: string,
@@ -626,13 +689,15 @@ export function createSimulatedPhoneBridge(
     },
   ): PhoneUiElementNode {
     const id = `e${index}`;
+    const safeText = spec.password ? "••••" : redactPiiText(spec.text);
+    const safeDesc = spec.password ? "••••" : redactPiiText(spec.contentDesc);
     return {
       id,
       ref: `@${id}`,
       index,
-      text: spec.text,
-      contentDesc: spec.contentDesc,
-      contentDescription: spec.contentDesc,
+      text: safeText,
+      contentDesc: safeDesc,
+      contentDescription: safeDesc,
       resourceId: spec.resourceId,
       className: spec.className,
       packageName: pkg,
@@ -919,6 +984,46 @@ export function createSimulatedPhoneBridge(
     };
   }
 
+  function resolveTargetPackage(action: PhoneDisplayActionInput): string {
+    if ("packageName" in action && typeof action.packageName === "string") {
+      const trimmed = action.packageName.trim();
+      if (trimmed) return trimmed;
+    }
+    return activePackageName;
+  }
+
+  function runSimulatedLaunchApp(
+    action: Extract<PhoneDisplayActionInput, { type: "launch_app" }>,
+    info: VirtualDisplayInfo,
+    unlocked: boolean,
+  ): PhoneDisplayActionResult {
+    const cleanPkg = action.packageName.trim();
+    if (!cleanPkg) {
+      return {
+        ok: false,
+        displayId: info.displayId,
+        error: "launch_app requires a non-empty packageName",
+      };
+    }
+    activePackageName = cleanPkg;
+    activeAppDisplayId = info.displayId;
+    overlayPackageName = cleanPkg;
+    overlayAppName = resolveAppLabel(cleanPkg);
+    const launchedUi = buildSimulatedElements(activePackageName);
+    const observed = runSimulatedObserve(
+      {
+        type: "observe",
+        includeScreenshot: action.includeScreenshot,
+        maxLongEdge: action.maxLongEdge,
+        quality: action.quality,
+        unlocked,
+      },
+      info,
+      launchedUi,
+    );
+    return { ...observed, action: "launch_app" };
+  }
+
   return {
     isSimulated: true,
 
@@ -1027,9 +1132,12 @@ export function createSimulatedPhoneBridge(
       return captureSimulatedFrame(maxLongEdge);
     },
 
-    async launchAppOnVirtualDisplay(packageName) {
+    async launchAppOnVirtualDisplay(packageName, unlocked = false) {
       const clean = packageName.trim();
       if (!clean) return false;
+      if (!unlocked && isBlockedPhonePackage(clean)) {
+        return false;
+      }
       const info = ensureDisplayInternal();
       activePackageName = clean;
       activeAppDisplayId = info.displayId;
@@ -1070,6 +1178,33 @@ export function createSimulatedPhoneBridge(
       }
 
       const info = ensureDisplayInternal();
+      if (action.type === "list_apps") {
+        return {
+          ok: true,
+          action: "list_apps",
+          displayId: info.displayId,
+          apps: [...SIMULATED_INSTALLED_APPS].sort((a, b) => a.label.localeCompare(b.label)),
+        };
+      }
+      if (action.type === "clipboard") {
+        return runSimulatedClipboard(action);
+      }
+
+      const unlocked = Boolean(action.unlocked);
+      const targetPkg = resolveTargetPackage(action);
+      if (!unlocked && isBlockedPhonePackage(targetPkg)) {
+        return {
+          ok: false,
+          displayId: info.displayId,
+          packageName: targetPkg,
+          error: `ERR_SAFETY_BLOCKED_PACKAGE: Package ${targetPkg} is hard-locked by native SafetyGate`,
+        };
+      }
+
+      if (action.type === "launch_app") {
+        return runSimulatedLaunchApp(action, info, unlocked);
+      }
+
       const ui = buildSimulatedElements(activePackageName);
 
       switch (action.type) {
@@ -1110,8 +1245,6 @@ export function createSimulatedPhoneBridge(
             dataUri: action.dataUri ?? null,
             packageName: action.packageName ?? activePackageName,
           };
-        case "clipboard":
-          return runSimulatedClipboard(action);
         case "observe":
           return runSimulatedObserve(action, info, ui);
       }
@@ -1354,7 +1487,18 @@ export function createNativePhoneBridge(
       };
     },
 
-    async launchAppOnVirtualDisplay(packageName) {
+    async launchAppOnVirtualDisplay(packageName, unlocked = false) {
+      if (!unlocked && isBlockedPhonePackage(packageName)) {
+        return false;
+      }
+      if (unlocked && typeof nativeMod.executePhoneDisplayActionAsync === "function") {
+        const res = await nativeMod.executePhoneDisplayActionAsync({
+          type: "launch_app",
+          packageName,
+          unlocked: true,
+        });
+        return asBoolean(res?.ok, false);
+      }
       return Boolean(await nativeMod.launchAppOnVirtualDisplayAsync?.(packageName));
     },
 

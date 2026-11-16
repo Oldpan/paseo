@@ -7,9 +7,11 @@ import {
   CAPSULE_EMERGENCY_LONG_PRESS_MS,
   createNativePhoneBridge,
   createSimulatedPhoneBridge,
+  isBlockedPhonePackage,
   parseWirelessPairingInput,
   type PhoneOverlayActionEvent,
   type PhonePrivilegeStatus,
+  redactPiiText,
   WIRELESS_PAIRING_REMOTE_INPUT_LABEL,
 } from "./native-phone-bridge";
 
@@ -452,6 +454,12 @@ describe("Android Native Kotlin & Manifest Source Verification", () => {
     expect(virtualDisplayKt).toContain("moveAppToMainScreenForTakeover");
     expect(virtualDisplayKt).toContain("returnAppToVirtualDisplay");
     expect(virtualDisplayKt).toContain("executeDisplayAction");
+    expect(virtualDisplayKt).toContain('"launch_app"');
+    expect(virtualDisplayKt).toContain("isBlockedPhonePackage");
+    expect(virtualDisplayKt).toContain("redactPiiText");
+    expect(virtualDisplayKt).toContain("ERR_SAFETY_BLOCKED_PACKAGE");
+    expect(virtualDisplayKt).toContain("rawBitmap.recycle()");
+    expect(virtualDisplayKt).toContain("scaled.recycle()");
 
     expect(overlayKt).toContain("TYPE_APPLICATION_OVERLAY");
     expect(overlayKt).toContain("EMERGENCY_LONG_PRESS_MS = 1000L");
@@ -460,5 +468,79 @@ describe("Android Native Kotlin & Manifest Source Verification", () => {
 
     expect(moduleKt).toContain("onPhoneOverlayAction");
     expect(moduleKt).toContain("onPhonePrivilegeChanged");
+  });
+});
+
+describe("Native SafetyGate & Local PII Redaction", () => {
+  it("redacts 18-digit Chinese IDs, 16–19 digit bank cards, and password fields locally", async () => {
+    expect(redactPiiText("实名信息：11010119900307123X，银行卡：6222021234567890123")).toBe(
+      "实名信息：[REDACTED_ID]，银行卡：[REDACTED_CARD]",
+    );
+    expect(redactPiiText("卡号 6225 8810 1234 5678")).toBe("卡号 [REDACTED_CARD]");
+
+    const bridge = createSimulatedPhoneBridge();
+    await bridge.launchAppOnVirtualDisplay("com.tencent.mm");
+    await bridge.executeDisplayAction({
+      type: "type",
+      text: "证件 110101199003071234 卡 6222021234567890123",
+    });
+    const observed = await bridge.executeDisplayAction({ type: "observe" });
+    const inputNode = observed.elements?.find((el) => el.id === "e3");
+    expect(inputNode?.text).toBe("证件 [REDACTED_ID] 卡 [REDACTED_CARD]");
+
+    await bridge.launchAppOnVirtualDisplay("com.eg.android.AlipayGphone");
+    const payObs = await bridge.executeDisplayAction({ type: "observe" });
+    const pwdNode = payObs.elements?.find((el) => el.password);
+    expect(pwdNode?.text).toBe("••••");
+  });
+
+  it("hard-blocks banking, securities, and permission-controller packages unless unlocked, and supports launch_app action", async () => {
+    expect(isBlockedPhonePackage("com.icbc")).toBe(true);
+    expect(isBlockedPhonePackage("com.chinamworld.main")).toBe(true);
+    expect(isBlockedPhonePackage("com.cmbchina.ccd.pluto.cmbActivity")).toBe(true);
+    expect(isBlockedPhonePackage("com.eastmoney.android.berlin")).toBe(true);
+    expect(isBlockedPhonePackage("com.android.permissioncontroller")).toBe(true);
+    expect(isBlockedPhonePackage("com.tencent.mm")).toBe(false);
+
+    const bridge = createSimulatedPhoneBridge();
+
+    // Direct launch blocked
+    expect(await bridge.launchAppOnVirtualDisplay("com.icbc")).toBe(false);
+
+    // launch_app action blocked by SafetyGate
+    const blockedLaunch = await bridge.executeDisplayAction({
+      type: "launch_app",
+      packageName: "com.icbc",
+    });
+    expect(blockedLaunch.ok).toBe(false);
+    expect(blockedLaunch.error).toContain("ERR_SAFETY_BLOCKED_PACKAGE");
+
+    // intent targeting blocked package rejected
+    const blockedIntent = await bridge.executeDisplayAction({
+      type: "intent",
+      packageName: "com.eastmoney.android.berlin",
+    });
+    expect(blockedIntent.ok).toBe(false);
+    expect(blockedIntent.error).toContain("ERR_SAFETY_BLOCKED_PACKAGE");
+
+    // Allowed app launch_app returns post-launch observation
+    const allowedLaunch = await bridge.executeDisplayAction({
+      type: "launch_app",
+      packageName: "com.xingin.xhs",
+      includeScreenshot: true,
+    });
+    expect(allowedLaunch.ok).toBe(true);
+    expect(allowedLaunch.action).toBe("launch_app");
+    expect(allowedLaunch.packageName).toBe("com.xingin.xhs");
+    expect(allowedLaunch.elements?.length).toBeGreaterThan(0);
+
+    // Explicit unlocked=true override succeeds
+    const unlockedLaunch = await bridge.executeDisplayAction({
+      type: "launch_app",
+      packageName: "com.icbc",
+      unlocked: true,
+    });
+    expect(unlockedLaunch.ok).toBe(true);
+    expect(unlockedLaunch.packageName).toBe("com.icbc");
   });
 });

@@ -184,7 +184,11 @@ class PavraVirtualDisplayController(
             buffer.rewind()
             rawBitmap.copyPixelsFromBuffer(buffer)
             val cropped = if (paddedWidth > image.width) {
-              Bitmap.createBitmap(rawBitmap, 0, 0, image.width, image.height)
+              Bitmap.createBitmap(rawBitmap, 0, 0, image.width, image.height).also { created ->
+                if (created !== rawBitmap) {
+                  rawBitmap.recycle()
+                }
+              }
             } else {
               rawBitmap
             }
@@ -324,8 +328,13 @@ class PavraVirtualDisplayController(
     }
 
     val scaled = scaleDownBitmap(sourceBitmap, safeMaxEdge)
+    val outWidth = scaled.width
+    val outHeight = scaled.height
     val jpegOut = ByteArrayOutputStream()
     scaled.compress(Bitmap.CompressFormat.JPEG, safeQuality, jpegOut)
+    if (scaled !== sourceBitmap) {
+      scaled.recycle()
+    }
     val jpegBytes = jpegOut.toByteArray()
     val encoded = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
 
@@ -335,8 +344,8 @@ class PavraVirtualDisplayController(
       "base64" to encoded,
       "screenshotBase64" to encoded,
       "mimeType" to "image/jpeg",
-      "width" to scaled.width,
-      "height" to scaled.height,
+      "width" to outWidth,
+      "height" to outHeight,
       "sourceWidth" to sourceBitmap.width,
       "sourceHeight" to sourceBitmap.height,
       "byteLength" to jpegBytes.size,
@@ -408,9 +417,24 @@ class PavraVirtualDisplayController(
     return Bitmap.createScaledBitmap(source, dstW, dstH, true)
   }
 
-  fun launchAppOnVirtualDisplay(packageName: String): Boolean {
+  fun isBlockedPhonePackage(packageName: String?): Boolean {
+    val clean = packageName?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: return false
+    if (HARD_BLOCKED_PACKAGES.contains(clean)) return true
+    return HARD_BLOCKED_PREFIXES.any { prefix -> clean.startsWith(prefix) }
+  }
+
+  fun redactPiiText(rawText: String): String {
+    if (rawText.isEmpty()) return rawText
+    val idRedacted = REGEX_CN_RESIDENT_ID.replace(rawText, "[REDACTED_ID]")
+    return REGEX_BANK_CARD.replace(idRedacted, "[REDACTED_CARD]")
+  }
+
+  fun launchAppOnVirtualDisplay(packageName: String, unlocked: Boolean = false): Boolean {
     val cleanPkg = packageName.trim()
     if (cleanPkg.isEmpty()) return false
+    if (!unlocked && isBlockedPhonePackage(cleanPkg)) {
+      return false
+    }
     val displayId = ensureVirtualDisplay(currentWidth, currentHeight, currentDpi)
 
     var launched = startPackageOnDisplayViaContext(
@@ -561,8 +585,29 @@ class PavraVirtualDisplayController(
       ?.trim()
       ?.lowercase(Locale.ROOT)
       ?: ""
+    val unlocked = action["unlocked"] == true
+
+    if (type != "list_apps" && type != "clipboard") {
+      val candidatePkg = action["packageName"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        ?: if (type != "launch_app") activePackageRef.get() else null
+      if (!unlocked && isBlockedPhonePackage(candidatePkg)) {
+        return mapOf(
+          "ok" to false,
+          "displayId" to displayId,
+          "packageName" to candidatePkg,
+          "error" to "ERR_SAFETY_BLOCKED_PACKAGE: Package $candidatePkg is hard-locked by native SafetyGate"
+        )
+      }
+    }
 
     return when (type) {
+      "launch_app" -> executeLaunchAppAction(displayId, action, unlocked)
+      "list_apps" -> mapOf(
+        "ok" to true,
+        "action" to "list_apps",
+        "displayId" to displayId,
+        "apps" to listInstalledApps()
+      )
       "tap" -> executeTapAction(displayId, action)
       "type" -> executeTypeAction(displayId, action)
       "scroll" -> executeScrollAction(displayId, action)
@@ -570,13 +615,49 @@ class PavraVirtualDisplayController(
       "back" -> executeBackAction(displayId)
       "intent" -> executeIntentAction(displayId, action)
       "clipboard" -> executeClipboardAction(action)
-      "observe" -> executeObserveAction(displayId, action)
+      "observe" -> executeObserveAction(displayId, action, unlocked)
       else -> mapOf(
         "ok" to false,
         "displayId" to displayId,
         "error" to "Unsupported display action type: $type"
       )
     }
+  }
+
+  private fun executeLaunchAppAction(
+    displayId: Int,
+    action: Map<String, Any?>,
+    unlocked: Boolean
+  ): Map<String, Any?> {
+    val pkg = action["packageName"]?.toString()?.trim().orEmpty()
+    if (pkg.isEmpty()) {
+      return mapOf(
+        "ok" to false,
+        "displayId" to displayId,
+        "error" to "launch_app requires a non-empty packageName"
+      )
+    }
+    if (!unlocked && isBlockedPhonePackage(pkg)) {
+      return mapOf(
+        "ok" to false,
+        "displayId" to displayId,
+        "packageName" to pkg,
+        "error" to "ERR_SAFETY_BLOCKED_PACKAGE: Package $pkg is hard-locked by native SafetyGate"
+      )
+    }
+    val launched = launchAppOnVirtualDisplay(pkg, unlocked)
+    if (!launched) {
+      return mapOf(
+        "ok" to false,
+        "displayId" to displayId,
+        "packageName" to pkg,
+        "error" to "Failed to launch package $pkg on VirtualDisplay #$displayId"
+      )
+    }
+    val observed = LinkedHashMap(executeObserveAction(displayId, action, unlocked))
+    observed["action"] = "launch_app"
+    observed["ok"] = observed["ok"] != false
+    return observed
   }
 
   private fun executeTapAction(displayId: Int, action: Map<String, Any?>): Map<String, Any?> {
@@ -798,7 +879,11 @@ class PavraVirtualDisplayController(
     }
   }
 
-  private fun executeObserveAction(displayId: Int, action: Map<String, Any?>): Map<String, Any?> {
+  private fun executeObserveAction(
+    displayId: Int,
+    action: Map<String, Any?>,
+    unlocked: Boolean = false
+  ): Map<String, Any?> {
     val includeScreenshot = action["includeScreenshot"] == true
     val maxLongEdge = toIntOrNull(action["maxLongEdge"]) ?: 1080
     val quality = toIntOrNull(action["quality"]) ?: 72
@@ -811,6 +896,15 @@ class PavraVirtualDisplayController(
     val xmlText = dumpRes.stdout
     val parsed = parseUiAutomatorXml(xmlText)
     val foregroundPkg = parsed.packageName ?: activePackageRef.get() ?: appContext.packageName
+    if (!unlocked && isBlockedPhonePackage(foregroundPkg)) {
+      return mapOf(
+        "ok" to false,
+        "action" to "observe",
+        "displayId" to displayId,
+        "packageName" to foregroundPkg,
+        "error" to "ERR_SAFETY_BLOCKED_PACKAGE: Package $foregroundPkg is hard-locked by native SafetyGate"
+      )
+    }
     val isSecure = detectFlagSecureWindow(displayId)
 
     val frameMap = if (includeScreenshot && !isSecure) {
@@ -896,14 +990,16 @@ class PavraVirtualDisplayController(
               val centerX = (left + right) / 2
               val centerY = (top + bottom) / 2
               nextCenters[id] = Pair(centerX, centerY)
+              val safeText = if (password) "••••" else redactPiiText(text)
+              val safeDesc = if (password) "••••" else redactPiiText(contentDesc)
               elements.add(
                 mapOf(
                   "id" to id,
                   "ref" to "@$id",
                   "index" to seq,
-                  "text" to if (password) "••••" else text,
-                  "contentDesc" to contentDesc,
-                  "contentDescription" to contentDesc,
+                  "text" to safeText,
+                  "contentDesc" to safeDesc,
+                  "contentDescription" to safeDesc,
                   "resourceId" to resourceId,
                   "className" to className,
                   "packageName" to pkg,
@@ -1086,6 +1182,38 @@ class PavraVirtualDisplayController(
     const val DEFAULT_HEIGHT = 2400
     const val DEFAULT_DPI = 420
 
+    private val HARD_BLOCKED_PACKAGES = setOf(
+      "com.icbc",
+      "com.chinamworld.main",
+      "com.cmbchina.ccd.pluto.cmbactivity",
+      "com.abchina.ebank",
+      "com.bankcomm.bankcomm",
+      "com.boc.bocsoft.phone",
+      "com.pingan.paces.ccms",
+      "com.eastmoney.android.berlin",
+      "com.hexin.plat.android",
+      "com.android.permissioncontroller",
+      "com.google.android.permissioncontroller",
+      "com.oldpan.pavra",
+      "sh.paseo",
+      "sh.paseo.debug"
+    )
+
+    private val HARD_BLOCKED_PREFIXES = listOf(
+      "com.icbc.",
+      "com.chinamworld.",
+      "com.cmbchina.",
+      "com.abchina.",
+      "com.bankcomm.",
+      "com.eastmoney."
+    )
+
+    private val REGEX_CN_RESIDENT_ID = Regex(
+      "(?<!\\d)\\d{6}(?:19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx](?!\\d)"
+    )
+    private val REGEX_BANK_CARD = Regex(
+      "(?<!\\d)(?:\\d[ -]?){15,18}\\d(?!\\d)"
+    )
     private val REGEX_BOUNDS = Regex("\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]")
   }
 }
