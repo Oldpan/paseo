@@ -7,6 +7,7 @@ import {
   buildPhoneRegistrationPayload,
   canAcceptPhoneCommand,
   computeMiniWindowTapDotPosition,
+  defaultExecutePhoneCommand,
   describePhoneNetworkGate,
   formatPhoneCapsuleTitle,
   formatPhoneStepStatusLabel,
@@ -304,6 +305,61 @@ describe("pavra phone-control helpers & store", () => {
       tapX: 300,
       tapY: 180,
     });
+
+    // Tap by ref (@e4) without x/y must NOT inject synthetic 540/960 into native action payload
+    const refTapDesc = resolveCommandStepDescription({
+      commandId: "cmd-ref-tap",
+      kind: "tap",
+      payload: { packageName: "com.tencent.mm", ref: "@e4" },
+    });
+    expect(refTapDesc.tapX).toBeNull();
+    expect(refTapDesc.tapY).toBeNull();
+    expect(refTapDesc.targetRef).toBe("@e4");
+
+    const executePhoneDisplayActionAsync = vi.fn(async (action: Record<string, unknown>) => ({
+      ok: true,
+      action: String(action.type),
+      lastTapX: 412,
+      lastTapY: 730,
+    }));
+    const launchAppOnVirtualDisplayAsync = vi.fn(async () => true);
+
+    await defaultExecutePhoneCommand(
+      {
+        commandId: "cmd-ref-tap",
+        kind: "tap",
+        payload: { packageName: "com.tencent.mm", ref: "@e4" },
+      },
+      { executePhoneDisplayActionAsync },
+    );
+    expect(executePhoneDisplayActionAsync).toHaveBeenCalledTimes(1);
+    const sentTapAction = executePhoneDisplayActionAsync.mock.calls[0]?.[0];
+    expect(sentTapAction).toMatchObject({
+      type: "tap",
+      action: "tap",
+      ref: "@e4",
+      elementId: "@e4",
+    });
+    expect(sentTapAction?.x).toBeUndefined();
+    expect(sentTapAction?.y).toBeUndefined();
+
+    // launch_app calls launchAppOnVirtualDisplayAsync then observes with type/action = "observe"
+    await defaultExecutePhoneCommand(
+      {
+        commandId: "cmd-launch",
+        kind: "launch_app",
+        payload: { packageName: "com.tencent.mm" },
+      },
+      { launchAppOnVirtualDisplayAsync, executePhoneDisplayActionAsync },
+    );
+    expect(launchAppOnVirtualDisplayAsync).toHaveBeenCalledWith("com.tencent.mm");
+    expect(executePhoneDisplayActionAsync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "observe",
+        action: "observe",
+        packageName: "com.tencent.mm",
+      }),
+    );
 
     const normalizedObs = normalizePhoneObservation(
       {

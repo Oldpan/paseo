@@ -1207,9 +1207,13 @@ function buildDefaultStepText(
   appName: string,
   tapX: number | null,
   tapY: number | null,
+  targetRef: string | null,
 ): string {
   if (kind === "tap" && tapX !== null && tapY !== null) {
     return `Tap (${tapX}, ${tapY}) on ${appName}`;
+  }
+  if (kind === "tap" && targetRef) {
+    return `Tap ${targetRef} on ${appName}`;
   }
   if (kind === "type") {
     return `Type text in ${appName}`;
@@ -1218,6 +1222,27 @@ function buildDefaultStepText(
     return `Launch ${appName} on BG Display`;
   }
   return `Execute ${actionName} on ${appName}`;
+}
+
+function extractCommandTargetRef(command: PhoneQueuedCommand): string | null {
+  const ref = command.payload?.ref ?? command.payload?.elementId;
+  return typeof ref === "string" && ref.trim() ? ref.trim() : null;
+}
+
+function resolveRawCommandAction(command: PhoneQueuedCommand): string {
+  return String(command.kind ?? command.action ?? command.type ?? command.tool ?? "observe");
+}
+
+function resolveCommandPackageAndApp(command: PhoneQueuedCommand): {
+  packageName: string;
+  appName: string;
+} {
+  const payloadPkg = command.payload?.packageName as string | undefined;
+  const packageName = String(command.packageName ?? payloadPkg ?? "com.tencent.mm");
+  const payloadApp = command.payload?.appName as string | undefined;
+  const fallbackAppName = packageName === "com.tencent.mm" ? "WeChat" : packageName;
+  const appName = String(command.appName ?? payloadApp ?? fallbackAppName);
+  return { packageName, appName };
 }
 
 export function resolveCommandStepDescription(command: PhoneQueuedCommand): {
@@ -1229,22 +1254,19 @@ export function resolveCommandStepDescription(command: PhoneQueuedCommand): {
   stepText: string;
   tapX: number | null;
   tapY: number | null;
+  targetRef: string | null;
 } {
-  const rawAction = String(
-    command.kind ?? command.action ?? command.type ?? command.tool ?? "observe",
-  );
+  const rawAction = resolveRawCommandAction(command);
   const kind = normalizeCommandKind(rawAction);
   const assistantName = String(command.assistantName ?? "Assistant");
-  const payloadPkg = command.payload?.packageName as string | undefined;
-  const packageName = String(command.packageName ?? payloadPkg ?? "com.tencent.mm");
-  const payloadApp = command.payload?.appName as string | undefined;
-  const fallbackAppName = packageName === "com.tencent.mm" ? "WeChat" : packageName;
-  const appName = String(command.appName ?? payloadApp ?? fallbackAppName);
-  const isTapAction = kind === "tap";
-  const tapX = resolveTapCoord(command.x, command.payload?.x, 540, isTapAction);
-  const tapY = resolveTapCoord(command.y, command.payload?.y, 960, isTapAction);
+  const { packageName, appName } = resolveCommandPackageAndApp(command);
+  const targetRef = extractCommandTargetRef(command);
+  const isTapWithoutRef = kind === "tap" && !targetRef;
+  const tapX = resolveTapCoord(command.x, command.payload?.x, 540, isTapWithoutRef);
+  const tapY = resolveTapCoord(command.y, command.payload?.y, 960, isTapWithoutRef);
   const explicitStep = command.stepLabel?.trim() || command.stepText?.trim() || "";
-  const stepText = explicitStep || buildDefaultStepText(kind, rawAction, appName, tapX, tapY);
+  const stepText =
+    explicitStep || buildDefaultStepText(kind, rawAction, appName, tapX, tapY, targetRef);
   return {
     kind,
     actionName: rawAction,
@@ -1254,6 +1276,7 @@ export function resolveCommandStepDescription(command: PhoneQueuedCommand): {
     stepText,
     tapX,
     tapY,
+    targetRef,
   };
 }
 
@@ -1449,6 +1472,8 @@ function buildFallbackCommandOutput(
       : undefined;
   const clipboardText =
     desc.kind === "clipboard" ? String(command.text ?? command.payload?.text ?? "") : undefined;
+  const fallbackTapX = desc.kind === "tap" ? (desc.tapX ?? 540) : desc.tapX;
+  const fallbackTapY = desc.kind === "tap" ? (desc.tapY ?? 960) : desc.tapY;
 
   return {
     ok: true,
@@ -1457,8 +1482,8 @@ function buildFallbackCommandOutput(
     packageName: desc.packageName,
     stepText: desc.stepText,
     screenshotBase64: DEMO_PHONE_SCREENSHOT_BASE64,
-    lastTapX: desc.tapX,
-    lastTapY: desc.tapY,
+    lastTapX: fallbackTapX,
+    lastTapY: fallbackTapY,
     screenWidth: 1080,
     screenHeight: 2400,
     ...(defaultApps ? { apps: defaultApps } : {}),
@@ -1480,11 +1505,31 @@ function buildFallbackCommandOutput(
   };
 }
 
+function buildNativeDisplayActionPayload(
+  command: PhoneQueuedCommand,
+  desc: ReturnType<typeof resolveCommandStepDescription>,
+): Record<string, unknown> {
+  const displayActionType = desc.kind === "launch_app" ? "observe" : desc.kind;
+  const textVal = command.text ?? (command.payload?.text as string | undefined);
+  return {
+    ...command.payload,
+    type: displayActionType,
+    action: displayActionType,
+    packageName: desc.packageName,
+    ...(desc.targetRef ? { elementId: desc.targetRef, ref: desc.targetRef } : {}),
+    ...(typeof desc.tapX === "number" ? { x: desc.tapX } : {}),
+    ...(typeof desc.tapY === "number" ? { y: desc.tapY } : {}),
+    ...(textVal !== undefined ? { text: textVal } : {}),
+  };
+}
+
 export async function defaultExecutePhoneCommand(
   command: PhoneQueuedCommand,
+  nativeModuleOverride?: OptionalNativePhoneModule | null,
 ): Promise<PhoneCommandExecutionOutput> {
   const desc = resolveCommandStepDescription(command);
-  const nativeModule = getOptionalNativePhoneModule();
+  const nativeModule =
+    nativeModuleOverride !== undefined ? nativeModuleOverride : getOptionalNativePhoneModule();
 
   if (desc.kind === "list_apps") {
     const nativeAppsOut = await tryNativeListApps(nativeModule, desc);
@@ -1501,15 +1546,9 @@ export async function defaultExecutePhoneCommand(
 
   if (nativeModule && typeof nativeModule.executePhoneDisplayActionAsync === "function") {
     try {
-      const nativeResult = await nativeModule.executePhoneDisplayActionAsync({
-        type: desc.kind,
-        action: desc.kind,
-        packageName: desc.packageName,
-        x: desc.tapX,
-        y: desc.tapY,
-        text: command.text ?? (command.payload?.text as string | undefined),
-        ...command.payload,
-      });
+      const nativeResult = await nativeModule.executePhoneDisplayActionAsync(
+        buildNativeDisplayActionPayload(command, desc),
+      );
       if (nativeResult) {
         return mapNativeActionResult(nativeResult, desc);
       }
