@@ -11,6 +11,8 @@ import {
   buildPhoneRegistrationPayload,
   canAcceptPhoneCommand,
   defaultExecutePhoneCommand,
+  handleNativePhoneOverlayActionEvent,
+  normalizePhoneObservation,
   phoneCommandSchema,
   phoneEmergencyStopRpc,
   phonePollCommandRpc,
@@ -18,6 +20,7 @@ import {
   phoneReportCommandResultRpc,
   resolveCommandStepDescription,
   runPhoneWorkerIteration,
+  subscribeNativePhoneOverlayEvents,
   subscribePhoneEmergencyStop,
   usePhoneControlStore,
   type PhoneCommandExecutionOutput,
@@ -29,6 +32,8 @@ import { usePavraView } from "./store";
 export {
   buildPhoneRegistrationPayload,
   defaultExecutePhoneCommand,
+  handleNativePhoneOverlayActionEvent,
+  normalizePhoneObservation,
   phoneCommandSchema,
   phoneEmergencyStopRpc,
   phonePollCommandRpc,
@@ -36,6 +41,7 @@ export {
   phoneReportCommandResultRpc,
   resolveCommandStepDescription,
   runPhoneWorkerIteration,
+  subscribeNativePhoneOverlayEvents,
   type PhoneCommandExecutionOutput,
   type PhoneQueuedCommand,
   type PhoneRpcInvoker,
@@ -72,6 +78,7 @@ export function usePhoneControlWorker(optionsOrServerId?: string | UsePhoneContr
   const allowRelayControl = usePhoneControlStore((state) => state.allowRelayControl);
   const outwardConfirmTier = usePhoneControlStore((state) => state.outwardConfirmTier);
   const paused = usePhoneControlStore((state) => state.paused);
+  const onMainScreenTakeover = usePhoneControlStore((state) => state.onMainScreenTakeover);
 
   const invokeRpc = useCallback<PhoneRpcInvoker>(
     async (name, payload) => {
@@ -133,7 +140,7 @@ export function usePhoneControlWorker(optionsOrServerId?: string | UsePhoneContr
   canInvokeRef.current = canInvoke;
 
   useEffect(() => {
-    return subscribePhoneEmergencyStop(() => {
+    const unsubEmergency = subscribePhoneEmergencyStop(() => {
       if (!canInvokeRef.current) return;
       const currentDeviceId = usePhoneControlStore.getState().deviceId;
       void invokeRpcRef
@@ -143,6 +150,11 @@ export function usePhoneControlWorker(optionsOrServerId?: string | UsePhoneContr
         })
         .catch(() => undefined);
     });
+    const unsubNativeOverlay = subscribeNativePhoneOverlayEvents();
+    return () => {
+      unsubEmergency();
+      unsubNativeOverlay();
+    };
   }, []);
 
   useEffect(() => {
@@ -158,9 +170,12 @@ export function usePhoneControlWorker(optionsOrServerId?: string | UsePhoneContr
     deviceName,
     enabled,
     isRelay,
+    onMainScreenTakeover,
     outwardConfirmTier,
+    paused,
     privilegeChannel,
     privilegeStatus.activeChannel,
+    privilegeStatus.overlayPermissionGranted,
     privilegeStatus.ready,
     privilegeStatus.virtualDisplayId,
     registerNow,

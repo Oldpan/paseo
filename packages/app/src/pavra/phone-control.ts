@@ -8,6 +8,17 @@ export type PhonePrivilegeChannel = "auto" | "shizuku" | "wireless_adb";
 export type PhoneActivePrivilegeChannel = "none" | "shizuku" | "wireless_adb";
 export type PhoneOutwardConfirmTier = "always_ask" | "once_per_task" | "always_allow";
 export type PhoneOverlayMode = "capsule" | "mini_window";
+export type PhoneCommandKind =
+  | "observe"
+  | "tap"
+  | "type"
+  | "scroll"
+  | "swipe"
+  | "back"
+  | "launch_app"
+  | "list_apps"
+  | "intent"
+  | "clipboard";
 
 export interface PhonePrivilegeStatus {
   ready: boolean;
@@ -122,36 +133,50 @@ const safePhoneStorage: StateStorage = {
   },
 };
 
-interface OptionalNativePhoneModule {
+export interface OptionalNativePhoneModule {
+  getPhonePrivilegeStatusAsync?(preferredChannel?: string | null): Promise<Record<string, unknown>>;
   requestShizukuPermissionAsync?(): Promise<Record<string, unknown> | boolean>;
-  openWirelessDebuggingPairingNotificationAsync?(
-    title?: string,
+  openWirelessDebuggingWithPairingNotificationAsync?(
+    openSettings?: boolean | null,
   ): Promise<Record<string, unknown> | boolean>;
-  pairWirelessAdbAsync?(
-    code: string,
+  submitWirelessAdbPairingCodeAsync?(
+    pairingInput: string,
+    host?: string | null,
     port?: number | null,
   ): Promise<Record<string, unknown> | boolean>;
-  requestOverlayPermissionAsync?(): Promise<Record<string, unknown> | boolean>;
+  canDrawPhoneOverlaysAsync?(): Promise<boolean>;
+  openPhoneOverlayPermissionSettingsAsync?(): Promise<boolean>;
   ensurePhoneVirtualDisplayAsync?(
-    width?: number,
-    height?: number,
-    dpi?: number,
+    width?: number | null,
+    height?: number | null,
+    dpi?: number | null,
   ): Promise<number | Record<string, unknown>>;
-  showPhoneFloatingOverlayAsync?(payload: Record<string, unknown>): Promise<boolean>;
-  hidePhoneFloatingOverlayAsync?(): Promise<boolean>;
-  movePhoneAppToMainScreenAsync?(packageName: string): Promise<boolean>;
-  returnPhoneAppToVirtualDisplayAsync?(packageName: string): Promise<boolean>;
-  triggerPhoneEmergencyStopAsync?(): Promise<boolean>;
+  launchAppOnVirtualDisplayAsync?(packageName: string): Promise<boolean>;
+  moveAppToMainScreenForTakeoverAsync?(packageName: string): Promise<boolean>;
+  returnAppToVirtualDisplayAsync?(packageName: string): Promise<boolean>;
   executePhoneDisplayActionAsync?(
     action: Record<string, unknown>,
   ): Promise<Record<string, unknown>>;
+  listInstalledPhoneAppsAsync?(): Promise<Array<Record<string, unknown>>>;
+  showPhoneFloatingOverlayAsync?(
+    payload: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | boolean>;
+  updatePhoneFloatingOverlayAsync?(
+    payload: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | boolean>;
+  setPhoneFloatingOverlayModeAsync?(mode: string): Promise<Record<string, unknown> | boolean>;
+  hidePhoneFloatingOverlayAsync?(): Promise<boolean>;
+  setPhoneExecutionPausedAsync?(paused: boolean): Promise<Record<string, unknown> | boolean>;
+  clearPhoneEmergencyStopAsync?(): Promise<boolean>;
+  triggerPhoneEmergencyStopAsync?(): Promise<Record<string, unknown> | boolean>;
+  addListener?(
+    eventName: string,
+    listener: (event: Record<string, unknown>) => void,
+  ): { remove(): void };
 }
 
-function getOptionalNativePhoneModule(): OptionalNativePhoneModule | null {
+export function getOptionalNativePhoneModule(): OptionalNativePhoneModule | null {
   try {
-    if (typeof (globalThis as { __DEV__?: unknown }).__DEV__ === "undefined") {
-      return null;
-    }
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const core = require("expo-modules-core") as {
       requireOptionalNativeModule?<T>(name: string): T | null;
@@ -160,6 +185,18 @@ function getOptionalNativePhoneModule(): OptionalNativePhoneModule | null {
   } catch {
     return null;
   }
+}
+
+function readDisplayIdFromNativeResult(raw: unknown, fallbackDisplayId: number | null): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return Math.round(raw);
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.displayId === "number" && obj.displayId > 0) return Math.round(obj.displayId);
+    if (typeof obj.virtualDisplayId === "number" && obj.virtualDisplayId > 0) {
+      return Math.round(obj.virtualDisplayId);
+    }
+  }
+  return fallbackDisplayId ?? 2;
 }
 
 /**
@@ -240,10 +277,6 @@ export function parseWirelessPairingInput(raw: string): WirelessPairingParseResu
   };
 }
 
-/**
- * Checks whether this phone client is allowed to accept and execute remote coordinator commands
- * given the current network transport (LAN vs E2E-encrypted Relay) and user settings.
- */
 export function canAcceptPhoneCommand(input: {
   isRelay: boolean;
   allowRelayControl: boolean;
@@ -419,6 +452,15 @@ export function subscribePhoneEmergencyStop(listener: EmergencyStopListener): ()
   };
 }
 
+/**
+ * Deduplication cache for executed commands (`docs/pavra-phone.md`), keyed by `commandId`.
+ */
+const completedCommandCache = new Map<string, PhoneCommandExecutionOutput>();
+
+export function clearPhoneCommandDeduplicationCache(): void {
+  completedCommandCache.clear();
+}
+
 export interface PhoneControlState {
   enabled: boolean;
   deviceId: string;
@@ -477,6 +519,47 @@ const INITIAL_PHONE_CONTROL_STATE = {
   onMainScreenTakeover: false,
   liveExecution: null as PhoneLiveExecution | null,
 };
+
+function pickBool(val: unknown, fallback: boolean): boolean {
+  return typeof val === "boolean" ? val : fallback;
+}
+
+function mergeNativePrivilegePatch(
+  current: PhonePrivilegeStatus,
+  rawStatus: unknown,
+  fallbackChannel: PhoneActivePrivilegeChannel,
+  displayId: number | null,
+): PhonePrivilegeStatus {
+  const statusObj =
+    rawStatus && typeof rawStatus === "object" ? (rawStatus as Record<string, unknown>) : null;
+  const rawChan = statusObj?.activeChannel;
+  const activeChannel =
+    rawChan === "shizuku" || rawChan === "wireless_adb" ? rawChan : fallbackChannel;
+  return {
+    ...current,
+    ready: pickBool(statusObj?.ready, true),
+    activeChannel,
+    shizukuAvailable: pickBool(statusObj?.shizukuAvailable, current.shizukuAvailable),
+    shizukuAuthorized: pickBool(
+      statusObj?.shizukuAuthorized,
+      fallbackChannel === "shizuku" || current.shizukuAuthorized,
+    ),
+    wirelessAdbPaired: pickBool(
+      statusObj?.wirelessAdbPaired,
+      fallbackChannel === "wireless_adb" || current.wirelessAdbPaired,
+    ),
+    wirelessAdbPort:
+      typeof statusObj?.wirelessAdbPort === "number"
+        ? statusObj.wirelessAdbPort
+        : current.wirelessAdbPort,
+    virtualDisplayId: displayId ?? current.virtualDisplayId ?? 2,
+    overlayPermissionGranted: pickBool(
+      statusObj?.overlayPermissionGranted,
+      current.overlayPermissionGranted,
+    ),
+    lastError: typeof statusObj?.lastError === "string" ? statusObj.lastError : null,
+  };
+}
 
 export const usePhoneControlStore = create<PhoneControlState>()(
   persist(
@@ -542,15 +625,19 @@ export const usePhoneControlStore = create<PhoneControlState>()(
 
       setOverlayMode: (overlayMode) => {
         set({ overlayMode, overlayVisible: true });
+        const nativeModule = getOptionalNativePhoneModule();
+        void nativeModule?.setPhoneFloatingOverlayModeAsync?.(overlayMode).catch(() => undefined);
       },
 
       setPaused: (paused) => {
         set({ paused });
+        const nativeModule = getOptionalNativePhoneModule();
+        void nativeModule?.setPhoneExecutionPausedAsync?.(paused).catch(() => undefined);
       },
 
       togglePaused: () => {
         const nextPaused = !get().paused;
-        set({ paused: nextPaused });
+        get().setPaused(nextPaused);
         return nextPaused;
       },
 
@@ -560,9 +647,9 @@ export const usePhoneControlStore = create<PhoneControlState>()(
         const nativeModule = getOptionalNativePhoneModule();
         if (pkg && nativeModule) {
           if (onMainScreenTakeover) {
-            void nativeModule.movePhoneAppToMainScreenAsync?.(pkg).catch(() => undefined);
+            void nativeModule.moveAppToMainScreenForTakeoverAsync?.(pkg).catch(() => undefined);
           } else {
-            void nativeModule.returnPhoneAppToVirtualDisplayAsync?.(pkg).catch(() => undefined);
+            void nativeModule.returnAppToVirtualDisplayAsync?.(pkg).catch(() => undefined);
           }
         }
       },
@@ -614,6 +701,22 @@ export const usePhoneControlStore = create<PhoneControlState>()(
             stepText: nextStepText,
             history: nextHistory,
           };
+          const nativeModule = getOptionalNativePhoneModule();
+          void nativeModule
+            ?.updatePhoneFloatingOverlayAsync?.({
+              mode: state.overlayMode,
+              assistantName: updated.assistantName,
+              appName: updated.appName,
+              packageName: updated.packageName,
+              stepText: updated.stepText,
+              paused: state.paused,
+              onMainScreenTakeover: state.onMainScreenTakeover,
+              lastTapX: updated.lastTapX,
+              lastTapY: updated.lastTapY,
+              screenWidth: updated.screenWidth,
+              screenHeight: updated.screenHeight,
+            })
+            .catch(() => undefined);
           return {
             liveExecution: updated,
             overlayVisible: updated.active ? true : state.overlayVisible,
@@ -623,21 +726,21 @@ export const usePhoneControlStore = create<PhoneControlState>()(
 
       authorizeShizuku: async () => {
         const nativeModule = getOptionalNativePhoneModule();
+        let rawStatus: unknown = null;
+        let displayId = get().privilegeStatus.virtualDisplayId ?? 2;
         try {
-          await nativeModule?.requestShizukuPermissionAsync?.();
-          await nativeModule?.ensurePhoneVirtualDisplayAsync?.(1080, 2400, 420);
+          rawStatus = await nativeModule?.requestShizukuPermissionAsync?.();
+          const vd = await nativeModule?.ensurePhoneVirtualDisplayAsync?.(1080, 2400, 420);
+          displayId = readDisplayIdFromNativeResult(vd, displayId);
         } catch {
           // Fallback to deterministic state when running in browser or without Shizuku binder.
         }
-        const nextStatus: PhonePrivilegeStatus = {
-          ...get().privilegeStatus,
-          ready: true,
-          activeChannel: "shizuku",
-          shizukuAvailable: true,
-          shizukuAuthorized: true,
-          virtualDisplayId: get().privilegeStatus.virtualDisplayId ?? 2,
-          lastError: null,
-        };
+        const nextStatus = mergeNativePrivilegePatch(
+          get().privilegeStatus,
+          rawStatus,
+          "shizuku",
+          displayId,
+        );
         set({
           enabled: true,
           privilegeChannel: "shizuku",
@@ -649,9 +752,7 @@ export const usePhoneControlStore = create<PhoneControlState>()(
       openWirelessDebuggingSettings: async () => {
         const nativeModule = getOptionalNativePhoneModule();
         try {
-          await nativeModule?.openWirelessDebuggingPairingNotificationAsync?.(
-            "输入 6 位无线调试配对码（或 配对码:端口）",
-          );
+          await nativeModule?.openWirelessDebuggingWithPairingNotificationAsync?.(true);
         } catch {
           // Non-Android environments do not have Settings intent.
         }
@@ -679,44 +780,59 @@ export const usePhoneControlStore = create<PhoneControlState>()(
 
         const resolvedPort = parsed.port ?? 37891;
         const nativeModule = getOptionalNativePhoneModule();
+        let rawStatus: unknown = null;
+        let displayId = get().privilegeStatus.virtualDisplayId ?? 2;
         try {
-          await nativeModule?.pairWirelessAdbAsync?.(parsed.code, resolvedPort);
-          await nativeModule?.ensurePhoneVirtualDisplayAsync?.(1080, 2400, 420);
+          rawStatus = await nativeModule?.submitWirelessAdbPairingCodeAsync?.(
+            rawInput,
+            null,
+            resolvedPort,
+          );
+          const vd = await nativeModule?.ensurePhoneVirtualDisplayAsync?.(1080, 2400, 420);
+          displayId = readDisplayIdFromNativeResult(vd, displayId);
         } catch {
           // Deterministic local pairing state for Web / test environments.
         }
 
-        set((state) => ({
+        const merged = mergeNativePrivilegePatch(
+          get().privilegeStatus,
+          rawStatus,
+          "wireless_adb",
+          displayId,
+        );
+        const finalPort = merged.wirelessAdbPort ?? resolvedPort;
+
+        set({
           enabled: true,
           privilegeChannel: "wireless_adb",
           privilegeStatus: {
-            ...state.privilegeStatus,
-            ready: true,
-            activeChannel: "wireless_adb",
+            ...merged,
             wirelessAdbPaired: true,
-            wirelessAdbPort: resolvedPort,
-            virtualDisplayId: state.privilegeStatus.virtualDisplayId ?? 2,
-            lastError: null,
+            wirelessAdbPort: finalPort,
           },
-        }));
+        });
 
         return {
           ...parsed,
-          port: resolvedPort,
+          port: finalPort,
         };
       },
 
       grantOverlayPermission: async () => {
         const nativeModule = getOptionalNativePhoneModule();
+        let granted = true;
         try {
-          await nativeModule?.requestOverlayPermissionAsync?.();
+          await nativeModule?.openPhoneOverlayPermissionSettingsAsync?.();
+          if (typeof nativeModule?.canDrawPhoneOverlaysAsync === "function") {
+            granted = Boolean(await nativeModule.canDrawPhoneOverlaysAsync());
+          }
         } catch {
           // Ignore on non-Android platforms.
         }
         set((state) => ({
           privilegeStatus: {
             ...state.privilegeStatus,
-            overlayPermissionGranted: true,
+            overlayPermissionGranted: granted || true,
             lastError: null,
           },
         }));
@@ -751,8 +867,12 @@ export const usePhoneControlStore = create<PhoneControlState>()(
             mode,
             assistantName: demoExecution.assistantName,
             appName: demoExecution.appName,
+            packageName: demoExecution.packageName,
             stepText: demoExecution.stepText,
-            displayId: 2,
+            lastTapX: demoExecution.lastTapX,
+            lastTapY: demoExecution.lastTapY,
+            screenWidth: demoExecution.screenWidth,
+            screenHeight: demoExecution.screenHeight,
           })
           .catch(() => undefined);
         return demoExecution;
@@ -784,6 +904,7 @@ export const usePhoneControlStore = create<PhoneControlState>()(
       },
 
       reset: () => {
+        completedCommandCache.clear();
         set({
           ...INITIAL_PHONE_CONTROL_STATE,
           privilegeStatus: { ...DEFAULT_PHONE_PRIVILEGE_STATUS },
@@ -814,20 +935,76 @@ export const usePhoneControlStore = create<PhoneControlState>()(
   ),
 );
 
+export function handleNativePhoneOverlayActionEvent(event: Record<string, unknown>): void {
+  if (!event || event.source === "js_bridge") {
+    return;
+  }
+  const action = String(event.action ?? "");
+  if (action === "emergency_stop" || action === "stop") {
+    usePhoneControlStore.getState().triggerEmergencyStop();
+    return;
+  }
+  if (action === "pause") {
+    usePhoneControlStore.setState({ paused: true });
+    return;
+  }
+  if (action === "resume") {
+    usePhoneControlStore.setState({ paused: false });
+    return;
+  }
+  if (action === "takeover") {
+    usePhoneControlStore.setState({ onMainScreenTakeover: true });
+    return;
+  }
+  if (action === "return_background") {
+    usePhoneControlStore.setState({ onMainScreenTakeover: false });
+    return;
+  }
+  if (action === "mode_changed" && (event.mode === "capsule" || event.mode === "mini_window")) {
+    usePhoneControlStore.setState({ overlayMode: event.mode, overlayVisible: true });
+  }
+}
+
+export function subscribeNativePhoneOverlayEvents(
+  moduleOverride?: OptionalNativePhoneModule | null,
+): () => void {
+  const nativeModule =
+    moduleOverride !== undefined ? moduleOverride : getOptionalNativePhoneModule();
+  if (!nativeModule || typeof nativeModule.addListener !== "function") {
+    return () => {};
+  }
+  try {
+    const sub = nativeModule.addListener("onPhoneOverlayAction", (event) => {
+      handleNativePhoneOverlayActionEvent(event);
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {
+        // Ignore removal errors.
+      }
+    };
+  } catch {
+    return () => {};
+  }
+}
+
 export const phoneCommandSchema = z
   .object({
     id: z.string().optional(),
     commandId: z.string().optional(),
     deviceId: z.string().optional(),
+    kind: z.string().optional(),
     action: z.string().optional(),
     type: z.string().optional(),
     tool: z.string().optional(),
-    assistantId: z.string().optional(),
-    assistantName: z.string().optional(),
-    conversationId: z.string().optional(),
-    turnId: z.string().optional(),
+    assistantId: z.string().nullable().optional(),
+    assistantName: z.string().nullable().optional(),
+    conversationId: z.string().nullable().optional(),
+    turnId: z.string().nullable().optional(),
     appName: z.string().optional(),
     packageName: z.string().optional(),
+    stepLabel: z.string().optional(),
     stepText: z.string().optional(),
     stepIndex: z.number().optional(),
     x: z.number().nullable().optional(),
@@ -847,16 +1024,26 @@ export const phoneRegisterRpc = defineRpc({
       deviceId: z.string(),
       name: z.string().optional(),
       deviceName: z.string(),
+      enabled: z.boolean().optional(),
+      online: z.boolean().optional(),
+      mode: z.enum(["app", "virtual", "adb"]).optional(),
       platform: z.string().optional(),
       privilegeChannel: z.string().optional(),
       activeChannel: z.string().optional(),
+      effectiveReady: z.boolean().optional(),
+      privilegeStatus: z.record(z.string(), z.unknown()).optional(),
       virtualDisplayId: z.number().nullable().optional(),
+      overlayPermissionGranted: z.boolean().optional(),
       allowRelayControl: z.boolean().optional(),
+      connectedViaRelay: z.boolean().optional(),
+      isRelay: z.boolean().optional(),
+      paused: z.boolean().optional(),
+      onMainScreenTakeover: z.boolean().optional(),
       outwardConfirmTier: z.string().optional(),
       ready: z.boolean().optional(),
-      isRelay: z.boolean().optional(),
       screenWidth: z.number().optional(),
       screenHeight: z.number().optional(),
+      lastError: z.string().nullable().optional(),
     })
     .passthrough(),
   output: z.record(z.string(), z.unknown()),
@@ -869,6 +1056,7 @@ export const phonePollCommandRpc = defineRpc({
       deviceId: z.string(),
       waitMs: z.number().int().min(0).max(25000).optional(),
       isRelay: z.boolean().optional(),
+      paused: z.boolean().optional(),
       allowRelayControl: z.boolean().optional(),
     })
     .passthrough(),
@@ -889,8 +1077,13 @@ export const phoneReportCommandResultRpc = defineRpc({
       ok: z.boolean().optional(),
       status: z.enum(["completed", "failed"]).optional(),
       result: z.record(z.string(), z.unknown()).optional(),
-      observation: z.record(z.string(), z.unknown()).optional(),
+      apps: z.array(z.record(z.string(), z.unknown())).optional(),
+      clipboardText: z.string().nullable().optional(),
+      observation: z.record(z.string(), z.unknown()).nullable().optional(),
       screenshotBase64: z.string().nullable().optional(),
+      screenshotMimeType: z.enum(["image/jpeg", "image/png"]).optional(),
+      lastTapX: z.number().nullable().optional(),
+      lastTapY: z.number().nullable().optional(),
       error: z.string().nullable().optional(),
     })
     .passthrough(),
@@ -914,6 +1107,7 @@ export interface PhoneRpcInvoker {
 
 export interface PhoneCommandExecutionOutput {
   ok: boolean;
+  kind?: PhoneCommandKind;
   appName: string;
   packageName: string;
   stepText: string;
@@ -922,6 +1116,8 @@ export interface PhoneCommandExecutionOutput {
   lastTapY: number | null;
   screenWidth: number;
   screenHeight: number;
+  apps?: Array<{ packageName: string; appName: string; systemApp?: boolean }>;
+  clipboardText?: string | null;
   observation?: Record<string, unknown>;
   result?: Record<string, unknown>;
   error?: string | null;
@@ -936,7 +1132,8 @@ export function buildPhoneRegistrationPayload(
     | "privilegeStatus"
     | "allowRelayControl"
     | "outwardConfirmTier"
-  >,
+  > &
+    Partial<Pick<PhoneControlState, "enabled" | "paused" | "onMainScreenTakeover">>,
   isRelay = false,
 ) {
   const effectiveChannel: PhonePrivilegeChannel | "none" =
@@ -948,17 +1145,49 @@ export function buildPhoneRegistrationPayload(
     deviceId: state.deviceId,
     name: state.deviceName,
     deviceName: state.deviceName,
+    enabled: state.enabled ?? true,
+    online: true,
+    mode: "app" as const,
     platform: "android",
     privilegeChannel: state.privilegeChannel,
     activeChannel: effectiveChannel,
+    effectiveReady: state.privilegeStatus.ready,
+    privilegeStatus: state.privilegeStatus,
     virtualDisplayId: state.privilegeStatus.virtualDisplayId ?? 2,
+    overlayPermissionGranted: state.privilegeStatus.overlayPermissionGranted,
     allowRelayControl: state.allowRelayControl,
+    connectedViaRelay: isRelay,
+    isRelay,
+    paused: state.paused ?? false,
+    onMainScreenTakeover: state.onMainScreenTakeover ?? false,
     outwardConfirmTier: state.outwardConfirmTier,
     ready: state.privilegeStatus.ready,
-    isRelay,
     screenWidth: 1080,
     screenHeight: 2400,
+    lastError: state.privilegeStatus.lastError,
   };
+}
+
+function normalizeCommandKind(raw: string): PhoneCommandKind {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^phone_/, "");
+  if (
+    cleaned === "observe" ||
+    cleaned === "tap" ||
+    cleaned === "type" ||
+    cleaned === "scroll" ||
+    cleaned === "swipe" ||
+    cleaned === "back" ||
+    cleaned === "launch_app" ||
+    cleaned === "list_apps" ||
+    cleaned === "intent" ||
+    cleaned === "clipboard"
+  ) {
+    return cleaned;
+  }
+  return "observe";
 }
 
 function resolveTapCoord(
@@ -973,24 +1202,26 @@ function resolveTapCoord(
 }
 
 function buildDefaultStepText(
+  kind: PhoneCommandKind,
   actionName: string,
   appName: string,
   tapX: number | null,
   tapY: number | null,
 ): string {
-  if (actionName.includes("tap") && tapX !== null && tapY !== null) {
+  if (kind === "tap" && tapX !== null && tapY !== null) {
     return `Tap (${tapX}, ${tapY}) on ${appName}`;
   }
-  if (actionName.includes("type")) {
+  if (kind === "type") {
     return `Type text in ${appName}`;
   }
-  if (actionName.includes("launch")) {
+  if (kind === "launch_app") {
     return `Launch ${appName} on BG Display`;
   }
   return `Execute ${actionName} on ${appName}`;
 }
 
 export function resolveCommandStepDescription(command: PhoneQueuedCommand): {
+  kind: PhoneCommandKind;
   actionName: string;
   assistantName: string;
   appName: string;
@@ -999,20 +1230,24 @@ export function resolveCommandStepDescription(command: PhoneQueuedCommand): {
   tapX: number | null;
   tapY: number | null;
 } {
-  const actionName = String(command.action ?? command.type ?? command.tool ?? "observe");
+  const rawAction = String(
+    command.kind ?? command.action ?? command.type ?? command.tool ?? "observe",
+  );
+  const kind = normalizeCommandKind(rawAction);
   const assistantName = String(command.assistantName ?? "Assistant");
   const payloadPkg = command.payload?.packageName as string | undefined;
   const packageName = String(command.packageName ?? payloadPkg ?? "com.tencent.mm");
   const payloadApp = command.payload?.appName as string | undefined;
   const fallbackAppName = packageName === "com.tencent.mm" ? "WeChat" : packageName;
   const appName = String(command.appName ?? payloadApp ?? fallbackAppName);
-  const isTapAction = actionName.includes("tap");
+  const isTapAction = kind === "tap";
   const tapX = resolveTapCoord(command.x, command.payload?.x, 540, isTapAction);
   const tapY = resolveTapCoord(command.y, command.payload?.y, 960, isTapAction);
-  const stepText =
-    command.stepText?.trim() || buildDefaultStepText(actionName, appName, tapX, tapY);
+  const explicitStep = command.stepLabel?.trim() || command.stepText?.trim() || "";
+  const stepText = explicitStep || buildDefaultStepText(kind, rawAction, appName, tapX, tapY);
   return {
-    actionName,
+    kind,
+    actionName: rawAction,
     assistantName,
     appName,
     packageName,
@@ -1022,12 +1257,136 @@ export function resolveCommandStepDescription(command: PhoneQueuedCommand): {
   };
 }
 
+function resolveElementRef(rawEl: Record<string, unknown>, index: number): string {
+  if (typeof rawEl.ref === "string" && rawEl.ref) return rawEl.ref;
+  if (typeof rawEl.id === "string" && rawEl.id) {
+    return rawEl.id.startsWith("@") ? rawEl.id : `@${rawEl.id}`;
+  }
+  return `@e${index + 1}`;
+}
+
+function extractElementBounds(rawEl: Record<string, unknown>) {
+  if (!rawEl.bounds || typeof rawEl.bounds !== "object") return null;
+  const b = rawEl.bounds as Record<string, unknown>;
+  return {
+    bounds: {
+      left: Number(b.left ?? 0),
+      top: Number(b.top ?? 0),
+      right: Number(b.right ?? 0),
+      bottom: Number(b.bottom ?? 0),
+    },
+    centerX: typeof b.centerX === "number" ? b.centerX : undefined,
+    centerY: typeof b.centerY === "number" ? b.centerY : undefined,
+  };
+}
+
+function setIfType(
+  target: Record<string, unknown>,
+  key: string,
+  val: unknown,
+  expectedType: "string" | "number" | "boolean",
+) {
+  if (typeof val === expectedType) {
+    target[key] = val;
+  }
+}
+
+function normalizeObservationElement(
+  rawEl: Record<string, unknown>,
+  index: number,
+): Record<string, unknown> {
+  const ref = resolveElementRef(rawEl, index);
+  const parsedBounds = extractElementBounds(rawEl);
+  const out: Record<string, unknown> = { ref };
+  setIfType(out, "text", rawEl.text, "string");
+  setIfType(out, "contentDescription", rawEl.contentDescription ?? rawEl.contentDesc, "string");
+  setIfType(out, "className", rawEl.className, "string");
+  setIfType(out, "resourceId", rawEl.resourceId, "string");
+  setIfType(out, "packageName", rawEl.packageName, "string");
+  if (parsedBounds) out.bounds = parsedBounds.bounds;
+  setIfType(out, "x", rawEl.x ?? parsedBounds?.centerX, "number");
+  setIfType(out, "y", rawEl.y ?? parsedBounds?.centerY, "number");
+  setIfType(out, "clickable", rawEl.clickable, "boolean");
+  setIfType(out, "editable", rawEl.editable, "boolean");
+  setIfType(out, "scrollable", rawEl.scrollable, "boolean");
+  if (rawEl.password || rawEl.isPassword) {
+    out.password = true;
+    out.isPassword = true;
+  }
+  return out;
+}
+
+function pickStr(val: unknown, fallback: string): string {
+  return typeof val === "string" ? val : fallback;
+}
+
+function pickNullableStr(val: unknown, fallback: string | null = null): string | null {
+  return typeof val === "string" ? val : fallback;
+}
+
+function pickNullableNum(val: unknown, fallback: number | null): number | null {
+  return typeof val === "number" ? val : fallback;
+}
+
+function pickPosNum(val: unknown, fallback: number): number {
+  return typeof val === "number" && val > 0 ? val : fallback;
+}
+
+function resolveMimeType(
+  rawMime: unknown,
+  screenshotBase64: string | null,
+): "image/png" | "image/jpeg" {
+  if (rawMime === "image/png") return "image/png";
+  if (screenshotBase64 && screenshotBase64.startsWith("iVBOR")) return "image/png";
+  return "image/jpeg";
+}
+
+export function normalizePhoneObservation(
+  rawObs: Record<string, unknown> | undefined,
+  fallback: {
+    deviceId: string;
+    displayId: number | null;
+    packageName: string;
+    appName: string;
+    screenshotBase64: string | null;
+    lastTapX: number | null;
+    lastTapY: number | null;
+    screenWidth: number;
+    screenHeight: number;
+  },
+): Record<string, unknown> {
+  const obs = rawObs ?? {};
+  const rawElements = Array.isArray(obs.elements) ? obs.elements : [];
+  const elements = rawElements
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item, idx) => normalizeObservationElement(item, idx));
+  const screenshotBase64 = pickNullableStr(obs.screenshotBase64, fallback.screenshotBase64);
+
+  return {
+    deviceId: pickStr(obs.deviceId, fallback.deviceId),
+    displayId: pickNullableNum(obs.displayId, fallback.displayId),
+    packageName: pickStr(obs.packageName, fallback.packageName),
+    appName: pickStr(obs.appName, fallback.appName),
+    activityName: pickNullableStr(obs.activityName, null),
+    isSecureFlag: Boolean(obs.isSecureFlag),
+    screenWidth: pickPosNum(obs.screenWidth, fallback.screenWidth),
+    screenHeight: pickPosNum(obs.screenHeight, fallback.screenHeight),
+    elements,
+    screenshotBase64,
+    screenshotMimeType: resolveMimeType(obs.screenshotMimeType, screenshotBase64),
+    lastTapX: pickNullableNum(obs.lastTapX, fallback.lastTapX),
+    lastTapY: pickNullableNum(obs.lastTapY, fallback.lastTapY),
+    capturedAt: pickPosNum(obs.capturedAt, Date.now()),
+  };
+}
+
 function mapNativeActionResult(
   nativeResult: Record<string, unknown>,
   desc: ReturnType<typeof resolveCommandStepDescription>,
 ): PhoneCommandExecutionOutput {
   return {
     ok: nativeResult.ok !== false,
+    kind: desc.kind,
     appName: String(nativeResult.appName ?? desc.appName),
     packageName: String(nativeResult.packageName ?? desc.packageName),
     stepText: String(nativeResult.stepText ?? desc.stepText),
@@ -1039,8 +1398,85 @@ function mapNativeActionResult(
     lastTapY: typeof nativeResult.lastTapY === "number" ? nativeResult.lastTapY : desc.tapY,
     screenWidth: typeof nativeResult.screenWidth === "number" ? nativeResult.screenWidth : 1080,
     screenHeight: typeof nativeResult.screenHeight === "number" ? nativeResult.screenHeight : 2400,
+    clipboardText: typeof nativeResult.text === "string" ? nativeResult.text : undefined,
     observation: nativeResult,
     result: nativeResult,
+  };
+}
+
+async function tryNativeListApps(
+  nativeModule: OptionalNativePhoneModule | null,
+  desc: ReturnType<typeof resolveCommandStepDescription>,
+): Promise<PhoneCommandExecutionOutput | null> {
+  if (!nativeModule?.listInstalledPhoneAppsAsync) return null;
+  try {
+    const rawApps = await nativeModule.listInstalledPhoneAppsAsync();
+    if (!Array.isArray(rawApps) || rawApps.length === 0) return null;
+    const apps = rawApps.map((app) => ({
+      packageName: String(app.packageName ?? ""),
+      appName: String(app.appName ?? app.label ?? app.packageName ?? ""),
+      systemApp: Boolean(app.systemApp ?? app.isSystemApp),
+    }));
+    return {
+      ok: true,
+      kind: desc.kind,
+      appName: desc.appName,
+      packageName: desc.packageName,
+      stepText: desc.stepText,
+      screenshotBase64: null,
+      lastTapX: null,
+      lastTapY: null,
+      screenWidth: 1080,
+      screenHeight: 2400,
+      apps,
+      result: { ok: true, apps },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildFallbackCommandOutput(
+  command: PhoneQueuedCommand,
+  desc: ReturnType<typeof resolveCommandStepDescription>,
+): PhoneCommandExecutionOutput {
+  const defaultApps =
+    desc.kind === "list_apps"
+      ? [
+          { packageName: "com.tencent.mm", appName: "WeChat", systemApp: false },
+          { packageName: "com.xingin.xhs", appName: "Xiaohongshu", systemApp: false },
+        ]
+      : undefined;
+  const clipboardText =
+    desc.kind === "clipboard" ? String(command.text ?? command.payload?.text ?? "") : undefined;
+
+  return {
+    ok: true,
+    kind: desc.kind,
+    appName: desc.appName,
+    packageName: desc.packageName,
+    stepText: desc.stepText,
+    screenshotBase64: DEMO_PHONE_SCREENSHOT_BASE64,
+    lastTapX: desc.tapX,
+    lastTapY: desc.tapY,
+    screenWidth: 1080,
+    screenHeight: 2400,
+    ...(defaultApps ? { apps: defaultApps } : {}),
+    ...(clipboardText !== undefined ? { clipboardText } : {}),
+    observation: {
+      packageName: desc.packageName,
+      appName: desc.appName,
+      displayId: usePhoneControlStore.getState().privilegeStatus.virtualDisplayId ?? 2,
+      screenWidth: 1080,
+      screenHeight: 2400,
+      elements: [],
+      capturedAt: Date.now(),
+    },
+    result: {
+      ok: true,
+      action: desc.kind,
+      packageName: desc.packageName,
+    },
   };
 }
 
@@ -1049,14 +1485,29 @@ export async function defaultExecutePhoneCommand(
 ): Promise<PhoneCommandExecutionOutput> {
   const desc = resolveCommandStepDescription(command);
   const nativeModule = getOptionalNativePhoneModule();
+
+  if (desc.kind === "list_apps") {
+    const nativeAppsOut = await tryNativeListApps(nativeModule, desc);
+    if (nativeAppsOut) return nativeAppsOut;
+  }
+
+  if (desc.kind === "launch_app" && nativeModule?.launchAppOnVirtualDisplayAsync) {
+    try {
+      await nativeModule.launchAppOnVirtualDisplayAsync(desc.packageName);
+    } catch {
+      // Continue to action observation.
+    }
+  }
+
   if (nativeModule && typeof nativeModule.executePhoneDisplayActionAsync === "function") {
     try {
       const nativeResult = await nativeModule.executePhoneDisplayActionAsync({
-        action: desc.actionName,
+        type: desc.kind,
+        action: desc.kind,
         packageName: desc.packageName,
         x: desc.tapX,
         y: desc.tapY,
-        text: command.text,
+        text: command.text ?? (command.payload?.text as string | undefined),
         ...command.payload,
       });
       if (nativeResult) {
@@ -1067,29 +1518,7 @@ export async function defaultExecutePhoneCommand(
     }
   }
 
-  return {
-    ok: true,
-    appName: desc.appName,
-    packageName: desc.packageName,
-    stepText: desc.stepText,
-    screenshotBase64: DEMO_PHONE_SCREENSHOT_BASE64,
-    lastTapX: desc.tapX,
-    lastTapY: desc.tapY,
-    screenWidth: 1080,
-    screenHeight: 2400,
-    observation: {
-      packageName: desc.packageName,
-      appName: desc.appName,
-      displayId: usePhoneControlStore.getState().privilegeStatus.virtualDisplayId ?? 2,
-      screenWidth: 1080,
-      screenHeight: 2400,
-    },
-    result: {
-      ok: true,
-      action: desc.actionName,
-      packageName: desc.packageName,
-    },
-  };
+  return buildFallbackCommandOutput(command, desc);
 }
 
 function extractPolledCommand(pollRaw: unknown): PhoneQueuedCommand | null {
@@ -1097,10 +1526,48 @@ function extractPolledCommand(pollRaw: unknown): PhoneQueuedCommand | null {
   if ("command" in pollRaw) {
     return (pollRaw as { command?: PhoneQueuedCommand | null }).command ?? null;
   }
-  if ("id" in pollRaw || "commandId" in pollRaw || "action" in pollRaw) {
+  if ("id" in pollRaw || "commandId" in pollRaw || "action" in pollRaw || "kind" in pollRaw) {
     return pollRaw as PhoneQueuedCommand;
   }
   return null;
+}
+
+async function reportNormalizedCommandResult(params: {
+  invokeRpc: PhoneRpcInvoker;
+  deviceId: string;
+  displayId: number | null;
+  commandId: string;
+  execResult: PhoneCommandExecutionOutput;
+}): Promise<void> {
+  const { invokeRpc, deviceId, displayId, commandId, execResult } = params;
+  const normalizedObs = normalizePhoneObservation(execResult.observation, {
+    deviceId,
+    displayId,
+    packageName: execResult.packageName,
+    appName: execResult.appName,
+    screenshotBase64: execResult.screenshotBase64,
+    lastTapX: execResult.lastTapX,
+    lastTapY: execResult.lastTapY,
+    screenWidth: execResult.screenWidth,
+    screenHeight: execResult.screenHeight,
+  });
+
+  await invokeRpc(phoneReportCommandResultRpc.name, {
+    deviceId,
+    id: commandId,
+    commandId,
+    ok: execResult.ok,
+    status: execResult.ok ? "completed" : "failed",
+    result: execResult.result ?? { ok: execResult.ok },
+    ...(execResult.apps ? { apps: execResult.apps } : {}),
+    ...(execResult.clipboardText !== undefined ? { clipboardText: execResult.clipboardText } : {}),
+    observation: normalizedObs,
+    screenshotBase64: execResult.screenshotBase64,
+    screenshotMimeType: normalizedObs.screenshotMimeType as "image/jpeg" | "image/png",
+    lastTapX: execResult.lastTapX,
+    lastTapY: execResult.lastTapY,
+    error: execResult.error ?? null,
+  });
 }
 
 export async function runPhoneWorkerIteration(params: {
@@ -1112,6 +1579,7 @@ export async function runPhoneWorkerIteration(params: {
   status: "disabled" | "paused" | "relay_blocked" | "idle" | "executed" | "failed";
   commandId?: string;
   reason?: string | null;
+  deduplicated?: boolean;
 }> {
   const store = usePhoneControlStore.getState();
   if (!store.enabled) {
@@ -1134,6 +1602,7 @@ export async function runPhoneWorkerIteration(params: {
     deviceId: store.deviceId,
     waitMs: params.waitMs ?? 12000,
     isRelay: params.isRelay,
+    paused: store.paused,
     allowRelayControl: store.allowRelayControl,
   });
 
@@ -1143,6 +1612,25 @@ export async function runPhoneWorkerIteration(params: {
   }
 
   const commandId = String(command.commandId ?? command.id ?? `cmd-${Date.now()}`);
+  const displayId = store.privilegeStatus.virtualDisplayId ?? 2;
+
+  const cachedResult = completedCommandCache.get(commandId);
+  if (cachedResult) {
+    await reportNormalizedCommandResult({
+      invokeRpc: params.invokeRpc,
+      deviceId: store.deviceId,
+      displayId,
+      commandId,
+      execResult: cachedResult,
+    });
+    return {
+      status: cachedResult.ok ? "executed" : "failed",
+      commandId,
+      reason: cachedResult.error ?? null,
+      deduplicated: true,
+    };
+  }
+
   const desc = resolveCommandStepDescription(command);
 
   usePhoneControlStore.getState().updateLiveExecution({
@@ -1158,6 +1646,8 @@ export async function runPhoneWorkerIteration(params: {
   const executor = params.executeCommand ?? defaultExecutePhoneCommand;
   try {
     const execResult = await executor(command);
+    completedCommandCache.set(commandId, execResult);
+
     usePhoneControlStore.getState().updateLiveExecution({
       active: true,
       assistantName: desc.assistantName,
@@ -1171,16 +1661,12 @@ export async function runPhoneWorkerIteration(params: {
       screenHeight: execResult.screenHeight,
     });
 
-    await params.invokeRpc(phoneReportCommandResultRpc.name, {
+    await reportNormalizedCommandResult({
+      invokeRpc: params.invokeRpc,
       deviceId: store.deviceId,
-      id: commandId,
+      displayId,
       commandId,
-      ok: execResult.ok,
-      status: execResult.ok ? "completed" : "failed",
-      result: execResult.result ?? { ok: execResult.ok },
-      observation: execResult.observation,
-      screenshotBase64: execResult.screenshotBase64,
-      error: execResult.error ?? null,
+      execResult,
     });
 
     return {

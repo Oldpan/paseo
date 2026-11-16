@@ -11,10 +11,14 @@ import {
   formatPhoneCapsuleTitle,
   formatPhoneStepStatusLabel,
   formatVirtualDisplayBadge,
+  handleNativePhoneOverlayActionEvent,
+  normalizePhoneObservation,
   parseWirelessPairingInput,
   phonePollCommandRpc,
   phoneReportCommandResultRpc,
+  resolveCommandStepDescription,
   runPhoneWorkerIteration,
+  subscribeNativePhoneOverlayEvents,
   subscribePhoneEmergencyStop,
   toPhoneScreenshotUri,
   usePhoneControlStore,
@@ -281,6 +285,142 @@ describe("pavra phone-control helpers & store", () => {
       lastTapX: 520,
       lastTapY: 880,
     });
+  });
+
+  it("aligns with coordinator command.kind/stepLabel, normalizes observations, deduplicates commandId, and syncs native overlay actions", async () => {
+    await usePhoneControlStore.getState().authorizeShizuku();
+
+    const stepDesc = resolveCommandStepDescription({
+      commandId: "cmd-kind-1",
+      kind: "tap",
+      stepLabel: "Tap WeChat search bar",
+      payload: { packageName: "com.tencent.mm", x: 300, y: 180 },
+    });
+    expect(stepDesc).toMatchObject({
+      kind: "tap",
+      packageName: "com.tencent.mm",
+      appName: "WeChat",
+      stepText: "Tap WeChat search bar",
+      tapX: 300,
+      tapY: 180,
+    });
+
+    const normalizedObs = normalizePhoneObservation(
+      {
+        elements: [
+          {
+            id: "e1",
+            text: "Search",
+            contentDesc: "Search button",
+            clickable: true,
+            bounds: { left: 10, top: 20, right: 110, bottom: 80, centerX: 60, centerY: 50 },
+          },
+        ],
+      },
+      {
+        deviceId: "pavra-android-local",
+        displayId: 2,
+        packageName: "com.tencent.mm",
+        appName: "WeChat",
+        screenshotBase64: DEMO_PHONE_SCREENSHOT_BASE64,
+        lastTapX: 60,
+        lastTapY: 50,
+        screenWidth: 1080,
+        screenHeight: 2400,
+      },
+    );
+    expect(normalizedObs).toMatchObject({
+      deviceId: "pavra-android-local",
+      displayId: 2,
+      packageName: "com.tencent.mm",
+      appName: "WeChat",
+      elements: [
+        {
+          ref: "@e1",
+          text: "Search",
+          contentDescription: "Search button",
+          clickable: true,
+          x: 60,
+          y: 50,
+          bounds: { left: 10, top: 20, right: 110, bottom: 80 },
+        },
+      ],
+    });
+
+    // Deduplication: executing the same commandId twice only calls executeCommand once.
+    const executeCommand = vi.fn(async () => ({
+      ok: true,
+      kind: "tap" as const,
+      appName: "WeChat",
+      packageName: "com.tencent.mm",
+      stepText: "Tap search",
+      screenshotBase64: DEMO_PHONE_SCREENSHOT_BASE64,
+      lastTapX: 300,
+      lastTapY: 180,
+      screenWidth: 1080,
+      screenHeight: 2400,
+    }));
+    const invokeRpc = vi.fn(async (name: string) => {
+      if (name === phonePollCommandRpc.name) {
+        return {
+          command: {
+            commandId: "cmd-dedup-99",
+            kind: "tap",
+            stepLabel: "Tap search",
+            payload: { packageName: "com.tencent.mm", x: 300, y: 180 },
+          },
+        };
+      }
+      return { accepted: true };
+    });
+
+    const firstRun = await runPhoneWorkerIteration({
+      invokeRpc,
+      isRelay: false,
+      executeCommand,
+    });
+    expect(firstRun.status).toBe("executed");
+    expect(firstRun.deduplicated).toBeUndefined();
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+
+    const secondRun = await runPhoneWorkerIteration({
+      invokeRpc,
+      isRelay: false,
+      executeCommand,
+    });
+    expect(secondRun.status).toBe("executed");
+    expect(secondRun.deduplicated).toBe(true);
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+
+    // Native overlay event synchronization (ignoring js_bridge echo)
+    let capturedListener: ((event: Record<string, unknown>) => void) | null = null;
+    const unsubOverlay = subscribeNativePhoneOverlayEvents({
+      addListener: (_name, cb) => {
+        capturedListener = cb;
+        return { remove: () => {} };
+      },
+    });
+    expect(capturedListener).toBeTypeOf("function");
+
+    handleNativePhoneOverlayActionEvent({ action: "pause", source: "js_bridge" });
+    expect(usePhoneControlStore.getState().paused).toBe(false);
+
+    handleNativePhoneOverlayActionEvent({ action: "pause", source: "native_overlay" });
+    expect(usePhoneControlStore.getState().paused).toBe(true);
+
+    handleNativePhoneOverlayActionEvent({ action: "takeover", source: "native_overlay" });
+    expect(usePhoneControlStore.getState().onMainScreenTakeover).toBe(true);
+
+    handleNativePhoneOverlayActionEvent({
+      action: "mode_changed",
+      mode: "mini_window",
+      source: "native_overlay",
+    });
+    expect(usePhoneControlStore.getState().overlayMode).toBe("mini_window");
+
+    handleNativePhoneOverlayActionEvent({ action: "emergency_stop", source: "native_overlay" });
+    expect(usePhoneControlStore.getState().overlayVisible).toBe(false);
+    unsubOverlay();
   });
 
   it("exposes all required testIDs in PhoneFloatingMiniWindow, PhoneControlModal, and PhoneLiveCard with zero useUnistyles()", () => {

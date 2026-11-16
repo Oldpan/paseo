@@ -467,8 +467,8 @@ export function PhoneFloatingMiniWindow(props: PhoneFloatingMiniWindowProps = {}
   const displayBadge = formatVirtualDisplayBadge(displayId);
   const screenshotUri = toPhoneScreenshotUri(execution.screenshotBase64);
   const tapDot = computeMiniWindowTapDotPosition({
-    lastTapX: execution.lastTapX ?? 540,
-    lastTapY: execution.lastTapY ?? 960,
+    lastTapX: execution.lastTapX,
+    lastTapY: execution.lastTapY,
     screenWidth: execution.screenWidth || 1080,
     screenHeight: execution.screenHeight || 2400,
     viewportWidth: VIEWPORT_WIDTH,
