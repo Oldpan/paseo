@@ -16,11 +16,18 @@ import {
   browserRemoteAction,
   cancelTakeover,
   cancelTurn,
+  deleteAssistantNote,
   deleteAssistantPlaybook,
   deleteRoutine,
+  listAssistantNotes,
   listAssistantPlaybooks,
+  memberNoteDelete,
+  memberNoteRead,
+  memberNotesList,
+  memberNoteWrite,
   pauseRoutine,
   readAssistantMemory,
+  readAssistantNote,
   readAssistantPlaybook,
   readState,
   reactToMessage,
@@ -33,6 +40,7 @@ import {
   sendMessage,
   startTask,
   writeAssistantMemory,
+  writeAssistantNote,
   writeAssistantPlaybook,
 } from "../shared/contracts";
 import { DEFAULT_TASK_LIMITS, type TaskLimits } from "../shared/settings";
@@ -55,15 +63,20 @@ import {
 import {
   assistantRoot,
   channelSlug,
+  deleteNote,
   deletePlaybook,
   isSafeNoteSegment,
+  listNotes,
   listPlaybooks,
   prepareHome,
   readMemory,
   readMemorySnapshot,
+  readNote,
   readPlaybook,
   syncTaskOutcomeToNotes,
+  validateNotePath,
   writeMemory,
+  writeNote,
   writePlaybook,
   type MemorySnapshot,
   type TaskOutcomeNoteInput,
@@ -507,6 +520,60 @@ export class Coordinator {
       assistantId,
       subdirectory,
       slug,
+    });
+  }
+  async listAssistantNotes(
+    input: RpcInput<typeof listAssistantNotes>,
+  ): Promise<RpcOutput<typeof listAssistantNotes>> {
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return { notes: listNotes(this.assistantDirectory(input.assistantId)) };
+    return this.member().call(serverId, memberNotesList, {
+      assistantId: input.assistantId,
+      subdirectory,
+    });
+  }
+  async readAssistantNote(
+    input: RpcInput<typeof readAssistantNote>,
+  ): Promise<RpcOutput<typeof readAssistantNote>> {
+    const validated = validateNotePath(input.path);
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return readNote(this.assistantDirectory(input.assistantId), validated.path);
+    return this.member().call(serverId, memberNoteRead, {
+      assistantId: input.assistantId,
+      subdirectory,
+      path: validated.path,
+    });
+  }
+  async writeAssistantNote(
+    input: RpcInput<typeof writeAssistantNote>,
+  ): Promise<RpcOutput<typeof writeAssistantNote>> {
+    const validated = validateNotePath(input.path);
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId)
+      return writeNote(
+        this.assistantDirectory(input.assistantId),
+        validated.path,
+        input.content,
+        input.expectedMtimeMs,
+      );
+    return this.member().call(serverId, memberNoteWrite, {
+      assistantId: input.assistantId,
+      subdirectory,
+      path: validated.path,
+      content: input.content,
+      ...(input.expectedMtimeMs !== undefined ? { expectedMtimeMs: input.expectedMtimeMs } : {}),
+    });
+  }
+  async deleteAssistantNote(
+    input: RpcInput<typeof deleteAssistantNote>,
+  ): Promise<RpcOutput<typeof deleteAssistantNote>> {
+    const validated = validateNotePath(input.path, { forDelete: true });
+    const { serverId, subdirectory } = await this.memoryTarget(input.assistantId);
+    if (!serverId) return deleteNote(this.assistantDirectory(input.assistantId), validated.path);
+    return this.member().call(serverId, memberNoteDelete, {
+      assistantId: input.assistantId,
+      subdirectory,
+      path: validated.path,
     });
   }
   async listAssistantPlaybooks(

@@ -379,6 +379,93 @@ export const writeAssistantMemory = defineRpc({
   }),
   output: z.object({ content: z.string(), mtimeMs: z.number() }),
 });
+export const assistantNoteCategoryValues = [
+  "index",
+  "preferences",
+  "channels",
+  "work-log",
+  "archive",
+  "general",
+] as const;
+export const assistantNoteCategorySchema = z.enum(assistantNoteCategoryValues);
+export type AssistantNoteCategory = z.infer<typeof assistantNoteCategorySchema>;
+export const assistantNoteSummarySchema = z.object({
+  path: z.string(),
+  category: assistantNoteCategorySchema,
+  title: z.string(),
+  mtimeMs: z.number(),
+  sizeBytes: z.number(),
+});
+export const assistantNoteFileSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  mtimeMs: z.number(),
+});
+export type AssistantNoteSummary = z.infer<typeof assistantNoteSummarySchema>;
+export type AssistantNoteFile = z.infer<typeof assistantNoteFileSchema>;
+export const listAssistantNotes = defineRpc({
+  name: "chat.assistant.notes.list",
+  input: z.object({ assistantId: z.string().uuid() }),
+  output: z.object({ notes: z.array(assistantNoteSummarySchema) }),
+});
+export const readAssistantNote = defineRpc({
+  name: "chat.assistant.notes.read",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    path: z.string().min(1).max(200),
+  }),
+  output: assistantNoteFileSchema,
+});
+export const writeAssistantNote = defineRpc({
+  name: "chat.assistant.notes.write",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    path: z.string().min(1).max(200),
+    content: z.string().max(1_000_000),
+    expectedMtimeMs: z.number().optional(),
+  }),
+  output: assistantNoteFileSchema,
+});
+export const deleteAssistantNote = defineRpc({
+  name: "chat.assistant.notes.delete",
+  input: z.object({
+    assistantId: z.string().uuid(),
+    path: z.string().min(1).max(200),
+  }),
+  output: z.object({ deleted: z.boolean() }),
+});
+const memberAssistantNoteHomeInput = z.object({
+  assistantId: z.string().uuid(),
+  subdirectory: z.boolean().optional(),
+});
+export const memberNotesList = defineRpc({
+  name: "member.notes.list",
+  input: memberAssistantNoteHomeInput,
+  output: z.object({ notes: z.array(assistantNoteSummarySchema) }),
+});
+export const memberNoteRead = defineRpc({
+  name: "member.note.read",
+  input: memberAssistantNoteHomeInput.extend({
+    path: z.string().min(1).max(200),
+  }),
+  output: assistantNoteFileSchema,
+});
+export const memberNoteWrite = defineRpc({
+  name: "member.note.write",
+  input: memberAssistantNoteHomeInput.extend({
+    path: z.string().min(1).max(200),
+    content: z.string().max(1_000_000),
+    expectedMtimeMs: z.number().optional(),
+  }),
+  output: assistantNoteFileSchema,
+});
+export const memberNoteDelete = defineRpc({
+  name: "member.note.delete",
+  input: memberAssistantNoteHomeInput.extend({
+    path: z.string().min(1).max(200),
+  }),
+  output: z.object({ deleted: z.boolean() }),
+});
 export const playbookSummarySchema = z.object({
   slug: z.string(),
   title: z.string(),

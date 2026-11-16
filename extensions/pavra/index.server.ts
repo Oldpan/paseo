@@ -5,6 +5,14 @@ import {
   readState,
   readAssistantMemory,
   writeAssistantMemory,
+  listAssistantNotes,
+  readAssistantNote,
+  writeAssistantNote,
+  deleteAssistantNote,
+  memberNotesList,
+  memberNoteRead,
+  memberNoteWrite,
+  memberNoteDelete,
   listAssistantPlaybooks,
   readAssistantPlaybook,
   writeAssistantPlaybook,
@@ -55,14 +63,18 @@ import {
 } from "./shared/member";
 import {
   assistantRoot,
+  deleteNote,
   deletePlaybook,
+  listNotes,
   listPlaybooks,
   prepareHome,
   readMemory,
   readMemorySnapshot,
+  readNote,
   readPlaybook,
   syncTaskOutcomeToNotes,
   writeMemory,
+  writeNote,
   writePlaybook,
 } from "./server/assistant-files";
 import type { MachinePort } from "./server/machines";
@@ -159,6 +171,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(saveAssistant, (input) => chat().saveAssistant(input));
   server.handle(readAssistantMemory, (input) => chat().readAssistantMemory(input));
   server.handle(writeAssistantMemory, (input) => chat().writeAssistantMemory(input));
+  server.handle(listAssistantNotes, (input) => chat().listAssistantNotes(input));
+  server.handle(readAssistantNote, (input) => chat().readAssistantNote(input));
+  server.handle(writeAssistantNote, (input) => chat().writeAssistantNote(input));
+  server.handle(deleteAssistantNote, (input) => chat().deleteAssistantNote(input));
   server.handle(listAssistantPlaybooks, (input) => chat().listAssistantPlaybooks(input));
   server.handle(readAssistantPlaybook, (input) => chat().readAssistantPlaybook(input));
   server.handle(writeAssistantPlaybook, (input) => chat().writeAssistantPlaybook(input));
@@ -225,6 +241,14 @@ export default function contribute(server: PluginServerContext) {
     writeMemory(memberHome(input), input.content, input.expectedMtimeMs),
   );
   server.handle(memberMemorySnapshot, (input) => readMemorySnapshot(memberHome(input), input.slug));
+  server.handle(memberNotesList, (input) => ({
+    notes: listNotes(memberHome(input)),
+  }));
+  server.handle(memberNoteRead, (input) => readNote(memberHome(input), input.path));
+  server.handle(memberNoteWrite, (input) =>
+    writeNote(memberHome(input), input.path, input.content, input.expectedMtimeMs),
+  );
+  server.handle(memberNoteDelete, (input) => deleteNote(memberHome(input), input.path));
   server.handle(memberPlaybooksList, (input) => ({
     playbooks: listPlaybooks(memberHome(input)),
   }));

@@ -37,6 +37,29 @@ export interface PlaybookFile {
   mtimeMs: number;
 }
 
+export type AssistantNoteCategory =
+  | "index"
+  | "preferences"
+  | "channels"
+  | "work-log"
+  | "archive"
+  | "general";
+
+export interface AssistantNoteSummary {
+  path: string;
+  category: AssistantNoteCategory;
+  title: string;
+  mtimeMs: number;
+  sizeBytes: number;
+}
+
+export interface AssistantNoteFile {
+  path: string;
+  content: string;
+  /** 0 when the file does not exist yet. */
+  mtimeMs: number;
+}
+
 export interface MemorySnapshot {
   memoryIndex: string;
   userPreferences: string;
@@ -377,6 +400,258 @@ export function deletePlaybook(directory: string, slug: string): { deleted: bool
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT")
       return { deleted: false };
+    throw error;
+  }
+}
+
+interface ResolvedNoteTarget {
+  path: string;
+  category: AssistantNoteCategory;
+  fallbackTitle: string;
+  dir: string;
+  file: string;
+  deletable: boolean;
+}
+
+const NOTE_SUBDIR_CATEGORIES: Readonly<Record<string, AssistantNoteCategory>> = {
+  channels: "channels",
+  "work-log": "work-log",
+  archive: "archive",
+  general: "general",
+};
+
+const NOTE_CATEGORY_RANK: Readonly<Record<AssistantNoteCategory, number>> = {
+  index: 0,
+  preferences: 1,
+  channels: 2,
+  "work-log": 3,
+  general: 4,
+  archive: 5,
+};
+
+export function validateNotePath(
+  rawPath: string,
+  options?: { forDelete?: boolean },
+): { path: string; category: AssistantNoteCategory; fallbackTitle: string; deletable: boolean } {
+  if (
+    typeof rawPath !== "string" ||
+    rawPath.length === 0 ||
+    rawPath !== rawPath.trim() ||
+    rawPath.includes("\\") ||
+    rawPath.includes("\0") ||
+    rawPath.startsWith("/") ||
+    rawPath.endsWith("/")
+  ) {
+    throw new Error("Invalid note file name.");
+  }
+
+  if (rawPath === "MEMORY.md") {
+    if (options?.forDelete) {
+      throw new Error("MEMORY.md cannot be deleted.");
+    }
+    return {
+      path: "MEMORY.md",
+      category: "index",
+      fallbackTitle: "MEMORY.md",
+      deletable: false,
+    };
+  }
+
+  if (rawPath === "notes/user-preferences.md") {
+    return {
+      path: "notes/user-preferences.md",
+      category: "preferences",
+      fallbackTitle: "User Preferences",
+      deletable: true,
+    };
+  }
+
+  const parts = rawPath.split("/");
+  if (parts[0] !== "notes") {
+    throw new Error("Invalid note file name.");
+  }
+
+  if (parts.length === 2) {
+    const fileName = parts[1]!;
+    if (!fileName.endsWith(".md")) throw new Error("Invalid note file name.");
+    const slug = fileName.slice(0, -3);
+    if (!isSafeNoteSegment(slug)) throw new Error("Invalid note file name.");
+    return {
+      path: `notes/${slug}.md`,
+      category: "general",
+      fallbackTitle: slug,
+      deletable: true,
+    };
+  }
+
+  if (parts.length === 3) {
+    const subdir = parts[1]!;
+    const fileName = parts[2]!;
+    const category = NOTE_SUBDIR_CATEGORIES[subdir];
+    if (!category || !fileName.endsWith(".md")) {
+      throw new Error("Invalid note file name.");
+    }
+    const slug = fileName.slice(0, -3);
+    if (!isSafeNoteSegment(slug)) throw new Error("Invalid note file name.");
+    return {
+      path: `notes/${subdir}/${slug}.md`,
+      category,
+      fallbackTitle: slug,
+      deletable: true,
+    };
+  }
+
+  throw new Error("Invalid note file name.");
+}
+
+function resolveNoteTarget(
+  directory: string,
+  rawPath: string,
+  options?: { forDelete?: boolean },
+): ResolvedNoteTarget {
+  const validated = validateNotePath(rawPath, options);
+  const rootDir = path.resolve(directory);
+
+  if (validated.path === "MEMORY.md") {
+    const file = containedFile(rootDir, "MEMORY.md");
+    return { ...validated, dir: rootDir, file };
+  }
+
+  const parts = validated.path.split("/");
+  const fileName = parts[parts.length - 1]!;
+  const subdirs = parts.slice(0, -1);
+  const targetDir = path.join(rootDir, ...subdirs);
+  const file = containedFile(targetDir, fileName);
+  const relToRoot = path.relative(rootDir, file);
+  if (!relToRoot || relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+    throw new Error("Invalid note file name.");
+  }
+  return { ...validated, dir: targetDir, file };
+}
+
+function readNoteSummaryEntry(directory: string, notePath: string): AssistantNoteSummary | null {
+  const target = resolveNoteTarget(directory, notePath);
+  try {
+    const stat = statSync(target.file);
+    const content = readFileSync(target.file, "utf8");
+    return {
+      path: target.path,
+      category: target.category,
+      title: playbookTitle(target.fallbackTitle, content),
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: Buffer.byteLength(content, "utf8"),
+    };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      if (target.path === "MEMORY.md" || target.path === "notes/user-preferences.md") {
+        return {
+          path: target.path,
+          category: target.category,
+          title: target.fallbackTitle,
+          mtimeMs: 0,
+          sizeBytes: 0,
+        };
+      }
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function listNotes(directory: string): AssistantNoteSummary[] {
+  const seen = new Set<string>();
+  const items: AssistantNoteSummary[] = [];
+
+  const pushIfValid = (notePath: string) => {
+    if (seen.has(notePath)) return;
+    try {
+      const summary = readNoteSummaryEntry(directory, notePath);
+      if (summary) {
+        seen.add(summary.path);
+        items.push(summary);
+      }
+    } catch {}
+  };
+
+  pushIfValid("MEMORY.md");
+  pushIfValid("notes/user-preferences.md");
+
+  const notesDir = path.join(directory, "notes");
+  try {
+    for (const entry of readdirSync(notesDir)) {
+      if (!entry.endsWith(".md") || entry === "user-preferences.md") continue;
+      const slug = entry.slice(0, -3);
+      if (!isSafeNoteSegment(slug)) continue;
+      pushIfValid(`notes/${slug}.md`);
+    }
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
+
+  for (const subdir of ["channels", "work-log", "general", "archive"] as const) {
+    const subPath = path.join(notesDir, subdir);
+    try {
+      for (const entry of readdirSync(subPath)) {
+        if (!entry.endsWith(".md")) continue;
+        const slug = entry.slice(0, -3);
+        if (!isSafeNoteSegment(slug)) continue;
+        pushIfValid(`notes/${subdir}/${slug}.md`);
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+  }
+
+  return [...items].sort((a, b) => {
+    const rankDiff = NOTE_CATEGORY_RANK[a.category] - NOTE_CATEGORY_RANK[b.category];
+    if (rankDiff !== 0) return rankDiff;
+    return a.path.localeCompare(b.path);
+  });
+}
+
+export function readNote(directory: string, notePath: string): AssistantNoteFile {
+  const target = resolveNoteTarget(directory, notePath);
+  try {
+    return {
+      path: target.path,
+      content: readFileSync(target.file, "utf8"),
+      mtimeMs: statSync(target.file).mtimeMs,
+    };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { path: target.path, content: "", mtimeMs: 0 };
+    }
+    throw error;
+  }
+}
+
+export function writeNote(
+  directory: string,
+  notePath: string,
+  content: string,
+  expectedMtimeMs?: number,
+): AssistantNoteFile {
+  const target = resolveNoteTarget(directory, notePath);
+  if (
+    expectedMtimeMs !== undefined &&
+    readNote(directory, target.path).mtimeMs !== expectedMtimeMs
+  ) {
+    throw new Error("The note changed since it was loaded. Reload it and try again.");
+  }
+  mkdirSync(target.dir, { recursive: true, mode: 0o700 });
+  writeAtomic(target.file, content);
+  return readNote(directory, target.path);
+}
+
+export function deleteNote(directory: string, notePath: string): { deleted: boolean } {
+  const target = resolveNoteTarget(directory, notePath, { forDelete: true });
+  try {
+    unlinkSync(target.file);
+    return { deleted: true };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { deleted: false };
+    }
     throw error;
   }
 }

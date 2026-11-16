@@ -1795,4 +1795,269 @@ describe("routines and reminders (Stage A.2: T0 + T1)", () => {
       }),
     ).toThrow("Message no longer exists.");
   });
+
+  it("lists, reads, writes, and deletes assistant notes across categories with mtime conflict and path traversal guards", async () => {
+    const f = fixture();
+
+    // Always includes MEMORY.md and notes/user-preferences.md even before user-preferences.md is created.
+    const initialList = await f.coordinator.listAssistantNotes({ assistantId: f.assistant.id });
+    expect(initialList.notes).toEqual([
+      expect.objectContaining({
+        path: "MEMORY.md",
+        category: "index",
+        title: "Likes TypeScript",
+      }),
+      expect.objectContaining({
+        path: "notes/user-preferences.md",
+        category: "preferences",
+        title: "User Preferences",
+        mtimeMs: 0,
+        sizeBytes: 0,
+      }),
+    ]);
+
+    const emptyPrefs = await f.coordinator.readAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/user-preferences.md",
+    });
+    expect(emptyPrefs).toEqual({
+      path: "notes/user-preferences.md",
+      content: "",
+      mtimeMs: 0,
+    });
+
+    const writtenPrefs = await f.coordinator.writeAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/user-preferences.md",
+      content: "# User Preferences\n\n- Concise bullets\n",
+      expectedMtimeMs: 0,
+    });
+    expect(writtenPrefs.path).toBe("notes/user-preferences.md");
+    expect(writtenPrefs.mtimeMs).toBeGreaterThan(0);
+
+    // Optimistic concurrency check on stale expectedMtimeMs.
+    await expect(
+      f.coordinator.writeAssistantNote({
+        assistantId: f.assistant.id,
+        path: "notes/user-preferences.md",
+        content: "Stale overwrite",
+        expectedMtimeMs: writtenPrefs.mtimeMs - 1,
+      }),
+    ).rejects.toThrow("changed since it was loaded");
+
+    // Write notes across general, channels, work-log, and archive categories.
+    await f.coordinator.writeAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/roadmap.md",
+      content: "# Roadmap Notes\n\nShip A3.",
+    });
+    await f.coordinator.writeAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/general/qa-note.md",
+      content: "# QA Note\n\nVerified tree.",
+    });
+    await f.coordinator.writeAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/channels/general.md",
+      content: "# Channel General\n\nDecisions.",
+    });
+    await f.coordinator.writeAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/work-log/2026-W46.md",
+      content: "# Work Log (2026-W46)\n\n- Shipped notes RPCs",
+    });
+    await f.coordinator.writeAssistantNote({
+      assistantId: f.assistant.id,
+      path: "notes/archive/legacy-plan.md",
+      content: "# Legacy Plan\n\nArchived.",
+    });
+
+    const listed = await f.coordinator.listAssistantNotes({ assistantId: f.assistant.id });
+    expect(
+      listed.notes.map((item) => ({
+        path: item.path,
+        category: item.category,
+        title: item.title,
+      })),
+    ).toEqual([
+      { path: "MEMORY.md", category: "index", title: "Likes TypeScript" },
+      { path: "notes/user-preferences.md", category: "preferences", title: "User Preferences" },
+      { path: "notes/channels/general.md", category: "channels", title: "Channel General" },
+      {
+        path: "notes/work-log/2026-W46.md",
+        category: "work-log",
+        title: "Work Log (2026-W46)",
+      },
+      { path: "notes/general/qa-note.md", category: "general", title: "QA Note" },
+      { path: "notes/roadmap.md", category: "general", title: "Roadmap Notes" },
+      { path: "notes/archive/legacy-plan.md", category: "archive", title: "Legacy Plan" },
+    ]);
+
+    // Rejects deleting MEMORY.md.
+    await expect(
+      f.coordinator.deleteAssistantNote({
+        assistantId: f.assistant.id,
+        path: "MEMORY.md",
+      }),
+    ).rejects.toThrow("MEMORY.md cannot be deleted");
+
+    // Rejects path traversal and arbitrary paths.
+    for (const unsafePath of [
+      "../secret.md",
+      "notes/../MEMORY.md",
+      "notes/channels/../../secret.md",
+      "notes/unknown-dir/file.md",
+      "/etc/passwd",
+      "notes/bad slug.md",
+      "playbooks/daily.md",
+    ]) {
+      await expect(
+        f.coordinator.readAssistantNote({ assistantId: f.assistant.id, path: unsafePath }),
+      ).rejects.toThrow("Invalid note file name");
+      await expect(
+        f.coordinator.writeAssistantNote({
+          assistantId: f.assistant.id,
+          path: unsafePath,
+          content: "bad",
+        }),
+      ).rejects.toThrow("Invalid note file name");
+      await expect(
+        f.coordinator.deleteAssistantNote({ assistantId: f.assistant.id, path: unsafePath }),
+      ).rejects.toThrow("Invalid note file name");
+    }
+
+    // Delete a note under notes/.
+    expect(
+      await f.coordinator.deleteAssistantNote({
+        assistantId: f.assistant.id,
+        path: "notes/general/qa-note.md",
+      }),
+    ).toEqual({ deleted: true });
+    expect(
+      await f.coordinator.deleteAssistantNote({
+        assistantId: f.assistant.id,
+        path: "notes/general/qa-note.md",
+      }),
+    ).toEqual({ deleted: false });
+  });
+
+  it("delegates assistant notes list, read, write, and delete to a member machine", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "pavra-member-notes-"));
+    cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+    const store = new ChatStore(path.join(directory, "chat.sqlite"));
+    cleanup.push(() => store.close());
+    const execution = new FakeExecution();
+    const memberNotes = new Map<
+      string,
+      { content: string; category: string; title: string; mtimeMs: number }
+    >([
+      [
+        "MEMORY.md",
+        { content: "# Max Memory\n", category: "index", title: "Max Memory", mtimeMs: 1 },
+      ],
+    ]);
+    const machines: MachinePort = {
+      self: async () => "srv_spark",
+      isMember: (serverId) => serverId === "srv_mac",
+      online: async (serverId) => serverId === "srv_mac",
+      list: async () => [
+        { serverId: "srv_spark", label: "Spark", role: "coordinator" },
+        { serverId: "srv_mac", label: "Mac", role: "member" },
+      ],
+      call: async (_serverId, contract, input) => {
+        if (contract.name === "member.home.prepare") {
+          return contract.output.parse({ directory: "/mac/pavra/assistants/max" });
+        }
+        if (contract.name === "member.notes.list") {
+          return contract.output.parse({
+            notes: [...memberNotes.entries()].map(([notePath, val]) => ({
+              path: notePath,
+              category: val.category,
+              title: val.title,
+              mtimeMs: val.mtimeMs,
+              sizeBytes: Buffer.byteLength(val.content, "utf8"),
+            })),
+          });
+        }
+        if (contract.name === "member.note.read") {
+          const { path: notePath } = input as { path: string };
+          const found = memberNotes.get(notePath);
+          return contract.output.parse({
+            path: notePath,
+            content: found?.content ?? "",
+            mtimeMs: found?.mtimeMs ?? 0,
+          });
+        }
+        if (contract.name === "member.note.write") {
+          const {
+            path: notePath,
+            content,
+            expectedMtimeMs,
+          } = input as {
+            path: string;
+            content: string;
+            expectedMtimeMs?: number;
+          };
+          const currentMtime = memberNotes.get(notePath)?.mtimeMs ?? 0;
+          if (expectedMtimeMs !== undefined && currentMtime !== expectedMtimeMs) {
+            throw new Error("The note changed since it was loaded. Reload it and try again.");
+          }
+          const next = {
+            content,
+            category: "general",
+            title: content.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? notePath,
+            mtimeMs: currentMtime + 1,
+          };
+          memberNotes.set(notePath, next);
+          return contract.output.parse({
+            path: notePath,
+            content: next.content,
+            mtimeMs: next.mtimeMs,
+          });
+        }
+        if (contract.name === "member.note.delete") {
+          const { path: notePath } = input as { path: string };
+          return contract.output.parse({ deleted: memberNotes.delete(notePath) });
+        }
+        throw new Error(`unexpected ${contract.name}`);
+      },
+    };
+    const coordinator = new Coordinator(store, directory, { execution, machines });
+    cleanup.push(() => coordinator.close());
+    coordinator.attach();
+
+    const max = coordinator.saveAssistant({
+      id: randomUUID(),
+      name: "Max",
+      provider: "codex/test-model",
+      persona: "Member assistant",
+      serverId: "srv_mac",
+    });
+
+    const written = await coordinator.writeAssistantNote({
+      assistantId: max.id,
+      path: "notes/general/mac-note.md",
+      content: "# Mac Note\n\nStored on member.",
+      expectedMtimeMs: 0,
+    });
+    expect(written).toEqual({
+      path: "notes/general/mac-note.md",
+      content: "# Mac Note\n\nStored on member.",
+      mtimeMs: 1,
+    });
+    expect(
+      await coordinator.readAssistantNote({
+        assistantId: max.id,
+        path: "notes/general/mac-note.md",
+      }),
+    ).toEqual(written);
+    const listed = await coordinator.listAssistantNotes({ assistantId: max.id });
+    expect(listed.notes.map((n) => n.path)).toEqual(["MEMORY.md", "notes/general/mac-note.md"]);
+    expect(
+      await coordinator.deleteAssistantNote({
+        assistantId: max.id,
+        path: "notes/general/mac-note.md",
+      }),
+    ).toEqual({ deleted: true });
+  });
 });
