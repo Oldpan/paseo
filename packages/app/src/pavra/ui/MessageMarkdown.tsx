@@ -14,11 +14,26 @@ import {
 import { copyText } from "./clipboard";
 import { parseFileRef, type ParsedFileRef } from "./fileRefParser";
 import { HighlightedCode } from "./HighlightedCode";
-import { CheckIcon, ChevronIcon, CopyIcon, FileTextIcon } from "./icons";
+import {
+  CheckIcon,
+  ChevronIcon,
+  CopyIcon,
+  FileTextIcon,
+  MaximizeIcon,
+  MonitorIcon,
+  RowsIcon,
+} from "./icons";
+import { InteractiveTableModal } from "./InteractiveTableModal";
 import { linkKind, parseMarkdown, type MdBlock, type MdInline, type MdRoot } from "./markdown";
 import { isPreviewableAgentPortUrl } from "./portPreviewUrl";
 import { ctrlShadow, text as type, webTransition, type Palette } from "./theme";
 import { useTheme } from "./ThemeProvider";
+import {
+  isInteractiveTableFenceLang,
+  isPreviewableHtmlBlock,
+  parseInteractiveTable,
+} from "./uiHtmlPreview";
+import { InlineHtmlPreviewFrame, UiHtmlPreviewModal } from "./UiHtmlPreviewModal";
 
 export type { ParsedFileRef } from "./fileRefParser";
 
@@ -30,7 +45,9 @@ export function MessageMarkdown({
   narrow,
   onOpenLocalPath,
   onOpenPortPreview,
+  onPressPortUrl,
   onPressFileRef,
+  onQuoteTableSelection,
   workspaceCwd,
 }: {
   content: string;
@@ -38,11 +55,14 @@ export function MessageMarkdown({
   narrow: boolean;
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
+  onPressPortUrl?: (url: string) => void;
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  onQuoteTableSelection?: (markdown: string) => void;
   workspaceCwd?: string;
 }) {
   const tree = useMemo(() => parseMarkdown(content), [content]);
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const handlePortPreview = onPressPortUrl ?? onOpenPortPreview;
   return (
     <View testID="markdown-root" style={{ minWidth: 0, maxWidth: "100%" }}>
       <Blocks
@@ -51,8 +71,9 @@ export function MessageMarkdown({
         narrow={narrow}
         onOpenLink={setPendingUrl}
         onOpenLocalPath={onOpenLocalPath}
-        onOpenPortPreview={onOpenPortPreview}
+        onOpenPortPreview={handlePortPreview}
         onPressFileRef={onPressFileRef}
+        onQuoteTableSelection={onQuoteTableSelection}
         workspaceCwd={workspaceCwd}
       />
       <ExternalLinkModal url={pendingUrl} onClose={() => setPendingUrl(null)} />
@@ -77,6 +98,7 @@ function Blocks({
   onOpenLocalPath,
   onOpenPortPreview,
   onPressFileRef,
+  onQuoteTableSelection,
   workspaceCwd,
   italic,
 }: {
@@ -87,6 +109,7 @@ function Blocks({
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  onQuoteTableSelection?: (markdown: string) => void;
   workspaceCwd?: string;
   italic?: boolean;
 }) {
@@ -102,6 +125,7 @@ function Blocks({
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
           onPressFileRef={onPressFileRef}
+          onQuoteTableSelection={onQuoteTableSelection}
           workspaceCwd={workspaceCwd}
           italic={italic}
         />
@@ -118,6 +142,7 @@ function Block({
   onOpenLocalPath,
   onOpenPortPreview,
   onPressFileRef,
+  onQuoteTableSelection,
   workspaceCwd,
   italic,
 }: {
@@ -128,6 +153,7 @@ function Block({
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  onQuoteTableSelection?: (markdown: string) => void;
   workspaceCwd?: string;
   italic?: boolean;
 }) {
@@ -174,6 +200,7 @@ function Block({
           onOpenLocalPath={onOpenLocalPath}
           onOpenPortPreview={onOpenPortPreview}
           onPressFileRef={onPressFileRef}
+          onQuoteTableSelection={onQuoteTableSelection}
           workspaceCwd={workspaceCwd}
           italic
         />
@@ -184,7 +211,14 @@ function Block({
     return <View style={{ height: 1, backgroundColor: t.dividerLine, marginVertical: 4 }} />;
   }
   if (node.type === "code") {
-    return <MarkdownCodeBlock lang={node.lang} value={node.value} narrow={narrow} />;
+    return (
+      <MarkdownCodeBlock
+        lang={node.lang}
+        value={node.value}
+        narrow={narrow}
+        onQuoteTableSelection={onQuoteTableSelection}
+      />
+    );
   }
   if (node.type === "list") {
     return (
@@ -217,6 +251,7 @@ function Block({
                 onOpenLocalPath={onOpenLocalPath}
                 onOpenPortPreview={onOpenPortPreview}
                 onPressFileRef={onPressFileRef}
+                onQuoteTableSelection={onQuoteTableSelection}
                 workspaceCwd={workspaceCwd}
                 italic={italic}
               />
@@ -235,6 +270,7 @@ function Block({
         onOpenLocalPath={onOpenLocalPath}
         onOpenPortPreview={onOpenPortPreview}
         onPressFileRef={onPressFileRef}
+        onQuoteTableSelection={onQuoteTableSelection}
         workspaceCwd={workspaceCwd}
       />
     );
@@ -633,20 +669,176 @@ function Inlines({
   });
 }
 
+function CodeBlockHeaderActions({
+  isHtmlPreviewable,
+  showInlinePreview,
+  hasInteractiveJsonTable,
+  copied,
+  value,
+  onToggleInlinePreview,
+  onExpandHtmlModal,
+  onOpenTableModal,
+  onCopiedChange,
+}: {
+  isHtmlPreviewable: boolean;
+  showInlinePreview: boolean;
+  hasInteractiveJsonTable: boolean;
+  copied: boolean;
+  value: string;
+  onToggleInlinePreview: () => void;
+  onExpandHtmlModal: () => void;
+  onOpenTableModal: () => void;
+  onCopiedChange: (copied: boolean) => void;
+}) {
+  const { palette: t, name } = useTheme();
+  const label = copied ? "Copied" : "Copy";
+
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+      {isHtmlPreviewable ? (
+        <>
+          <Pressable
+            testID="markdown-html-preview-toggle"
+            role="button"
+            accessibilityRole="button"
+            accessibilityLabel={showInlinePreview ? "Code" : "Preview UI"}
+            onPress={onToggleInlinePreview}
+            style={(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              return [
+                {
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 4,
+                  borderRadius: 6,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor: showInlinePreview
+                    ? t.brandAccent
+                    : hovered
+                      ? t.brandAccentSoft
+                      : t.surfaceSecondary,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                },
+                ctrlShadow(t, name),
+              ];
+            }}
+          >
+            <MonitorIcon color={showInlinePreview ? t.onAccent : t.textPrimary} size={11} />
+            <Text
+              style={type(showInlinePreview ? t.onAccent : t.textPrimary, 11, {
+                fontWeight: "700",
+              })}
+            >
+              {showInlinePreview ? "Code" : "Preview UI"}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            testID="markdown-html-preview-expand"
+            role="button"
+            accessibilityRole="button"
+            accessibilityLabel="Expand"
+            onPress={onExpandHtmlModal}
+            style={(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              return [
+                {
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 4,
+                  borderRadius: 6,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor: hovered ? t.surfaceTertiary : t.surfaceSecondary,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                },
+                ctrlShadow(t, name),
+              ];
+            }}
+          >
+            <MaximizeIcon color={t.textPrimary} size={11} />
+            <Text style={type(t.textPrimary, 11, { fontWeight: "700" })}>Expand</Text>
+          </Pressable>
+        </>
+      ) : null}
+
+      {hasInteractiveJsonTable ? (
+        <Pressable
+          testID="markdown-table-interactive-btn"
+          role="button"
+          accessibilityRole="button"
+          accessibilityLabel="Interactive Table"
+          onPress={onOpenTableModal}
+          style={(state) => {
+            const hovered = Boolean((state as { hovered?: boolean }).hovered);
+            return [
+              {
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+                borderRadius: 6,
+                borderWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: hovered ? t.brandAccent : t.brandAccentSoft,
+                paddingHorizontal: 8,
+                paddingVertical: 3,
+              },
+              ctrlShadow(t, name),
+            ];
+          }}
+        >
+          <RowsIcon color={t.onAccent} size={11} />
+          <Text style={type(t.onAccent, 11, { fontWeight: "700" })}>Interactive Table</Text>
+        </Pressable>
+      ) : null}
+
+      <Pressable
+        role="button"
+        accessibilityLabel={label}
+        onPress={async () => {
+          const result = await copyText(value);
+          onCopiedChange(result === "copied");
+          setTimeout(() => onCopiedChange(false), 1200);
+        }}
+        style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
+      >
+        {copied ? <CheckIcon color={t.success} /> : <CopyIcon color={t.textSecondary} />}
+      </Pressable>
+    </View>
+  );
+}
+
 export function MarkdownCodeBlock({
   lang,
   value,
   narrow,
+  onQuoteTableSelection,
 }: {
   lang: string | null;
   value: string;
   narrow: boolean;
+  onQuoteTableSelection?: (markdown: string) => void;
 }) {
   const { palette: t, name } = useTheme();
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [showInlinePreview, setShowInlinePreview] = useState(false);
+  const [expandHtmlModal, setExpandHtmlModal] = useState(false);
+  const [openTableModal, setOpenTableModal] = useState(false);
+
+  const isHtmlPreviewable = useMemo(() => isPreviewableHtmlBlock(lang, value), [lang, value]);
+  const interactiveJsonTable = useMemo(
+    () => (isInteractiveTableFenceLang(lang) ? parseInteractiveTable({ lang, code: value }) : null),
+    [lang, value],
+  );
+  const hasInteractiveJsonTable = Boolean(
+    interactiveJsonTable && interactiveJsonTable.rows.length >= 1,
+  );
+
   const tall = value.split("\n").length > COLLAPSE_LINES;
-  const label = copied ? "Copied" : "Copy";
   return (
     <View
       testID="markdown-code-block"
@@ -666,6 +858,8 @@ export function MarkdownCodeBlock({
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 8,
           borderBottomWidth: 1,
           borderColor: t.retroBorderLight,
           backgroundColor: t.surfacePrimary,
@@ -682,58 +876,85 @@ export function MarkdownCodeBlock({
         >
           {lang || "text"}
         </Text>
-        <Pressable
-          role="button"
-          accessibilityLabel={label}
-          onPress={async () => {
-            const result = await copyText(value);
-            setCopied(result === "copied");
-            setTimeout(() => setCopied(false), 1200);
-          }}
-          style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}
-        >
-          {copied ? <CheckIcon color={t.success} /> : <CopyIcon color={t.textSecondary} />}
-        </Pressable>
-      </View>
-      <ScrollView
-        horizontal={!narrow}
-        scrollEnabled={!narrow}
-        style={{ maxHeight: tall && !expanded ? 200 : undefined }}
-        contentContainerStyle={{ padding: 12, minWidth: 0 }}
-      >
-        <HighlightedCode
-          code={value}
-          language={lang}
-          color={t.textPrimary}
-          narrow={narrow}
-          style={
-            isWeb
-              ? ({ whiteSpace: narrow ? "pre-wrap" : "pre", overflowWrap: "anywhere" } as TextStyle)
-              : undefined
-          }
+        <CodeBlockHeaderActions
+          isHtmlPreviewable={isHtmlPreviewable}
+          showInlinePreview={showInlinePreview}
+          hasInteractiveJsonTable={hasInteractiveJsonTable}
+          copied={copied}
+          value={value}
+          onToggleInlinePreview={() => setShowInlinePreview((prev) => !prev)}
+          onExpandHtmlModal={() => setExpandHtmlModal(true)}
+          onOpenTableModal={() => setOpenTableModal(true)}
+          onCopiedChange={setCopied}
         />
-      </ScrollView>
-      {tall ? (
-        <Pressable
-          role="button"
-          accessibilityLabel={expanded ? "Show less" : "Show more"}
-          onPress={() => setExpanded((open) => !open)}
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 4,
-            borderTopWidth: 1,
-            borderColor: t.retroBorder,
-            backgroundColor: t.surfacePrimary,
-            paddingVertical: 4,
-          }}
-        >
-          <View style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }}>
-            <ChevronIcon color={t.textSecondary} size={10} down />
-          </View>
-          <Text style={type(t.textSecondary, 12)}>{expanded ? "Show less" : "Show more"}</Text>
-        </Pressable>
+      </View>
+
+      {isHtmlPreviewable && showInlinePreview ? (
+        <InlineHtmlPreviewFrame code={value} lang={lang} height={220} />
+      ) : (
+        <>
+          <ScrollView
+            horizontal={!narrow}
+            scrollEnabled={!narrow}
+            style={{ maxHeight: tall && !expanded ? 200 : undefined }}
+            contentContainerStyle={{ padding: 12, minWidth: 0 }}
+          >
+            <HighlightedCode
+              code={value}
+              language={lang}
+              color={t.textPrimary}
+              narrow={narrow}
+              style={
+                isWeb
+                  ? ({
+                      whiteSpace: narrow ? "pre-wrap" : "pre",
+                      overflowWrap: "anywhere",
+                    } as TextStyle)
+                  : undefined
+              }
+            />
+          </ScrollView>
+          {tall ? (
+            <Pressable
+              role="button"
+              accessibilityLabel={expanded ? "Show less" : "Show more"}
+              onPress={() => setExpanded((open) => !open)}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 4,
+                borderTopWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: t.surfacePrimary,
+                paddingVertical: 4,
+              }}
+            >
+              <View style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }}>
+                <ChevronIcon color={t.textSecondary} size={10} down />
+              </View>
+              <Text style={type(t.textSecondary, 12)}>{expanded ? "Show less" : "Show more"}</Text>
+            </Pressable>
+          ) : null}
+        </>
+      )}
+
+      {isHtmlPreviewable ? (
+        <UiHtmlPreviewModal
+          visible={expandHtmlModal}
+          code={expandHtmlModal ? value : null}
+          lang={lang}
+          onClose={() => setExpandHtmlModal(false)}
+        />
+      ) : null}
+
+      {hasInteractiveJsonTable && interactiveJsonTable ? (
+        <InteractiveTableModal
+          visible={openTableModal}
+          table={openTableModal ? interactiveJsonTable : null}
+          onClose={() => setOpenTableModal(false)}
+          onQuoteSelection={onQuoteTableSelection}
+        />
       ) : null}
     </View>
   );
@@ -746,6 +967,7 @@ function MarkdownTable({
   onOpenLocalPath,
   onOpenPortPreview,
   onPressFileRef,
+  onQuoteTableSelection,
   workspaceCwd,
 }: {
   node: Extract<MdBlock, { type: "table" }>;
@@ -754,116 +976,173 @@ function MarkdownTable({
   onOpenLocalPath?: (path: string) => void;
   onOpenPortPreview?: (url: string) => void;
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  onQuoteTableSelection?: (markdown: string) => void;
   workspaceCwd?: string;
 }) {
   const { palette: t, name } = useTheme();
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
+  const [openTableModal, setOpenTableModal] = useState(false);
+  const interactiveTable = useMemo(() => parseInteractiveTable(node), [node]);
+  const hasDataRows = interactiveTable.rows.length >= 1;
   const web = isWeb;
   return (
-    <ScrollView
-      testID="markdown-table"
-      horizontal
-      style={{
-        minWidth: 0,
-        maxWidth: "100%",
-        borderWidth: 1,
-        borderColor: t.retroBorder,
-        borderRadius: 8,
-      }}
-      contentContainerStyle={{ minWidth: "100%" }}
-    >
-      <View
-        style={
-          web
-            ? ({
-                display: "table",
-                width: "max-content",
-                minWidth: "100%",
-                borderCollapse: "collapse",
-                tableLayout: "auto",
-              } as unknown as ViewStyle)
-            : undefined
-        }
-      >
-        {node.rows.map((row, rowIndex) => (
-          <View
-            key={rowIndex}
-            testID="markdown-table-row"
-            style={
-              web ? ({ display: "table-row" } as unknown as ViewStyle) : { flexDirection: "row" }
-            }
+    <View style={{ gap: 6, minWidth: 0, maxWidth: "100%" }}>
+      {hasDataRows ? (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "flex-end",
+          }}
+        >
+          <Pressable
+            testID="markdown-table-interactive-btn"
+            role="button"
+            accessibilityRole="button"
+            accessibilityLabel="Interactive Table"
+            onPress={() => setOpenTableModal(true)}
+            style={(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              return [
+                {
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 5,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor: hovered ? t.brandAccent : t.brandAccentSoft,
+                  paddingHorizontal: 10,
+                  paddingVertical: 4,
+                },
+                ctrlShadow(t, name),
+              ];
+            }}
           >
-            {row.cells.map((cell, cellIndex) => {
-              const align = node.align[cellIndex] ?? "left";
-              return (
-                <View
-                  key={cellIndex}
-                  testID="markdown-table-cell"
-                  onLayout={
-                    web
-                      ? undefined
-                      : ({ nativeEvent: { layout } }) =>
-                          setColumnWidths((widths) => {
-                            if (layout.width <= (widths[cellIndex] ?? 0)) return widths;
-                            const next = [...widths];
-                            next[cellIndex] = layout.width;
-                            return next;
-                          })
-                  }
-                  style={{
-                    borderWidth: 1,
-                    borderColor: name === "dark" ? t.retroBorderLight : t.retroBorder,
-                    paddingHorizontal: 12,
-                    paddingVertical: name === "dark" ? 8 : 6,
-                    minWidth: web ? undefined : columnWidths[cellIndex],
-                    backgroundColor: row.header
-                      ? t.tableHeader
-                      : name === "dark" && rowIndex % 2 === 1
-                        ? t.surfaceSecondary
-                        : t.surfacePrimary,
-                    alignItems:
-                      align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start",
-                    ...(web
-                      ? ({
-                          display: "table-cell",
-                          verticalAlign: row.header ? "middle" : "top",
-                          textAlign: align,
-                        } as unknown as ViewStyle)
-                      : null),
-                  }}
-                >
-                  <Text
-                    selectable
-                    numberOfLines={web ? undefined : 1}
-                    style={bodyStyle(color, {
-                      fontWeight: row.header ? (name === "dark" ? "600" : "700") : "400",
-                      textAlign: align,
+            <RowsIcon color={t.onAccent} size={12} />
+            <Text style={type(t.onAccent, 11, { fontWeight: "700" })}>Interactive Table</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      <ScrollView
+        testID="markdown-table"
+        horizontal
+        style={{
+          minWidth: 0,
+          maxWidth: "100%",
+          borderWidth: 1,
+          borderColor: t.retroBorder,
+          borderRadius: 8,
+        }}
+        contentContainerStyle={{ minWidth: "100%" }}
+      >
+        <View
+          style={
+            web
+              ? ({
+                  display: "table",
+                  width: "max-content",
+                  minWidth: "100%",
+                  borderCollapse: "collapse",
+                  tableLayout: "auto",
+                } as unknown as ViewStyle)
+              : undefined
+          }
+        >
+          {node.rows.map((row, rowIndex) => (
+            <View
+              key={rowIndex}
+              testID="markdown-table-row"
+              style={
+                web ? ({ display: "table-row" } as unknown as ViewStyle) : { flexDirection: "row" }
+              }
+            >
+              {row.cells.map((cell, cellIndex) => {
+                const align = node.align[cellIndex] ?? "left";
+                return (
+                  <View
+                    key={cellIndex}
+                    testID="markdown-table-cell"
+                    onLayout={
+                      web
+                        ? undefined
+                        : ({ nativeEvent: { layout } }) =>
+                            setColumnWidths((widths) => {
+                              if (layout.width <= (widths[cellIndex] ?? 0)) return widths;
+                              const next = [...widths];
+                              next[cellIndex] = layout.width;
+                              return next;
+                            })
+                    }
+                    style={{
+                      borderWidth: 1,
+                      borderColor: name === "dark" ? t.retroBorderLight : t.retroBorder,
+                      paddingHorizontal: 12,
+                      paddingVertical: name === "dark" ? 8 : 6,
+                      minWidth: web ? undefined : columnWidths[cellIndex],
+                      backgroundColor: row.header
+                        ? t.tableHeader
+                        : name === "dark" && rowIndex % 2 === 1
+                          ? t.surfaceSecondary
+                          : t.surfacePrimary,
+                      alignItems:
+                        align === "center"
+                          ? "center"
+                          : align === "right"
+                            ? "flex-end"
+                            : "flex-start",
                       ...(web
                         ? ({
-                            whiteSpace: "nowrap",
-                            wordBreak: "normal",
-                            overflowWrap: "normal",
-                          } as TextStyle)
+                            display: "table-cell",
+                            verticalAlign: row.header ? "middle" : "top",
+                            textAlign: align,
+                          } as unknown as ViewStyle)
                         : null),
-                    })}
+                    }}
                   >
-                    <Inlines
-                      nodes={cell}
-                      color={color}
-                      onOpenLink={onOpenLink}
-                      onOpenLocalPath={onOpenLocalPath}
-                      onOpenPortPreview={onOpenPortPreview}
-                      onPressFileRef={onPressFileRef}
-                      workspaceCwd={workspaceCwd}
-                    />
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        ))}
-      </View>
-    </ScrollView>
+                    <Text
+                      selectable
+                      numberOfLines={web ? undefined : 1}
+                      style={bodyStyle(color, {
+                        fontWeight: row.header ? (name === "dark" ? "600" : "700") : "400",
+                        textAlign: align,
+                        ...(web
+                          ? ({
+                              whiteSpace: "nowrap",
+                              wordBreak: "normal",
+                              overflowWrap: "normal",
+                            } as TextStyle)
+                          : null),
+                      })}
+                    >
+                      <Inlines
+                        nodes={cell}
+                        color={color}
+                        onOpenLink={onOpenLink}
+                        onOpenLocalPath={onOpenLocalPath}
+                        onOpenPortPreview={onOpenPortPreview}
+                        onPressFileRef={onPressFileRef}
+                        workspaceCwd={workspaceCwd}
+                      />
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+
+      {hasDataRows ? (
+        <InteractiveTableModal
+          visible={openTableModal}
+          table={openTableModal ? interactiveTable : null}
+          onClose={() => setOpenTableModal(false)}
+          onQuoteSelection={onQuoteTableSelection}
+        />
+      ) : null}
+    </View>
   );
 }
 
