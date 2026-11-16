@@ -82,8 +82,8 @@ export function OptionSelect({
           >
             <View
               style={{
-                borderBottomWidth: 2,
-                borderColor: t.retroBorder,
+                borderBottomWidth: 1,
+                borderColor: t.dividerLine,
                 backgroundColor: t.brandAccentMuted,
                 paddingHorizontal: 8,
                 paddingVertical: 4,

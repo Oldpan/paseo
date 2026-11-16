@@ -102,7 +102,7 @@ export function ColResizeHandle({
         flexShrink: 0,
         position: "relative",
         zIndex: 20,
-        backgroundColor: dragging ? t.brandAccent : (ruleColor ?? t.black),
+        backgroundColor: dragging ? t.brandAccent : (ruleColor ?? t.dividerLine),
       }}
     >
       <GestureDetector gesture={panGesture}>

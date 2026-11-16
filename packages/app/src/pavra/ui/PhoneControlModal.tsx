@@ -381,7 +381,13 @@ function VirtualDisplayOverlayCard({
             ];
           }}
         >
-          <Text style={type(t.textPrimary, 11, { fontWeight: "700" })}>
+          <Text
+            style={type(t.textPrimary, 11, {
+              fontWeight: "700",
+              flexShrink: 1,
+              textAlign: "center",
+            })}
+          >
             Grant System Floating Window Permission
           </Text>
         </Pressable>
@@ -403,7 +409,9 @@ function VirtualDisplayOverlayCard({
             ];
           }}
         >
-          <Text style={type(t.onAccent, 11, { fontWeight: "800" })}>
+          <Text
+            style={type(t.onAccent, 11, { fontWeight: "800", flexShrink: 1, textAlign: "center" })}
+          >
             Launch Demo Background Task (Mini-Window Preview)
           </Text>
         </Pressable>
@@ -776,9 +784,11 @@ const s = StyleSheet.create({
   },
   actionBtn: {
     minHeight: 34,
+    maxWidth: "100%",
     borderRadius: 999,
     borderWidth: 1,
     paddingHorizontal: 14,
+    paddingVertical: 7,
     alignItems: "center",
     justifyContent: "center",
     alignSelf: "flex-start",

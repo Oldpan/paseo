@@ -40,8 +40,8 @@ function InteractiveTableHeader({
         alignItems: "center",
         justifyContent: "space-between",
         gap: 12,
-        borderBottomWidth: 2,
-        borderColor: t.retroBorder,
+        borderBottomWidth: 1,
+        borderColor: t.dividerLine,
         backgroundColor: t.brandAccent,
         paddingHorizontal: 16,
         paddingVertical: 12,
@@ -485,8 +485,8 @@ function InteractiveTableFooter({
         justifyContent: "space-between",
         flexWrap: "wrap",
         gap: 10,
-        borderTopWidth: 2,
-        borderColor: t.retroBorder,
+        borderTopWidth: 1,
+        borderColor: t.dividerLine,
         backgroundColor: t.surfaceSecondary,
         paddingHorizontal: 16,
         paddingVertical: 12,
@@ -501,7 +501,15 @@ function InteractiveTableFooter({
           : `${visibleCount} row(s) shown (select rows or copy all shown)`}
       </Text>
 
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          maxWidth: "100%",
+        }}
+      >
         <Pressable
           testID="interactive-table-copy"
           role="button"
@@ -516,6 +524,7 @@ function InteractiveTableFooter({
                 flexDirection: "row",
                 alignItems: "center",
                 gap: 6,
+                maxWidth: "100%",
                 borderRadius: 8,
                 borderWidth: 1,
                 borderColor: t.retroBorder,
@@ -533,7 +542,7 @@ function InteractiveTableFooter({
           ) : (
             <CopyIcon color={t.textPrimary} size={12} />
           )}
-          <Text style={type(t.textPrimary, 11, { fontWeight: "700" })}>
+          <Text style={type(t.textPrimary, 11, { fontWeight: "700", flexShrink: 1 })}>
             {copied ? "Copied Selected Markdown" : "Copy Selected Markdown"}
           </Text>
         </Pressable>
@@ -553,6 +562,7 @@ function InteractiveTableFooter({
                   flexDirection: "row",
                   alignItems: "center",
                   gap: 6,
+                  maxWidth: "100%",
                   borderRadius: 8,
                   borderWidth: 1,
                   borderColor: t.retroBorder,
@@ -571,7 +581,9 @@ function InteractiveTableFooter({
               return (
                 <>
                   <QuoteIcon color={fg} size={12} />
-                  <Text style={type(fg, 11, { fontWeight: "700" })}>Quote Selected in Chat</Text>
+                  <Text style={type(fg, 11, { fontWeight: "700", flexShrink: 1 })}>
+                    Quote Selected in Chat
+                  </Text>
                 </>
               );
             }}
@@ -707,11 +719,11 @@ export function InteractiveTableModal({
           testID="interactive-table-modal"
           style={[
             {
-              width: 860,
-              maxWidth: "100%",
+              width: "100%",
+              maxWidth: 860,
               maxHeight: "90%",
               borderRadius: 12,
-              borderWidth: 2,
+              borderWidth: 1,
               borderColor: t.retroBorder,
               backgroundColor: t.surfaceElevated,
               overflow: "hidden",

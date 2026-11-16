@@ -684,7 +684,7 @@ function ActivityHeader({
         gap: 10,
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1, minWidth: 180 }}>
         {compact && onSidebar ? (
           <HeaderIconButton label="Open sidebar" onPress={onSidebar} size={34}>
             <MenuIcon color={t.textSecondary} size={16} />

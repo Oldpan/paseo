@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import extensionPkg from "../../../../extensions/pavra/package.json";
 import { readCoordinatorVersion } from "../../../../extensions/pavra/index.server";
@@ -402,6 +403,11 @@ describe("apk-updates", () => {
   it("keeps client version.json and coordinator package.json aligned and preserves coordinatorVersion in chat.state", () => {
     expect(pavraVersion.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(extensionPkg.version).toBe(pavraVersion.version);
+    expect(
+      readCoordinatorVersion(
+        fileURLToPath(new URL("../../../../.dev/pavra/paseo-home", import.meta.url)),
+      ),
+    ).toBe(pavraVersion.version);
     expect(readCoordinatorVersion(".dev/pavra/paseo-home")).toBe(pavraVersion.version);
 
     const snapshot = mergeChatState(EMPTY_CHAT_STATE, {

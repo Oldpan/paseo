@@ -126,9 +126,9 @@ function NotesTreeSidebar({
       style={{
         width: compact ? "100%" : 280,
         maxHeight: compact ? 290 : undefined,
-        borderRightWidth: compact ? 0 : 2,
-        borderBottomWidth: compact ? 2 : 0,
-        borderColor: t.black,
+        borderRightWidth: compact ? 0 : 1,
+        borderBottomWidth: compact ? 1 : 0,
+        borderColor: t.dividerLine,
         backgroundColor: t.surfacePrimary,
         flexShrink: 0,
       }}

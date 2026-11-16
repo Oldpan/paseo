@@ -336,44 +336,52 @@ function StudioBarHeader({
   return (
     <View
       style={{
-        height: 44,
+        minHeight: 44,
         paddingHorizontal: 12,
+        paddingVertical: 6,
         flexDirection: "row",
-        gap: 10,
+        flexWrap: "wrap",
+        rowGap: 6,
+        columnGap: 10,
         alignItems: "center",
+        justifyContent: "space-between",
       }}
     >
-      {onSidebar ? (
-        <Pressable role="button" accessibilityLabel="Open sidebar" onPress={onSidebar}>
-          <MenuIcon color={t.textSecondary} size={18} />
-        </Pressable>
-      ) : null}
-      <BoxesIcon color={t.brandAccent} size={18} />
-      <Text style={type(t.textPrimary, 14, { fontWeight: "700", flex: 1 })}>Studio</Text>
-      {onOpenPortPreview ? (
-        <Pressable
-          testID="studio-port-preview-btn"
-          role="button"
-          accessibilityLabel="Port Preview"
-          onPress={onOpenPortPreview}
-          style={[
-            {
-              minHeight: 26,
-              borderRadius: 999,
-              borderWidth: 1,
-              borderColor: t.retroBorder,
-              backgroundColor: t.surfaceElevated,
-              paddingHorizontal: 10,
-              justifyContent: "center",
-            },
-            ctrlShadow(t, name),
-          ]}
-        >
-          <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Port Preview</Text>
-        </Pressable>
-      ) : null}
-      {onCollaborate ? <Chip onPress={onCollaborate}>Collaboration</Chip> : null}
-      <Chip onPress={onAdd}>Add workspace</Chip>
+      <View style={{ flexDirection: "row", gap: 10, alignItems: "center", flexShrink: 0 }}>
+        {onSidebar ? (
+          <Pressable role="button" accessibilityLabel="Open sidebar" onPress={onSidebar}>
+            <MenuIcon color={t.textSecondary} size={18} />
+          </Pressable>
+        ) : null}
+        <BoxesIcon color={t.brandAccent} size={18} />
+        <Text style={type(t.textPrimary, 14, { fontWeight: "700" })}>Studio</Text>
+      </View>
+      <View style={{ flexDirection: "row", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        {onOpenPortPreview ? (
+          <Pressable
+            testID="studio-port-preview-btn"
+            role="button"
+            accessibilityLabel="Port Preview"
+            onPress={onOpenPortPreview}
+            style={[
+              {
+                minHeight: 26,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: t.retroBorder,
+                backgroundColor: t.surfaceElevated,
+                paddingHorizontal: 10,
+                justifyContent: "center",
+              },
+              ctrlShadow(t, name),
+            ]}
+          >
+            <Text style={type(t.textSecondary, 11, { fontWeight: "600" })}>Port Preview</Text>
+          </Pressable>
+        ) : null}
+        {onCollaborate ? <Chip onPress={onCollaborate}>Collaboration</Chip> : null}
+        <Chip onPress={onAdd}>Add workspace</Chip>
+      </View>
     </View>
   );
 }

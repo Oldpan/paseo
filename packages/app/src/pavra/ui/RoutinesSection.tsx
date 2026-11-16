@@ -31,8 +31,8 @@ export function RoutinesSection() {
         paddingHorizontal: 20,
         paddingVertical: 14,
         gap: 10,
-        borderBottomWidth: 2,
-        borderBottomColor: t.black,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         backgroundColor: t.surfacePrimary,
       }}
     >

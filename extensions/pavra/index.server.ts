@@ -103,6 +103,7 @@ const DEFAULT_COORDINATOR_VERSION = "0.16.0";
 export function readCoordinatorVersion(paseoHome: string): string {
   const candidates = [
     path.resolve(process.cwd(), "extensions/pavra/package.json"),
+    path.resolve(process.cwd(), "../../extensions/pavra/package.json"),
     path.resolve(paseoHome, "../../../extensions/pavra/package.json"),
     path.resolve(paseoHome, "../../extensions/pavra/package.json"),
   ];

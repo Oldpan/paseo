@@ -123,7 +123,7 @@ export function ColResizeHandle({
   }, [stopDragging, widthGate]);
 
   const active = dragging || hovered;
-  const lineColor = active ? t.brandAccent : (ruleColor ?? t.black);
+  const lineColor = active ? t.brandAccent : (ruleColor ?? t.dividerLine);
 
   return (
     <div

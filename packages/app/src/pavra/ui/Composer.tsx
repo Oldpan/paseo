@@ -676,7 +676,10 @@ export function Composer({
                 borderRadius: 10,
               }),
               isWeb
-                ? ({ overflowY: draft && autoH >= autoMaxHeight - 1 ? "auto" : "hidden" } as object)
+                ? ({
+                    overflowY: draft && autoH >= autoMaxHeight - 1 ? "auto" : "hidden",
+                    outlineStyle: "none",
+                  } as object)
                 : null,
             ]}
             onKeyPress={(event) => {
