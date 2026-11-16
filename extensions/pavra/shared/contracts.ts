@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { phoneOutwardConfirmTierValues } from "./phone-safety";
 
 export const assistantBrowserSchema = z.object({
   enabled: z.boolean(),
@@ -10,7 +11,19 @@ export const assistantBrowserSchema = z.object({
 });
 export type AssistantBrowserConfig = z.infer<typeof assistantBrowserSchema>;
 
-export const assistantToolFamilyValues = ["mailbox", "tasks", "routines", "browser"] as const;
+export const assistantPhoneSchema = z.object({
+  enabled: z.boolean(),
+  allowedDeviceIds: z.array(z.string()).optional(),
+});
+export type AssistantPhoneConfig = z.infer<typeof assistantPhoneSchema>;
+
+export const assistantToolFamilyValues = [
+  "mailbox",
+  "tasks",
+  "routines",
+  "browser",
+  "phone",
+] as const;
 export const assistantToolFamilySchema = z.enum(assistantToolFamilyValues);
 export type AssistantToolFamily = z.infer<typeof assistantToolFamilySchema>;
 
@@ -44,8 +57,9 @@ export const assistantSchema = z.object({
     })
     .optional(),
   browser: assistantBrowserSchema.optional(),
+  phone: assistantPhoneSchema.optional(),
   envVars: z.record(z.string(), z.string()).optional(),
-  disabledTools: z.array(z.enum(["mailbox", "tasks", "routines", "browser"])).optional(),
+  disabledTools: z.array(z.enum(["mailbox", "tasks", "routines", "browser", "phone"])).optional(),
 });
 export const conversationSchema = z.object({
   id: z.string(),
@@ -319,6 +333,10 @@ export const takeoverSchema = z.object({
   url: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
   screenshotDataUrl: z.string().nullable().optional(),
+  deviceId: z.string().nullable().optional(),
+  packageName: z.string().nullable().optional(),
+  appName: z.string().nullable().optional(),
+  displayId: z.number().int().nullable().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -748,4 +766,401 @@ export const browserRemoteAction = defineRpc({
     deltaY: z.number().optional(),
   }),
   output: browserPageStateOutputSchema,
+});
+
+export const phoneOutwardConfirmTierSchema = z.enum(phoneOutwardConfirmTierValues);
+export type PhoneOutwardConfirmTierConfig = z.infer<typeof phoneOutwardConfirmTierSchema>;
+
+export const phonePrivilegeChannelValues = [
+  "auto",
+  "shizuku",
+  "wireless_adb",
+  "adb",
+  "virtual",
+] as const;
+export const phonePrivilegeChannelSchema = z.enum(phonePrivilegeChannelValues);
+export type PhonePrivilegeChannel = z.infer<typeof phonePrivilegeChannelSchema>;
+
+export const phoneActiveChannelValues = [
+  "none",
+  "auto",
+  "shizuku",
+  "wireless_adb",
+  "adb",
+  "virtual",
+] as const;
+export const phoneActiveChannelSchema = z.enum(phoneActiveChannelValues);
+export type PhoneActiveChannel = z.infer<typeof phoneActiveChannelSchema>;
+
+export const phoneDeviceModeValues = ["app", "virtual", "adb"] as const;
+export const phoneDeviceModeSchema = z.enum(phoneDeviceModeValues);
+export type PhoneDeviceMode = z.infer<typeof phoneDeviceModeSchema>;
+
+export const phonePrivilegeStatusInputSchema = z.object({
+  ready: z.boolean().optional(),
+  activeChannel: phoneActiveChannelSchema.optional(),
+  shizukuAvailable: z.boolean().optional(),
+  shizukuAuthorized: z.boolean().optional(),
+  wirelessAdbPaired: z.boolean().optional(),
+  wirelessAdbPort: z.number().int().nullable().optional(),
+  virtualDisplayId: z.number().int().nullable().optional(),
+  overlayPermissionGranted: z.boolean().optional(),
+  lastError: z.string().nullable().optional(),
+});
+
+export const phoneDeviceSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceName: z.string().min(1),
+  enabled: z.boolean(),
+  online: z.boolean(),
+  mode: phoneDeviceModeSchema,
+  platform: z.string().optional(),
+  privilegeChannel: phonePrivilegeChannelSchema,
+  activeChannel: phoneActiveChannelSchema,
+  effectiveReady: z.boolean(),
+  virtualDisplayId: z.number().int().nullable(),
+  overlayPermissionGranted: z.boolean(),
+  allowRelayControl: z.boolean(),
+  connectedViaRelay: z.boolean(),
+  paused: z.boolean(),
+  onMainScreenTakeover: z.boolean(),
+  outwardConfirmTier: phoneOutwardConfirmTierSchema,
+  unlockedPackages: z.array(z.string()),
+  adbSerial: z.string().nullable().optional(),
+  screenWidth: z.number().int().positive(),
+  screenHeight: z.number().int().positive(),
+  lastSeenAt: z.number(),
+  lastError: z.string().nullable().optional(),
+});
+export type PhoneDevice = z.infer<typeof phoneDeviceSchema>;
+
+export const phoneUiBoundsSchema = z.object({
+  left: z.number(),
+  top: z.number(),
+  right: z.number(),
+  bottom: z.number(),
+});
+export type PhoneUiBounds = z.infer<typeof phoneUiBoundsSchema>;
+
+export const phoneUiElementSchema = z.object({
+  ref: z.string(),
+  text: z.string().optional(),
+  contentDescription: z.string().optional(),
+  hint: z.string().optional(),
+  className: z.string().optional(),
+  resourceId: z.string().optional(),
+  packageName: z.string().optional(),
+  bounds: phoneUiBoundsSchema.optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  clickable: z.boolean().optional(),
+  editable: z.boolean().optional(),
+  scrollable: z.boolean().optional(),
+  checkable: z.boolean().optional(),
+  checked: z.boolean().optional(),
+  focused: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  password: z.boolean().optional(),
+  isPassword: z.boolean().optional(),
+});
+export type PhoneUiElement = z.infer<typeof phoneUiElementSchema>;
+
+export const phoneObservationSchema = z.object({
+  deviceId: z.string(),
+  displayId: z.number().int().nullable().optional(),
+  packageName: z.string(),
+  appName: z.string().optional(),
+  activityName: z.string().nullable().optional(),
+  isSecureFlag: z.boolean().optional(),
+  screenWidth: z.number().int().positive().optional(),
+  screenHeight: z.number().int().positive().optional(),
+  treeQuality: z.enum(["good", "sparse", "empty"]).optional(),
+  summary: z.string().optional(),
+  elements: z.array(phoneUiElementSchema),
+  screenshotBase64: z.string().nullable().optional(),
+  screenshotMimeType: z.enum(["image/jpeg", "image/png"]).optional(),
+  lastTapX: z.number().nullable().optional(),
+  lastTapY: z.number().nullable().optional(),
+  capturedAt: z.number(),
+});
+export type PhoneObservation = z.infer<typeof phoneObservationSchema>;
+
+export const phoneAppInfoSchema = z.object({
+  packageName: z.string().min(1),
+  appName: z.string(),
+  systemApp: z.boolean().optional(),
+  blocked: z.boolean().optional(),
+});
+export type PhoneAppInfo = z.infer<typeof phoneAppInfoSchema>;
+
+export const phoneStepWaitSchema = z.object({
+  textIncludes: z.string().optional(),
+  packageName: z.string().optional(),
+  ms: z.number().int().min(0).max(10_000).optional(),
+});
+export type PhoneStepWait = z.infer<typeof phoneStepWaitSchema>;
+
+export const phoneStepSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("tap"),
+    ref: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    longPressMs: z.number().int().min(0).max(5_000).optional(),
+    wait: phoneStepWaitSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("type"),
+    text: z.string(),
+    ref: z.string().optional(),
+    clearFirst: z.boolean().optional(),
+    submit: z.boolean().optional(),
+    wait: phoneStepWaitSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("scroll"),
+    direction: z.enum(["down", "up", "left", "right"]).optional(),
+    delta: z.number().optional(),
+    ref: z.string().optional(),
+    wait: phoneStepWaitSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("swipe"),
+    startX: z.number(),
+    startY: z.number(),
+    endX: z.number(),
+    endY: z.number(),
+    durationMs: z.number().int().min(50).max(5_000).optional(),
+    wait: phoneStepWaitSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("back"),
+    wait: phoneStepWaitSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("launch_app"),
+    packageName: z.string().min(1),
+    wait: phoneStepWaitSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("wait"),
+    textIncludes: z.string().optional(),
+    packageName: z.string().optional(),
+    ms: z.number().int().min(0).max(10_000).optional(),
+  }),
+]);
+export type PhoneStep = z.infer<typeof phoneStepSchema>;
+
+export const phoneCommandKindValues = [
+  "observe",
+  "tap",
+  "type",
+  "scroll",
+  "swipe",
+  "back",
+  "launch_app",
+  "list_apps",
+  "intent",
+  "clipboard",
+] as const;
+export const phoneCommandKindSchema = z.enum(phoneCommandKindValues);
+export type PhoneCommandKind = z.infer<typeof phoneCommandKindSchema>;
+
+export const phoneCommandSchema = z.object({
+  commandId: z.string().min(1),
+  deviceId: z.string().min(1),
+  kind: phoneCommandKindSchema,
+  payload: z.record(z.string(), z.unknown()),
+  assistantId: z.string().nullable().optional(),
+  assistantName: z.string().nullable().optional(),
+  conversationId: z.string().nullable().optional(),
+  turnId: z.string().nullable().optional(),
+  stepLabel: z.string().optional(),
+  createdAt: z.number(),
+  timeoutMs: z.number().int().positive(),
+});
+export type PhoneCommand = z.infer<typeof phoneCommandSchema>;
+
+export const phoneStepTrailItemSchema = z.object({
+  step: z.number().int().nonnegative(),
+  commandId: z.string().optional(),
+  deviceId: z.string(),
+  assistantId: z.string().nullable().optional(),
+  assistantName: z.string().nullable().optional(),
+  kind: z.string(),
+  label: z.string(),
+  packageName: z.string().optional(),
+  appName: z.string().optional(),
+  status: z.enum([
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "handed_to_user",
+    "unknown_outcome",
+  ]),
+  tapX: z.number().nullable().optional(),
+  tapY: z.number().nullable().optional(),
+  timestamp: z.number(),
+});
+export type PhoneStepTrailItem = z.infer<typeof phoneStepTrailItemSchema>;
+
+export const phoneLiveStateOutputSchema = z.object({
+  active: z.boolean(),
+  paused: z.boolean(),
+  onMainScreenTakeover: z.boolean(),
+  activeDeviceId: z.string().nullable(),
+  activeAssistantId: z.string().nullable(),
+  activeAssistantName: z.string().nullable(),
+  activeTurnId: z.string().nullable(),
+  devices: z.array(phoneDeviceSchema),
+  latestObservation: phoneObservationSchema.nullable(),
+  screenshotBase64: z.string().nullable(),
+  screenshotDataUrl: z.string().nullable(),
+  displayId: z.number().int().nullable(),
+  packageName: z.string().nullable(),
+  appName: z.string().nullable(),
+  lastTapX: z.number().nullable(),
+  lastTapY: z.number().nullable(),
+  screenWidth: z.number().int(),
+  screenHeight: z.number().int(),
+  recentSteps: z.array(phoneStepTrailItemSchema),
+});
+export type PhoneLiveState = z.infer<typeof phoneLiveStateOutputSchema>;
+
+const phoneDeviceMutationInputSchema = z.object({
+  id: z.string().min(1).optional(),
+  deviceId: z.string().min(1),
+  deviceName: z.string().min(1).optional(),
+  name: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  online: z.boolean().optional(),
+  mode: phoneDeviceModeSchema.optional(),
+  platform: z.string().optional(),
+  privilegeChannel: phonePrivilegeChannelSchema.optional(),
+  activeChannel: phoneActiveChannelSchema.optional(),
+  effectiveReady: z.boolean().optional(),
+  ready: z.boolean().optional(),
+  privilegeStatus: phonePrivilegeStatusInputSchema.optional(),
+  virtualDisplayId: z.number().int().nullable().optional(),
+  overlayPermissionGranted: z.boolean().optional(),
+  allowRelayControl: z.boolean().optional(),
+  connectedViaRelay: z.boolean().optional(),
+  isRelay: z.boolean().optional(),
+  paused: z.boolean().optional(),
+  onMainScreenTakeover: z.boolean().optional(),
+  outwardConfirmTier: phoneOutwardConfirmTierSchema.optional(),
+  unlockedPackages: z.array(z.string()).optional(),
+  adbSerial: z.string().nullable().optional(),
+  screenWidth: z.number().int().positive().optional(),
+  screenHeight: z.number().int().positive().optional(),
+  lastError: z.string().nullable().optional(),
+});
+
+export const phoneRegisterDevice = defineRpc({
+  name: "chat.phone.register",
+  input: phoneDeviceMutationInputSchema,
+  output: phoneDeviceSchema,
+});
+
+export const phoneListDevices = defineRpc({
+  name: "chat.phone.devices.list",
+  input: z.object({}),
+  output: z.object({
+    devices: z.array(phoneDeviceSchema),
+  }),
+});
+
+export const phoneConfigureDevice = defineRpc({
+  name: "chat.phone.device.configure",
+  input: phoneDeviceMutationInputSchema,
+  output: phoneDeviceSchema,
+});
+
+export const phonePollCommand = defineRpc({
+  name: "chat.phone.commands.next",
+  input: z.object({
+    deviceId: z.string().min(1),
+    waitMs: z.number().int().min(0).max(25_000).optional(),
+    isRelay: z.boolean().optional(),
+    paused: z.boolean().optional(),
+    allowRelayControl: z.boolean().optional(),
+  }),
+  output: z.object({
+    command: phoneCommandSchema.nullable(),
+    relayBlocked: z.boolean().optional(),
+  }),
+});
+
+export const phoneReportCommandResult = defineRpc({
+  name: "chat.phone.commands.result",
+  input: z.object({
+    deviceId: z.string().min(1).optional(),
+    id: z.string().min(1).optional(),
+    commandId: z.string().min(1),
+    ok: z.boolean().optional(),
+    status: z.enum(["completed", "failed"]).optional(),
+    isError: z.boolean().optional(),
+    error: z.string().nullable().optional(),
+    data: z.record(z.string(), z.unknown()).optional(),
+    result: z.record(z.string(), z.unknown()).optional(),
+    apps: z.array(phoneAppInfoSchema).optional(),
+    clipboardText: z.string().nullable().optional(),
+    text: z.string().nullable().optional(),
+    observation: z
+      .object({
+        deviceId: z.string().optional(),
+        displayId: z.number().int().nullable().optional(),
+        packageName: z.string(),
+        appName: z.string().optional(),
+        activityName: z.string().nullable().optional(),
+        isSecureFlag: z.boolean().optional(),
+        screenWidth: z.number().int().positive().optional(),
+        screenHeight: z.number().int().positive().optional(),
+        treeQuality: z.enum(["good", "sparse", "empty"]).optional(),
+        summary: z.string().optional(),
+        elements: z.array(phoneUiElementSchema).optional(),
+        screenshotBase64: z.string().nullable().optional(),
+        screenshotMimeType: z.enum(["image/jpeg", "image/png"]).optional(),
+        lastTapX: z.number().nullable().optional(),
+        lastTapY: z.number().nullable().optional(),
+        capturedAt: z.number().optional(),
+      })
+      .nullable()
+      .optional(),
+    screenshotBase64: z.string().nullable().optional(),
+    screenshotMimeType: z.enum(["image/jpeg", "image/png"]).optional(),
+    lastTapX: z.number().nullable().optional(),
+    lastTapY: z.number().nullable().optional(),
+  }),
+  output: z.object({
+    accepted: z.boolean(),
+    duplicate: z.boolean().optional(),
+  }),
+});
+
+export const phoneEmergencyStop = defineRpc({
+  name: "chat.phone.emergency_stop",
+  input: z.object({
+    deviceId: z.string().min(1).optional(),
+    assistantId: z.string().uuid().optional(),
+    conversationId: z.string().optional(),
+    turnId: z.string().optional(),
+    reason: z.string().optional(),
+  }),
+  output: z.object({
+    stopped: z.literal(true),
+    cancelledCommandIds: z.array(z.string()),
+    cancelledTurnIds: z.array(z.string()),
+  }),
+});
+
+export const phoneGetLiveState = defineRpc({
+  name: "chat.phone.live_state",
+  input: z.object({
+    deviceId: z.string().optional(),
+    assistantId: z.string().uuid().optional(),
+    conversationId: z.string().optional(),
+  }),
+  output: phoneLiveStateOutputSchema,
 });

@@ -42,6 +42,13 @@ import {
   cancelTakeover,
   browserPageState,
   browserRemoteAction,
+  phoneRegisterDevice,
+  phoneListDevices,
+  phoneConfigureDevice,
+  phonePollCommand,
+  phoneReportCommandResult,
+  phoneEmergencyStop,
+  phoneGetLiveState,
 } from "./shared/contracts";
 import {
   MEMBER_PROTOCOL,
@@ -82,6 +89,7 @@ import { callPluginRpc } from "./server/member/rpc";
 import { roleSettings, taskSettings, type RoleSettings, type TaskLimits } from "./shared/settings";
 import { agentTools, callAgentTool } from "./server/agent-tools";
 import { AssistantBrowserManager } from "./server/browser";
+import { callPhoneAgentTool, isPhoneAgentTool, phoneAgentTools } from "./server/phone";
 import { ChatStore } from "./server/store";
 import { Coordinator } from "./server/coordinator";
 import { executeMemberBrowserOperation } from "./server/member";
@@ -211,6 +219,13 @@ export default function contribute(server: PluginServerContext) {
   server.handle(cancelTakeover, (input) => chat().cancelTakeover(input));
   server.handle(browserPageState, (input) => chat().browserPageState(input));
   server.handle(browserRemoteAction, (input) => chat().browserRemoteAction(input));
+  server.handle(phoneRegisterDevice, (input) => chat().phoneRegisterDevice(input));
+  server.handle(phoneListDevices, (input) => chat().phoneListDevices(input));
+  server.handle(phoneConfigureDevice, (input) => chat().phoneConfigureDevice(input));
+  server.handle(phonePollCommand, (input) => chat().phonePollCommand(input));
+  server.handle(phoneReportCommandResult, (input) => chat().phoneReportCommandResult(input));
+  server.handle(phoneEmergencyStop, (input) => chat().phoneEmergencyStop(input));
+  server.handle(phoneGetLiveState, (input) => chat().phoneGetLiveState(input));
   server.handle(listStudioMembers, async (input) => {
     const listing = await chat().studio.members(input.studioId);
     return {
@@ -300,7 +315,7 @@ export default function contribute(server: PluginServerContext) {
   // a narrower audience would hide them from sessions that start before they are needed. Each call
   // is authorized from the ledger, by the caller's verified agent id and machine.
   server.setAgentToolAudience("all");
-  for (const { tool, run } of agentTools) {
+  for (const { tool, run } of [...agentTools, ...phoneAgentTools]) {
     server.registerAgentTool(tool, (input, context) => {
       if (coordinator) return run(coordinator, input, { caller: context.caller });
       if (role?.mode === "member") return relay.call(context.caller.agentId, tool.name, input);
@@ -418,7 +433,9 @@ export default function contribute(server: PluginServerContext) {
     active.attach(server.paseo);
     links = new MemberLinks(hosts, {
       call: (serverId, call) =>
-        callAgentTool(active, { agentId: call.agentId, serverId }, call.tool, call.input),
+        isPhoneAgentTool(call.tool)
+          ? callPhoneAgentTool(active, { agentId: call.agentId, serverId }, call.tool, call.input)
+          : callAgentTool(active, { agentId: call.agentId, serverId }, call.tool, call.input),
       event: (serverId, event) => active.onMemberEvent(serverId, event),
       reconnected: () => active.onMemberReconnected(),
     });

@@ -64,9 +64,49 @@ export function createPluginAgentTools(input: PluginAgentToolsInput): PaseoToolD
   return definitions;
 }
 
-function toToolResult(output: unknown): PaseoToolResult {
-  const text = JSON.stringify(output) ?? "null";
+interface PluginToolImageBlock {
+  data: string;
+  mimeType: "image/jpeg" | "image/png";
+}
+
+function isPluginToolImageBlock(value: unknown): value is PluginToolImageBlock {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.data === "string" &&
+    candidate.data.trim().length > 0 &&
+    (candidate.mimeType === "image/jpeg" || candidate.mimeType === "image/png")
+  );
+}
+
+export function toToolResult(output: unknown): PaseoToolResult {
   const isRecord = typeof output === "object" && output !== null && !Array.isArray(output);
+  if (isRecord && "_images" in output) {
+    const { _images: rawImages, ...sanitizedOutput } = output as Record<string, unknown>;
+    if (Array.isArray(rawImages)) {
+      const images = rawImages.filter(isPluginToolImageBlock);
+      const text = JSON.stringify(sanitizedOutput) ?? "{}";
+      return {
+        content: [
+          { type: "text", text },
+          ...images.map((img) => ({
+            type: "image" as const,
+            data: img.data,
+            mimeType: img.mimeType,
+          })),
+        ],
+        structuredContent: sanitizedOutput,
+      };
+    }
+    if (rawImages === undefined) {
+      const text = JSON.stringify(sanitizedOutput) ?? "{}";
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: sanitizedOutput,
+      };
+    }
+  }
+  const text = JSON.stringify(output) ?? "null";
   return {
     content: [{ type: "text", text }],
     ...(isRecord ? { structuredContent: output } : {}),
