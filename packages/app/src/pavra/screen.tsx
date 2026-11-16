@@ -80,7 +80,7 @@ const VALID_SECTIONS = new Set<SidebarSection>([
   "search",
 ]);
 
-function usePavraUrlLocationSync(viewHydrated: boolean) {
+function usePavraUrlLocationSync(viewHydrated: boolean, coordinatorReady: boolean) {
   const searchParams = useLocalSearchParams<{
     serverId?: string;
     section?: string;
@@ -92,6 +92,7 @@ function usePavraUrlLocationSync(viewHydrated: boolean) {
     if (!viewHydrated) return;
     const paramServerId =
       typeof searchParams.serverId === "string" ? searchParams.serverId.trim() : "";
+    if (!paramServerId && !coordinatorReady) return;
     const paramSection = typeof searchParams.section === "string" ? searchParams.section : "";
     const paramChatId = typeof searchParams.chatId === "string" ? searchParams.chatId : "";
     const paramThreadId = typeof searchParams.threadId === "string" ? searchParams.threadId : "";
@@ -111,6 +112,7 @@ function usePavraUrlLocationSync(viewHydrated: boolean) {
       view.setMode("chat");
     }
   }, [
+    coordinatorReady,
     searchParams.chatId,
     searchParams.section,
     searchParams.serverId,
@@ -162,7 +164,10 @@ function usePavraHydrationAndDefaults(
       usePavraView.setState({ chatId });
     }
   }, [chatId, rawChatId, viewHydrated]);
-  usePavraUrlLocationSync(viewHydrated);
+  usePavraUrlLocationSync(
+    viewHydrated,
+    Boolean(coordinatorId) && coordinatorId === rawCoordinatorId,
+  );
   return { bootSettled, viewHydrated };
 }
 

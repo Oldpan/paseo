@@ -529,6 +529,7 @@ export function Composer({
                 <ActivityIndicator size={10} color={t.textMuted} />
               ) : null}
               <Pressable
+                role="button"
                 accessibilityLabel="Remove attachment"
                 hitSlop={8}
                 onPress={() => handleRemoveAttachment(item.localId)}
