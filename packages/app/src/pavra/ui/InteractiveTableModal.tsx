@@ -293,14 +293,14 @@ function InteractiveTableSortHeaderRow({
           >
             <Text
               numberOfLines={1}
-              style={type(isSorted ? t.onAccent : t.textPrimary, 12, {
+              style={type(t.textPrimary, 12, {
                 fontWeight: "700",
               })}
             >
               {col}
             </Text>
             <Text
-              style={type(isSorted ? t.onAccent : t.textMuted, 10, {
+              style={type(isSorted ? t.brandAccent : t.textMuted, 10, {
                 fontFamily: "monospace",
                 fontWeight: "700",
               })}
@@ -394,7 +394,7 @@ function InteractiveTableDataRow({
         >
           <Text
             selectable
-            style={type(checked ? t.onAccent : t.textPrimary, 12, {
+            style={type(t.textPrimary, 12, {
               fontWeight: checked ? "600" : "400",
             })}
           >
@@ -565,8 +565,16 @@ function InteractiveTableFooter({
               ];
             }}
           >
-            <QuoteIcon color={t.onAccent} size={12} />
-            <Text style={type(t.onAccent, 11, { fontWeight: "700" })}>Quote Selected in Chat</Text>
+            {(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              const fg = hovered ? t.onAccent : t.textPrimary;
+              return (
+                <>
+                  <QuoteIcon color={fg} size={12} />
+                  <Text style={type(fg, 11, { fontWeight: "700" })}>Quote Selected in Chat</Text>
+                </>
+              );
+            }}
           </Pressable>
         ) : null}
       </View>

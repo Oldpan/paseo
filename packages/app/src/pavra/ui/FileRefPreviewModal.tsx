@@ -454,8 +454,16 @@ function PreviewModalActionBar({
             ];
           }}
         >
-          <ExternalLinkIcon color={t.onAccent} size={12} />
-          <Text style={type(t.onAccent, 11, { fontWeight: "700" })}>Open in Studio</Text>
+          {(state) => {
+            const hovered = Boolean((state as { hovered?: boolean }).hovered);
+            const fg = hovered ? t.onAccent : t.textPrimary;
+            return (
+              <>
+                <ExternalLinkIcon color={fg} size={12} />
+                <Text style={type(fg, 11, { fontWeight: "700" })}>Open in Studio</Text>
+              </>
+            );
+          }}
         </Pressable>
       ) : null}
     </View>
@@ -469,7 +477,7 @@ function computeLineColors(
   t: Palette,
 ): { rowBackground: string; lineColor: string } {
   if (isTargetLine) {
-    return { rowBackground: t.brandAccentSoft, lineColor: t.onAccent };
+    return { rowBackground: t.brandAccentSoft, lineColor: t.textPrimary };
   }
   if (previewKind === "diff") {
     if (lineText.startsWith("+") && !lineText.startsWith("+++")) {
@@ -526,7 +534,7 @@ function PreviewCodeLineRow({
           fontSize: 11,
           lineHeight: LINE_ROW_HEIGHT,
           fontWeight: isTargetLine ? "700" : "400",
-          color: isTargetLine ? t.onAccent : t.textMuted,
+          color: isTargetLine ? t.textPrimary : t.textMuted,
           fontVariant: ["tabular-nums"],
         }}
       >

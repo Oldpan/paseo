@@ -1,11 +1,7 @@
 import { Platform } from "react-native";
 import { darkHighlightColors, lightHighlightColors } from "@getpaseo/highlight";
 import { IS_PAVRA } from "@/pavra/build";
-import {
-  offsetShadow,
-  palettes as pavraPalettes,
-  type Palette as PavraPalette,
-} from "@/pavra/ui/theme";
+import { palettes as pavraPalettes, type Palette as PavraPalette } from "@/pavra/ui/theme";
 
 export const baseColors = {
   // Base colors
@@ -761,24 +757,19 @@ function paseoChrome(colors: {
   };
 }
 
-function pavraChrome(palette: PavraPalette, scheme: "light" | "dark"): ThemeChrome {
-  const dark = scheme === "dark";
+function pavraChrome(palette: PavraPalette, _scheme?: "light" | "dark"): ThemeChrome {
   return {
     controlBorderWidth: BORDER_WIDTH[1],
     controlBorderColor: palette.retroBorder,
-    controlShadow: offsetShadow(
-      palette.bubbleShadow,
-      dark ? 3 : 1.5,
-      dark ? 3 : 1.5,
-    ) as ChromeShadow,
-    bubbleShadow: offsetShadow(palette.bubbleShadow, dark ? 3 : 2, dark ? 3 : 2) as ChromeShadow,
+    controlShadow: {},
+    bubbleShadow: {},
     userBubble: {
       background: palette.msgBubbleHighlight,
       foreground: palette.userBubbleInk,
       borderWidth: BORDER_WIDTH[1],
       borderColor: palette.retroBorder,
     },
-    headerRule: { width: BORDER_WIDTH[2], color: palette.black },
+    headerRule: { width: BORDER_WIDTH[1], color: palette.dividerLine },
     pillRadius: BORDER_RADIUS.full,
     activeTab: { background: palette.brandAccent, foreground: palette.onAccent },
     liveTool: palette.liveTool,

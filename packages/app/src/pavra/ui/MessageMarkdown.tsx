@@ -376,35 +376,43 @@ export function FileRefChip({
         ];
       }}
     >
-      <FileTextIcon color={t.onAccent} size={11} />
-      <Text
-        testID="file-ref-chip-path"
-        style={{
-          fontFamily: "monospace",
-          fontSize: 11,
-          fontWeight: "700",
-          color: t.onAccent,
-        }}
-      >
-        {fileRef.displayPath}
-      </Text>
-      {lineBadge ? (
-        <Text
-          testID="file-ref-chip-line"
-          style={{
-            fontFamily: "monospace",
-            fontSize: 10,
-            fontWeight: "700",
-            color: t.brandAccent,
-            backgroundColor: t.onAccent,
-            borderRadius: 4,
-            paddingHorizontal: 4,
-            paddingVertical: 0.5,
-          }}
-        >
-          {lineBadge}
-        </Text>
-      ) : null}
+      {(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered);
+        const fg = hovered ? t.onAccent : t.textPrimary;
+        return (
+          <>
+            <FileTextIcon color={fg} size={11} />
+            <Text
+              testID="file-ref-chip-path"
+              style={{
+                fontFamily: "monospace",
+                fontSize: 11,
+                fontWeight: "700",
+                color: fg,
+              }}
+            >
+              {fileRef.displayPath}
+            </Text>
+            {lineBadge ? (
+              <Text
+                testID="file-ref-chip-line"
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: 10,
+                  fontWeight: "700",
+                  color: t.brandAccent,
+                  backgroundColor: t.onAccent,
+                  borderRadius: 4,
+                  paddingHorizontal: 4,
+                  paddingVertical: 0.5,
+                }}
+              >
+                {lineBadge}
+              </Text>
+            ) : null}
+          </>
+        );
+      }}
     </Pressable>
   );
 }
@@ -790,8 +798,16 @@ function CodeBlockHeaderActions({
             ];
           }}
         >
-          <RowsIcon color={t.onAccent} size={11} />
-          <Text style={type(t.onAccent, 11, { fontWeight: "700" })}>Interactive Table</Text>
+          {(state) => {
+            const hovered = Boolean((state as { hovered?: boolean }).hovered);
+            const fg = hovered ? t.onAccent : t.textPrimary;
+            return (
+              <>
+                <RowsIcon color={fg} size={11} />
+                <Text style={type(fg, 11, { fontWeight: "700" })}>Interactive Table</Text>
+              </>
+            );
+          }}
         </Pressable>
       ) : null}
 
@@ -1019,8 +1035,16 @@ function MarkdownTable({
               ];
             }}
           >
-            <RowsIcon color={t.onAccent} size={12} />
-            <Text style={type(t.onAccent, 11, { fontWeight: "700" })}>Interactive Table</Text>
+            {(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              const fg = hovered ? t.onAccent : t.textPrimary;
+              return (
+                <>
+                  <RowsIcon color={fg} size={12} />
+                  <Text style={type(fg, 11, { fontWeight: "700" })}>Interactive Table</Text>
+                </>
+              );
+            }}
           </Pressable>
         </View>
       ) : null}
@@ -1179,9 +1203,9 @@ function ExternalLinkModal({ url, onClose }: { url: string | null; onClose: () =
         >
           <View
             style={{
-              borderBottomWidth: 2,
-              borderColor: t.retroBorder,
-              backgroundColor: t.brandAccent,
+              borderBottomWidth: 1,
+              borderColor: t.dividerLine,
+              backgroundColor: t.surfaceSecondary,
               paddingHorizontal: 16,
               paddingVertical: 12,
             }}
@@ -1224,8 +1248,8 @@ function ExternalLinkModal({ url, onClose }: { url: string | null; onClose: () =
             style={{
               flexDirection: "row",
               gap: 8,
-              borderTopWidth: 2,
-              borderColor: t.retroBorder,
+              borderTopWidth: 1,
+              borderColor: t.dividerLine,
               paddingHorizontal: 16,
               paddingVertical: 12,
             }}
@@ -1240,7 +1264,7 @@ function ExternalLinkModal({ url, onClose }: { url: string | null; onClose: () =
                   minHeight: 32,
                   borderRadius: 10,
                   borderWidth: 1,
-                  borderColor: t.retroBorder,
+                  borderColor: t.retroBorderLight,
                   backgroundColor: t.surfacePrimary,
                   alignItems: "center",
                   justifyContent: "center",
@@ -1262,8 +1286,7 @@ function ExternalLinkModal({ url, onClose }: { url: string | null; onClose: () =
                   flex: 1,
                   minHeight: 32,
                   borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
+                  borderWidth: 0,
                   backgroundColor: t.brandAccent,
                   alignItems: "center",
                   justifyContent: "center",
@@ -1271,7 +1294,7 @@ function ExternalLinkModal({ url, onClose }: { url: string | null; onClose: () =
                 ctrlShadow(t, name),
               ]}
             >
-              <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>Open link</Text>
+              <Text style={type(t.onAccent, 12, { fontWeight: "700" })}>Open link</Text>
             </Pressable>
           </View>
         </Pressable>

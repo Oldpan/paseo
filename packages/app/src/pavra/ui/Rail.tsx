@@ -71,7 +71,7 @@ export function Rail({
 }) {
   const { palette: t, name } = useTheme();
   const ink = (on: boolean, unread?: boolean) =>
-    unread ? t.onPink : on && name === "dark" ? t.onAccent : t.textSecondary;
+    unread ? t.onPink : on ? t.textPrimary : t.textSecondary;
   return (
     <View
       testID="sidebar-rail"
@@ -83,7 +83,7 @@ export function Rail({
         alignItems: "center",
         paddingVertical: 8,
         borderRightWidth: 1,
-        borderColor: t.retroBorder,
+        borderColor: t.dividerLine,
       }}
     >
       <Pressable
@@ -99,9 +99,9 @@ export function Rail({
       </Pressable>
       <View
         style={{
-          height: 2,
+          height: 1,
           width: "100%",
-          backgroundColor: t.black,
+          backgroundColor: t.dividerLine,
           marginTop: 6,
           marginBottom: 4,
         }}

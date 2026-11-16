@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { bubbleShadow, cardShadow, ctrlShadow, palettes as pavraPalettes } from "@/pavra/ui/theme";
 import {
   pavraDarkTheme,
   pavraLightTheme,
@@ -120,23 +121,67 @@ describe("Theme chrome", () => {
     }
   });
 
-  it("draws the Pavra themes from the Pavra palette with retro outlines", () => {
+  it("draws the Pavra themes from the Pavra warm-minimal palette", () => {
     expect(pavraDarkTheme.colors).toMatchObject({
-      surface0: "#0f0e0d",
+      surface0: "#121110",
       foreground: "#f2ecdb",
-      accent: "#eec95f",
+      accent: "#E0B456",
       accentForeground: "#131007",
     });
     expect(pavraDarkTheme.chrome).toMatchObject({
       controlBorderWidth: 1,
-      userBubble: { background: "#eec95f", foreground: "#000000", borderWidth: 1 },
-      headerRule: { width: 2, color: "#000000" },
-      activeTab: { background: "#eec95f", foreground: "#131007" },
+      controlShadow: {},
+      bubbleShadow: {},
+      userBubble: { background: "#2B2419", foreground: "#F2ECDB", borderWidth: 1 },
+      headerRule: { width: 1, color: "rgba(242, 236, 219, 0.08)" },
+      activeTab: { background: "#E0B456", foreground: "#131007" },
     });
     expect(pavraLightTheme.colors).toMatchObject({
-      surface0: "#fffdf5",
-      accent: "#ffd400",
+      surface0: "#FAF8F5",
+      accent: "#C87D32",
       accentBright: "#1d4ed8",
+    });
+    expect(pavraLightTheme.chrome).toMatchObject({
+      controlBorderWidth: 1,
+      controlShadow: {},
+      bubbleShadow: {},
+      userBubble: { background: "#EDE6DA", foreground: "#1C1917", borderWidth: 1 },
+      headerRule: { width: 1, color: "rgba(28, 25, 23, 0.08)" },
+      activeTab: { background: "#C87D32", foreground: "#FFFFFF" },
+    });
+  });
+
+  it("eliminates hard control/bubble offset shadows and uses diffuse card elevation in Pavra UI", () => {
+    expect(ctrlShadow(pavraPalettes.light, "light")).toEqual({});
+    expect(ctrlShadow(pavraPalettes.dark, "dark")).toEqual({});
+    expect(bubbleShadow(pavraPalettes.light, "light")).toEqual({});
+    expect(bubbleShadow(pavraPalettes.dark, "dark")).toEqual({});
+
+    const lightCard = cardShadow(pavraPalettes.light);
+    expect(
+      lightCard.boxShadow === `0 10px 28px -4px ${pavraPalettes.light.retroShadowHeavy}` ||
+        lightCard.shadowRadius === 16,
+    ).toBe(true);
+
+    expect(pavraPalettes.light).toMatchObject({
+      surfacePrimary: "#FAF8F5",
+      sidebarSurface: "#EFECE6",
+      msgBubbleHighlight: "#EDE6DA",
+      userBubbleInk: "#1C1917",
+      brandAccent: "#C87D32",
+      badgePink: "#C87D32",
+      onAccent: "#FFFFFF",
+      onPink: "#FFFFFF",
+    });
+    expect(pavraPalettes.dark).toMatchObject({
+      surfacePrimary: "#121110",
+      sidebarSurface: "#121110",
+      msgBubbleHighlight: "#2B2419",
+      userBubbleInk: "#F2ECDB",
+      brandAccent: "#E0B456",
+      badgePink: "#E0B456",
+      onAccent: "#131007",
+      onPink: "#131007",
     });
   });
 });

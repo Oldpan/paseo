@@ -144,8 +144,8 @@ export function Sidebar(props: SidebarProps) {
         height: "100%",
         minHeight: 0,
         borderRightWidth: props.compact ? 1 : 0,
-        borderColor: t.retroBorder,
-        backgroundColor: t.surfacePrimary,
+        borderColor: t.dividerLine,
+        backgroundColor: t.sidebarSurface,
       }}
       testID="pavra-sidebar"
     >
@@ -185,7 +185,7 @@ export function Sidebar(props: SidebarProps) {
             {
               flex: 1,
               minHeight: 0,
-              backgroundColor: t.surfacePrimary,
+              backgroundColor: t.sidebarSurface,
             },
             inlineUnistylesStyle({ width: expandedPanelWidth }),
           ]}
@@ -197,8 +197,8 @@ export function Sidebar(props: SidebarProps) {
               flexDirection: "row",
               alignItems: "center",
               gap: 6,
-              borderBottomWidth: 2,
-              borderBottomColor: t.black,
+              borderBottomWidth: 1,
+              borderBottomColor: t.dividerLine,
             }}
           >
             <Text role="heading" style={type(t.textPrimary, 16, { fontWeight: "800", flex: 1 })}>
@@ -255,8 +255,8 @@ export function Sidebar(props: SidebarProps) {
               alignItems: "center",
               gap: 10,
               borderTopWidth: 1,
-              borderTopColor: t.retroBorder,
-              backgroundColor: pressed ? t.surfaceHover : t.surfaceSecondary,
+              borderTopColor: t.dividerLine,
+              backgroundColor: pressed ? t.sidebarItemHover : t.sidebarSurface,
               ...webTransition("background-color 150ms cubic-bezier(0.4, 0, 0.2, 1)"),
             })}
           >
@@ -267,8 +267,7 @@ export function Sidebar(props: SidebarProps) {
                 testID="sidebar-settings-update-badge"
                 style={{
                   borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
+                  borderWidth: 0,
                   backgroundColor: t.brandAccent,
                   paddingHorizontal: 7,
                   paddingVertical: 1,
@@ -294,7 +293,7 @@ export function Sidebar(props: SidebarProps) {
           onCollapse={() => setCollapsed(true)}
           onWidthChange={setSidebarWidth}
           ruleWidth={1}
-          ruleColor={t.retroBorder}
+          ruleColor={t.dividerLine}
         />
       ) : null}
     </View>
@@ -417,8 +416,8 @@ function SidebarBody({ props, section }: { props: SidebarProps; section: string 
                 ctrlShadow(t, name),
               ]}
             >
-              <PlusIcon color={t.onAccent} size={20} />
-              <Text style={type(t.onAccent, 12, { fontWeight: "600" })}>
+              <PlusIcon color={t.textPrimary} size={20} />
+              <Text style={type(t.textPrimary, 12, { fontWeight: "600" })}>
                 Add your first assistant
               </Text>
             </Pressable>
@@ -470,7 +469,7 @@ function InboxSidebarSummary({ props }: { props: SidebarProps }) {
           {
             borderRadius: 12,
             borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderColor: t.retroBorderLight,
             backgroundColor: t.surfaceElevated,
             padding: 10,
             gap: 8,
@@ -594,21 +593,18 @@ function DmRow({
         gap: 6,
         minWidth: 0,
         borderRadius: 12,
-        borderWidth: 1,
+        borderWidth: 0,
         paddingHorizontal: 8,
         paddingVertical: 8,
-        borderColor: raised ? t.retroBorder : "transparent",
         backgroundColor: selected
-          ? name === "dark"
-            ? t.brandAccent
+          ? hovered
+            ? t.sidebarSelectedHover
             : t.sidebarSelected
           : hovered
-            ? t.sidebarSelected
+            ? t.sidebarItemHover
             : "transparent",
         ...(raised ? ctrlShadow(t, name) : null),
-        ...webTransition(
-          "background-color 150ms cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 150ms cubic-bezier(0.4, 0, 0.2, 1)",
-        ),
+        ...webTransition("background-color 150ms cubic-bezier(0.4, 0, 0.2, 1)"),
       }}
     >
       <Pressable
@@ -628,16 +624,13 @@ function DmRow({
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text
             numberOfLines={1}
-            style={type(selected && name === "dark" ? t.onAccent : t.textPrimary, 13, {
+            style={type(t.textPrimary, 13, {
               fontWeight: "600",
             })}
           >
             {label}
           </Text>
-          <Text
-            numberOfLines={1}
-            style={type(selected && name === "dark" ? "rgba(19,16,7,0.7)" : t.textSecondary, 10)}
-          >
+          <Text numberOfLines={1} style={type(t.textSecondary, 10)}>
             {badge ? `${badge} · ${description}` : description}
           </Text>
         </View>
@@ -656,9 +649,8 @@ function DmRow({
                 height: 26,
                 alignItems: "center",
                 justifyContent: "center",
-                borderWidth: 1,
-                borderColor: t.retroBorder,
-                backgroundColor: buttonHovered ? t.surfaceHover : t.surfaceElevated,
+                borderWidth: 0,
+                backgroundColor: buttonHovered ? t.surfaceHover : "transparent",
                 ...webTransition("background-color 120ms ease"),
               },
               ctrlShadow(t, name),

@@ -62,46 +62,46 @@ export interface Palette {
 }
 
 export const light: Palette = {
-  surfacePrimary: "#fffdf5",
-  surfaceSecondary: "#f7efd8",
-  surfaceTertiary: "#e8dcc8",
-  surfaceElevated: "#fff8d8",
-  surfaceHover: "#fff1a9",
-  surfaceActive: "#fff8e6",
-  card: "#ffffff",
-  chatSurface: "#f6efdb",
-  brandAccent: "#ffd400",
-  brandAccentHover: "#f7ca2e",
-  brandAccentBright: "#FFD800",
-  brandAccentSoft: "#fff4bf",
-  brandAccentMuted: "#ffec8a",
-  sidebarSurface: "#FFD800",
-  sidebarSelected: "#fff8e6",
-  sidebarSelectedHover: "#fff8e6",
-  sidebarItemHover: "#fff3a8",
-  msgBubble: "#fffef9",
-  msgBubbleHighlight: "#ffd400",
-  retroBorder: "rgba(24, 24, 27, 0.82)",
-  retroBorderLight: "#d4d4d8",
-  bubbleShadow: "rgba(24, 24, 27, 0.55)",
-  retroShadowHeavy: "rgba(0, 0, 0, 0.3)",
-  textPrimary: "#09090b",
-  textSecondary: "#3f3f46",
-  textMuted: "#71717a",
-  textSubtle: "#a1a1aa",
+  surfacePrimary: "#FAF8F5",
+  surfaceSecondary: "#F3EFEA",
+  surfaceTertiary: "#EAE4DC",
+  surfaceElevated: "#FFFFFF",
+  surfaceHover: "#EFEAE2",
+  surfaceActive: "#E7E0D6",
+  card: "#FFFFFF",
+  chatSurface: "#F6F3EC",
+  brandAccent: "#C87D32",
+  brandAccentHover: "#B56E27",
+  brandAccentBright: "#D98A3C",
+  brandAccentSoft: "#F5E6D3",
+  brandAccentMuted: "#EBD5B8",
+  sidebarSurface: "#EFECE6",
+  sidebarSelected: "#FFFFFF",
+  sidebarSelectedHover: "#FAF8F5",
+  sidebarItemHover: "#E5E0D7",
+  msgBubble: "#FFFFFF",
+  msgBubbleHighlight: "#EDE6DA",
+  retroBorder: "rgba(28, 25, 23, 0.13)",
+  retroBorderLight: "rgba(28, 25, 23, 0.08)",
+  bubbleShadow: "rgba(28, 25, 23, 0.06)",
+  retroShadowHeavy: "rgba(28, 25, 23, 0.12)",
+  textPrimary: "#18181B",
+  textSecondary: "#3F3F46",
+  textMuted: "#71717A",
+  textSubtle: "#A1A1AA",
   badgeBlue: "#d8efff",
   badgeGreen: "#d8f8c8",
   badgeRed: "#ffe4e4",
   badgeAmber: "#fff0d0",
-  badgePink: "#FF6B9E",
-  onAccent: "#1c1917",
-  onPink: "#1c1917",
-  userBubbleInk: "#1c1917",
-  pillSurface: "rgba(255, 255, 255, 0.55)",
-  pillSurfaceStrong: "rgba(255, 255, 255, 0.7)",
-  pillBorder: "rgba(24, 24, 27, 0.1)",
+  badgePink: "#C87D32",
+  onAccent: "#FFFFFF",
+  onPink: "#FFFFFF",
+  userBubbleInk: "#1C1917",
+  pillSurface: "rgba(255, 255, 255, 0.65)",
+  pillSurfaceStrong: "rgba(255, 255, 255, 0.82)",
+  pillBorder: "rgba(28, 25, 23, 0.08)",
   pillText: "rgba(63, 63, 70, 0.85)",
-  dividerLine: "rgba(24, 24, 27, 0.1)",
+  dividerLine: "rgba(28, 25, 23, 0.08)",
   success: "#009d1e",
   destructive: "#e7000b",
   warning: "#d48e00",
@@ -113,34 +113,34 @@ export const light: Palette = {
   codeForeground: "#ffffff",
   link: "#1d4ed8",
   linkHover: "#1e40af",
-  tableHeader: "#22d3ee",
-  curatorHeader: "#fff5b8",
+  tableHeader: "#F3EFEA",
+  curatorHeader: "#F5E6D3",
 };
 
 export const dark: Palette = {
-  surfacePrimary: "#0f0e0d",
-  surfaceSecondary: "#0c0b0a",
-  surfaceTertiary: "#080706",
-  surfaceElevated: "#1a1713",
-  surfaceHover: "#241f19",
-  surfaceActive: "#1e1a15",
-  card: "#141210",
-  chatSurface: "#0a0908",
-  brandAccent: "#eec95f",
-  brandAccentHover: "#e2b84a",
-  brandAccentBright: "#f5d76e",
-  brandAccentSoft: "#d4a944",
-  brandAccentMuted: "#453a20",
-  sidebarSurface: "#0f0e0d",
-  sidebarSelected: "#1e1a15",
-  sidebarSelectedHover: "#241f19",
-  sidebarItemHover: "#1a1713",
-  msgBubble: "#1a1713",
-  msgBubbleHighlight: "#eec95f",
-  retroBorder: "#3a352d",
-  retroBorderLight: "#2e2a24",
-  bubbleShadow: "rgba(0, 0, 0, 0.85)",
-  retroShadowHeavy: "rgba(0, 0, 0, 0.6)",
+  surfacePrimary: "#121110",
+  surfaceSecondary: "#161412",
+  surfaceTertiary: "#0D0C0B",
+  surfaceElevated: "#1D1A17",
+  surfaceHover: "#26221E",
+  surfaceActive: "#211E1A",
+  card: "#171513",
+  chatSurface: "#0E0D0C",
+  brandAccent: "#E0B456",
+  brandAccentHover: "#D4A646",
+  brandAccentBright: "#ECC56A",
+  brandAccentSoft: "rgba(224, 180, 86, 0.16)",
+  brandAccentMuted: "#332B1A",
+  sidebarSurface: "#121110",
+  sidebarSelected: "#1F1C18",
+  sidebarSelectedHover: "#26221E",
+  sidebarItemHover: "#1A1815",
+  msgBubble: "#191714",
+  msgBubbleHighlight: "#2B2419",
+  retroBorder: "rgba(242, 236, 219, 0.14)",
+  retroBorderLight: "rgba(242, 236, 219, 0.08)",
+  bubbleShadow: "rgba(0, 0, 0, 0.35)",
+  retroShadowHeavy: "rgba(0, 0, 0, 0.55)",
   textPrimary: "#f2ecdb",
   textSecondary: "#cfc7b2",
   textMuted: "#8f8778",
@@ -149,12 +149,12 @@ export const dark: Palette = {
   badgeGreen: "#1f3a26",
   badgeRed: "#4a231c",
   badgeAmber: "#4a3a17",
-  badgePink: "#ff6b9e",
+  badgePink: "#E0B456",
   onAccent: "#131007",
   onPink: "#131007",
-  userBubbleInk: "#000000",
-  pillSurface: "rgba(26, 23, 19, 0.7)",
-  pillSurfaceStrong: "rgba(36, 31, 25, 0.8)",
+  userBubbleInk: "#F2ECDB",
+  pillSurface: "rgba(29, 26, 23, 0.7)",
+  pillSurfaceStrong: "rgba(38, 34, 30, 0.8)",
   pillBorder: "rgba(242, 236, 219, 0.08)",
   pillText: "rgba(207, 199, 178, 0.85)",
   dividerLine: "rgba(242, 236, 219, 0.08)",
@@ -164,13 +164,13 @@ export const dark: Palette = {
   info: "#e0b36a",
   liveTool: "#fcd34d",
   black: "#000000",
-  codeSurface: "#0c0b0a",
+  codeSurface: "#0D0C0B",
   codeBackground: "#080706",
   codeForeground: "#f2ecdb",
-  link: "#eec95f",
-  linkHover: "#f5d76e",
-  tableHeader: "#1e1a15",
-  curatorHeader: "#fff5b8",
+  link: "#E0B456",
+  linkHover: "#ECC56A",
+  tableHeader: "#1D1A17",
+  curatorHeader: "#2B2419",
 };
 
 export const palettes = { light, dark } as const;
@@ -194,16 +194,25 @@ export function offsetShadow(color: string, x: number, y: number): ViewStyle {
   };
 }
 
-export function ctrlShadow(theme: Palette, name: ThemeName): ViewStyle {
-  return offsetShadow(theme.bubbleShadow, name === "dark" ? 3 : 1.5, name === "dark" ? 3 : 1.5);
+export function ctrlShadow(_theme: Palette, _name: ThemeName): ViewStyle {
+  return {};
 }
 
-export function bubbleShadow(theme: Palette, name: ThemeName): ViewStyle {
-  return offsetShadow(theme.bubbleShadow, name === "dark" ? 3 : 2, name === "dark" ? 3 : 2);
+export function bubbleShadow(_theme: Palette, _name: ThemeName): ViewStyle {
+  return {};
 }
 
 export function cardShadow(theme: Palette): ViewStyle {
-  return offsetShadow(theme.retroShadowHeavy, 8, 8);
+  if (isWeb) {
+    return { boxShadow: "0 10px 28px -4px " + theme.retroShadowHeavy } as ViewStyle;
+  }
+  return {
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+    elevation: 4,
+  };
 }
 
 export function text(color: string, size: number, extra?: TextStyle): TextStyle {
@@ -220,7 +229,7 @@ export function text(color: string, size: number, extra?: TextStyle): TextStyle 
 /** Map palette onto the old-web CSS variable names so RN-web CSS (scrollbars, placeholders) tracks theme. */
 export function cssVariables(palette: Palette, name: ThemeName = "dark"): Record<string, string> {
   return {
-    "--background": name === "light" ? "#ffffff" : palette.chatSurface,
+    "--background": name === "light" ? palette.surfacePrimary : palette.chatSurface,
     "--foreground": palette.textPrimary,
     "--card": palette.card,
     "--card-foreground": palette.textPrimary,

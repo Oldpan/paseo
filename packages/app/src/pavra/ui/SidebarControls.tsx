@@ -49,20 +49,20 @@ export function RailNavButton({
           width: 34,
           height: 34,
           borderRadius: 10,
-          borderWidth: 1,
-          borderColor: unread ? t.retroBorder : "transparent",
+          borderWidth: 0,
+          borderColor: "transparent",
           alignItems: "center",
           justifyContent: "center",
           backgroundColor: unread
             ? t.badgePink
             : active
-              ? name === "dark"
-                ? t.brandAccent
+              ? hover
+                ? t.sidebarSelectedHover
                 : t.sidebarSelected
               : hover
-                ? t.sidebarSelected
+                ? t.sidebarItemHover
                 : "transparent",
-          ...(isWeb ? { transition: "background-color 700ms cubic-bezier(0.4, 0, 0.2, 1)" } : null),
+          ...(isWeb ? { transition: "background-color 150ms cubic-bezier(0.4, 0, 0.2, 1)" } : null),
         },
         unread ? ctrlShadow(t, name) : null,
       ]}
@@ -79,7 +79,7 @@ export function RailNavButton({
             height: 10,
             borderRadius: 5,
             borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderColor: t.sidebarSurface,
             backgroundColor: t.badgePink,
           }}
         />
@@ -151,13 +151,12 @@ export function SidebarChannelRow({
 }) {
   const { palette: t, name } = useTheme();
   const [hovered, setHovered] = useState(false);
-  const dark = name === "dark";
   const raised = selected || hovered;
   const gap = compact ? 6 : 12;
   const pad = compact ? 6 : 8;
   const fontSize = compact ? 12 : 13;
   const lineHeight = compact ? 16 : 13 * (16 / 12);
-  const ink = selected && dark ? t.onAccent : t.textPrimary;
+  const ink = selected ? t.textPrimary : t.textSecondary;
   return (
     <Pressable
       role="button"
@@ -176,29 +175,27 @@ export function SidebarChannelRow({
         width: "100%",
         alignSelf: "stretch",
         borderRadius: 12,
-        borderWidth: 1,
+        borderWidth: 0,
         paddingLeft: pad,
         paddingRight: pad,
         paddingTop: pad,
         paddingBottom: pad,
-        borderColor: raised ? t.retroBorder : "transparent",
+        borderColor: "transparent",
         backgroundColor: selected
-          ? dark
-            ? t.brandAccent
+          ? hovered
+            ? t.sidebarSelectedHover
             : t.sidebarSelected
           : hovered
-            ? t.sidebarSelected
+            ? t.sidebarItemHover
             : "transparent",
         ...(raised ? ctrlShadow(t, name) : null),
-        ...webTransition(
-          "background-color 150ms cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 150ms cubic-bezier(0.4, 0, 0.2, 1)",
-        ),
+        ...webTransition("background-color 150ms cubic-bezier(0.4, 0, 0.2, 1)"),
       }}
     >
       <HashIcon color={ink} size={compact ? 16 : 20} />
       <Text
         numberOfLines={1}
-        style={[type(ink, fontSize, { fontWeight: "600", flex: 1, lineHeight })]}
+        style={[type(ink, fontSize, { fontWeight: selected ? "600" : "500", flex: 1, lineHeight })]}
       >
         {channel.name}
       </Text>
@@ -217,8 +214,7 @@ export function UnreadBadge({ count }: { count: number }) {
         {
           minWidth: 20,
           borderRadius: 999,
-          borderWidth: 1,
-          borderColor: t.retroBorder,
+          borderWidth: 0,
           backgroundColor: t.badgePink,
           paddingHorizontal: 6,
           paddingVertical: 2,
@@ -228,7 +224,7 @@ export function UnreadBadge({ count }: { count: number }) {
         ctrlShadow(t, name),
       ]}
     >
-      <Text style={type("#fff", 10, { fontWeight: "600", lineHeight: 10 })}>
+      <Text style={type(t.onPink, 10, { fontWeight: "700", lineHeight: 10 })}>
         {count > 99 ? "99+" : String(count)}
       </Text>
     </View>
@@ -291,19 +287,22 @@ export function SectionHeader({
           role="button"
           accessibilityLabel={actionLabel}
           onPress={onAction}
-          style={[
-            {
-              width: 22,
-              height: 22,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: t.retroBorder,
-              backgroundColor: t.surfaceElevated,
-              alignItems: "center",
-              justifyContent: "center",
-            },
-            ctrlShadow(t, name),
-          ]}
+          style={(state) => {
+            const hovered = Boolean((state as { hovered?: boolean }).hovered);
+            return [
+              {
+                width: 22,
+                height: 22,
+                borderRadius: 8,
+                borderWidth: 0,
+                backgroundColor: hovered ? t.sidebarItemHover : "transparent",
+                alignItems: "center",
+                justifyContent: "center",
+                ...webTransition("background-color 120ms ease"),
+              },
+              ctrlShadow(t, name),
+            ];
+          }}
         >
           <PlusIcon color={t.textMuted} size={12} />
         </Pressable>

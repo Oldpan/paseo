@@ -2,7 +2,15 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 // Presentation extracted/adapted from Bigbang Chat.tsx MessageRow and header.
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
-import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useRef,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { Smartphone } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 import type { ForwardedFrom } from "../../../../../extensions/pavra/shared/contracts";
@@ -39,6 +47,8 @@ import { usePavraApkUpdaterStore } from "../use-pavra-apk-updater";
 import { bubbleShadow, ctrlShadow, text as type, selectedFillProps, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 
+export const ComposerFooterChipContext = createContext(false);
+
 export function HeaderIconButton({
   label,
   onPress,
@@ -64,12 +74,11 @@ export function HeaderIconButton({
             height: size,
             borderRadius: 10,
             borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderColor: t.retroBorderLight,
             backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
             alignItems: "center",
             justifyContent: "center",
-            transform: [{ translateY: hovered ? -1 : 0 }],
-            ...webTransition("transform 120ms ease, background-color 120ms ease"),
+            ...webTransition("background-color 120ms ease"),
           },
           ctrlShadow(t, name),
         ];
@@ -95,13 +104,12 @@ export function StudioButton({ label, onPress }: { label: string; onPress(): voi
             paddingHorizontal: 10,
             borderRadius: 10,
             borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderColor: t.retroBorderLight,
             backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
             flexDirection: "row",
             alignItems: "center",
             gap: 6,
-            transform: [{ translateY: hovered ? -1 : 0 }],
-            ...webTransition("transform 120ms ease, background-color 120ms ease"),
+            ...webTransition("background-color 120ms ease"),
           },
           ctrlShadow(t, name),
         ];
@@ -150,14 +158,13 @@ export function PhoneControlHeaderButton({
             paddingHorizontal: compact ? 0 : 10,
             borderRadius: 10,
             borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderColor: active ? t.retroBorder : t.retroBorderLight,
             backgroundColor: bg,
             flexDirection: "row",
             alignItems: "center",
             justifyContent: "center",
             gap: 6,
-            transform: [{ translateY: hovered ? -1 : 0 }],
-            ...webTransition("transform 120ms ease, background-color 120ms ease"),
+            ...webTransition("background-color 120ms ease"),
           },
           ctrlShadow(t, name),
         ];
@@ -247,26 +254,23 @@ function ChatHeaderTabsRow({
                 {
                   height: compact ? 30 : 32,
                   borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
+                  borderWidth: selected ? 1 : 0,
+                  borderColor: selected ? t.retroBorder : "transparent",
                   backgroundColor: selected
-                    ? hovered
-                      ? t.brandAccentHover
-                      : t.brandAccent
+                    ? t.brandAccentSoft
                     : hovered
                       ? t.surfaceHover
-                      : t.surfaceElevated,
+                      : "transparent",
                   paddingHorizontal: compact ? 10 : 12,
                   justifyContent: "center",
-                  transform: [{ translateY: hovered ? -1 : 0 }],
-                  ...webTransition("transform 120ms ease, background-color 120ms ease"),
+                  ...webTransition("background-color 120ms ease"),
                 },
                 ctrlShadow(t, name),
               ];
             }}
           >
             <Text
-              style={type(selected ? t.onAccent : t.textSecondary, 12, {
+              style={type(selected ? t.textPrimary : t.textSecondary, 12, {
                 fontWeight: "600",
               })}
             >
@@ -327,8 +331,8 @@ export function ChatHeader({
         backgroundColor: t.surfacePrimary,
         paddingHorizontal: compact ? 10 : 14,
         paddingVertical: 9,
-        borderBottomWidth: 2,
-        borderBottomColor: t.black,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         justifyContent: "center",
         gap: compact ? 8 : 0,
       }}
@@ -451,25 +455,41 @@ export function Chip({
   accent?: boolean;
 }) {
   const { palette: t, name } = useTheme();
+  const inComposerFooter = useContext(ComposerFooterChipContext);
   return (
     <Pressable
       role="button"
       accessibilityLabel={label}
       disabled={disabled}
       onPress={onPress}
-      style={[
-        {
-          minHeight: 26,
-          borderRadius: 999,
-          borderWidth: 1,
-          borderColor: t.retroBorder,
-          backgroundColor: accent ? t.brandAccent : t.surfaceElevated,
-          paddingHorizontal: 10,
-          justifyContent: "center",
-          opacity: disabled ? 0.45 : 1,
-        },
-        ctrlShadow(t, name),
-      ]}
+      style={(state) => {
+        const hovered = Boolean((state as { hovered?: boolean }).hovered) && !disabled;
+        const borderlessSoft = inComposerFooter && !accent;
+        return [
+          {
+            minHeight: 26,
+            borderRadius: 999,
+            borderWidth: borderlessSoft || accent ? 0 : 1,
+            borderColor: borderlessSoft || accent ? "transparent" : t.retroBorderLight,
+            backgroundColor: accent
+              ? hovered
+                ? t.brandAccentHover
+                : t.brandAccent
+              : borderlessSoft
+                ? hovered
+                  ? t.surfaceHover
+                  : t.surfaceSecondary
+                : hovered
+                  ? t.surfaceHover
+                  : t.surfaceElevated,
+            paddingHorizontal: 10,
+            justifyContent: "center",
+            opacity: disabled ? 0.45 : 1,
+            ...webTransition("background-color 120ms ease"),
+          },
+          ctrlShadow(t, name),
+        ];
+      }}
     >
       <Text style={type(accent ? t.onAccent : t.textSecondary, 11, { fontWeight: "600" })}>
         {children}
@@ -498,7 +518,7 @@ export function ProcessIconButton({
             height: 24,
             borderRadius: 8,
             borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderColor: t.retroBorderLight,
             backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
             alignItems: "center",
             justifyContent: "center",
@@ -1573,8 +1593,8 @@ export function ThreadHeader({
         paddingHorizontal: 14,
         paddingVertical: 9,
         backgroundColor: t.surfacePrimary,
-        borderBottomWidth: 2,
-        borderBottomColor: t.black,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         flexDirection: "row",
         gap: 10,
         alignItems: "center",
@@ -1592,7 +1612,7 @@ export function ThreadHeader({
               height: 32,
               borderRadius: 10,
               borderWidth: 1,
-              borderColor: t.retroBorder,
+              borderColor: t.retroBorderLight,
               backgroundColor: t.surfaceElevated,
               alignItems: "center",
               justifyContent: "center",

@@ -8,8 +8,9 @@ import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { Image as LucideImage } from "lucide-react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
+import { ComposerFooterChipContext } from "./ChatChrome";
 import { PaperclipIcon, SendIcon, StopIcon } from "./icons";
-import { bubbleShadow, ctrlShadow, text as type, webTransition } from "./theme";
+import { bubbleShadow, cardShadow, ctrlShadow, text as type, webTransition } from "./theme";
 import { useTheme } from "./ThemeProvider";
 import {
   MentionList,
@@ -455,12 +456,10 @@ export function Composer({
         zIndex: 20,
         elevation: 20,
         position: "relative",
-        backgroundColor: t.surfaceTertiary,
+        backgroundColor: t.chatSurface,
         paddingHorizontal: phone ? 12 : 16,
-        paddingTop: 4,
-        paddingBottom: Platform.OS === "ios" ? 8 : 4,
-        borderTopWidth: 2,
-        borderTopColor: t.retroBorder,
+        paddingTop: 6,
+        paddingBottom: Platform.OS === "ios" ? 10 : 8,
       }}
     >
       {isWeb ? (
@@ -557,6 +556,70 @@ export function Composer({
       {group?.mentions.length ? (
         <MentionList members={group.mentions} onMention={group.onMention} />
       ) : null}
+      {slashMatches.length ? (
+        <View
+          testID="slash-command-palette"
+          style={[
+            {
+              position: "absolute",
+              left: phone ? 12 : 16,
+              right: phone ? 12 : 16,
+              bottom: "100%",
+              marginBottom: 4,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: t.retroBorder,
+              backgroundColor: t.surfaceElevated,
+              overflow: "hidden",
+              zIndex: 40,
+            },
+            cardShadow(t),
+          ]}
+        >
+          <View
+            style={{
+              borderBottomWidth: 1,
+              borderBottomColor: t.dividerLine,
+              paddingHorizontal: 12,
+              paddingVertical: 4,
+            }}
+          >
+            <Text style={type(t.textMuted, 10, { letterSpacing: 1.4, textTransform: "uppercase" })}>
+              Slash Commands
+            </Text>
+          </View>
+          {slashMatches.map((command, index) => (
+            <Pressable
+              key={command.name}
+              testID={`slash-command-row-${command.name}`}
+              disabled={!command.enabled}
+              onPress={() => {
+                if (command.name === "clear") {
+                  setDraft("");
+                  resetComposerBox();
+                  return;
+                }
+                setDraft(replaceLeadingSlashCommand(draft, command.name));
+              }}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                backgroundColor: index === slashIndex ? t.brandAccentSoft : "transparent",
+                opacity: command.enabled ? 1 : 0.6,
+              }}
+            >
+              <Text style={type(t.textPrimary, 13, { fontFamily: "monospace" })}>
+                {command.argumentHint
+                  ? `/${command.name} ${command.argumentHint}`
+                  : `/${command.name}`}
+              </Text>
+              <Text numberOfLines={1} style={type(t.textMuted, 10)}>
+                {command.enabled ? command.description : command.disabledReason}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       <View
         testID="composer-input-shell"
         style={[
@@ -564,7 +627,7 @@ export function Composer({
             borderRadius: 16,
             borderWidth: 1,
             borderColor: t.retroBorder,
-            backgroundColor: t.surfacePrimary,
+            backgroundColor: t.surfaceElevated,
             overflow: "hidden",
           },
           bubbleShadow(t, name),
@@ -579,7 +642,7 @@ export function Composer({
             style={{ height: 2, width: 32, borderRadius: 999, backgroundColor: t.retroBorderLight }}
           />
         </View>
-        <View style={{ paddingHorizontal: 6, paddingBottom: isWeb ? 4 : 6 }}>
+        <View style={{ paddingHorizontal: 6, paddingBottom: isWeb ? 2 : 4 }}>
           <EditingTextInput
             ref={editor}
             accessibilityLabel="Message"
@@ -658,322 +721,253 @@ export function Composer({
             }}
           />
         </View>
-      </View>
-      {slashMatches.length ? (
-        <View
-          testID="slash-command-palette"
-          style={[
-            {
-              position: "absolute",
-              left: phone ? 12 : 16,
-              right: phone ? 12 : 16,
-              bottom: "100%",
-              marginBottom: 4,
-              borderRadius: 12,
-              borderWidth: 1,
-              borderColor: t.retroBorder,
-              backgroundColor: t.surfacePrimary,
-              overflow: "hidden",
-              zIndex: 40,
-            },
-            bubbleShadow(t, name),
-          ]}
-        >
-          <View
-            style={{
-              borderBottomWidth: 1,
-              borderBottomColor: t.dividerLine,
-              paddingHorizontal: 12,
-              paddingVertical: 4,
-            }}
-          >
-            <Text style={type(t.textMuted, 10, { letterSpacing: 1.4, textTransform: "uppercase" })}>
-              Slash Commands
-            </Text>
-          </View>
-          {slashMatches.map((command, index) => (
-            <Pressable
-              key={command.name}
-              testID={`slash-command-row-${command.name}`}
-              disabled={!command.enabled}
-              onPress={() => {
-                if (command.name === "clear") {
-                  setDraft("");
-                  resetComposerBox();
-                  return;
-                }
-                setDraft(replaceLeadingSlashCommand(draft, command.name));
-              }}
-              style={{
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-                backgroundColor: index === slashIndex ? t.brandAccentMuted : "transparent",
-                opacity: command.enabled ? 1 : 0.6,
-              }}
-            >
-              <Text style={type(t.textPrimary, 13, { fontFamily: "monospace" })}>
-                {command.argumentHint
-                  ? `/${command.name} ${command.argumentHint}`
-                  : `/${command.name}`}
-              </Text>
-              <Text numberOfLines={1} style={type(t.textMuted, 10)}>
-                {command.enabled ? command.description : command.disabledReason}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
-      <View
-        style={{
-          flexDirection: "row",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 8,
-          marginTop: 6,
-          flexWrap: "wrap",
-        }}
-      >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <Pressable
-            testID="attach-file"
-            role="button"
-            accessibilityLabel="Attach file"
-            hitSlop={8}
-            disabled={locked || uploading}
-            onPress={handleAttachPress}
-            style={(state) => {
-              const hovered = Boolean((state as { hovered?: boolean }).hovered);
-              return [
-                {
-                  width: phone ? 36 : 26,
-                  height: phone ? 36 : 26,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor:
-                    hovered && !locked && !uploading ? t.surfaceHover : t.surfaceElevated,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: locked || uploading ? 0.45 : 1,
-                  transform: [{ translateY: hovered && !locked && !uploading ? -2 : 0 }],
-                  ...webTransition(
-                    "transform 100ms cubic-bezier(0.4,0,0.2,1), background-color 100ms",
-                  ),
-                },
-                ctrlShadow(t, name),
-              ];
-            }}
-          >
-            <PaperclipIcon color={t.textPrimary} size={phone ? 16 : 12} />
-          </Pressable>
-          <Pressable
-            testID="attach-image"
-            role="button"
-            accessibilityLabel="Attach image"
-            hitSlop={8}
-            disabled={locked || uploading}
-            onPress={handleAttachImagePress}
-            style={(state) => {
-              const hovered = Boolean((state as { hovered?: boolean }).hovered);
-              return [
-                {
-                  width: phone ? 36 : 26,
-                  height: phone ? 36 : 26,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor:
-                    hovered && !locked && !uploading ? t.surfaceHover : t.surfaceElevated,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: locked || uploading ? 0.45 : 1,
-                  transform: [{ translateY: hovered && !locked && !uploading ? -2 : 0 }],
-                  ...webTransition(
-                    "transform 100ms cubic-bezier(0.4,0,0.2,1), background-color 100ms",
-                  ),
-                },
-                ctrlShadow(t, name),
-              ];
-            }}
-          >
-            <LucideImage color={t.textPrimary} size={phone ? 16 : 12} strokeWidth={2} aria-hidden />
-          </Pressable>
-          {footerAction}
-        </View>
         <View
           style={{
             flexDirection: "row",
+            justifyContent: "space-between",
             alignItems: "center",
-            gap: 6,
+            gap: 8,
+            paddingHorizontal: 10,
+            paddingTop: 2,
+            paddingBottom: 8,
             flexWrap: "wrap",
-            justifyContent: "flex-end",
           }}
         >
-          {group?.roundtable ? (
-            <RoundtableToggle
-              on={group.roundtable.on}
-              phone={phone}
-              onToggle={group.roundtable.onToggle}
-            />
-          ) : null}
-          {allowPlanMode ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Pressable
-              testID="composer-plan"
+              testID="attach-file"
               role="button"
-              accessibilityLabel="Send next message in plan mode"
-              accessibilityState={{ selected: planMode }}
+              accessibilityLabel="Attach file"
+              hitSlop={8}
               disabled={locked || uploading}
-              onPress={() => setPlanMode((value) => !value)}
-              {...(isWeb
-                ? ({
-                    "aria-pressed": planMode,
-                    title: planMode
-                      ? "Next send will request a plan"
-                      : "Send next message in plan mode",
-                  } as object)
-                : {})}
-              style={(state) => [
-                {
-                  minHeight: phone ? 36 : 28,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor: planMode ? t.brandAccentMuted : t.surfaceElevated,
-                  paddingHorizontal: 12,
-                  justifyContent: "center",
-                  opacity: locked || uploading ? 0.45 : 1,
-                  transform: [
-                    {
-                      translateY:
-                        !locked && !uploading && Boolean((state as { hovered?: boolean }).hovered)
-                          ? -1
-                          : 0,
-                    },
-                  ],
-                },
-                ctrlShadow(t, name),
-              ]}
+              onPress={handleAttachPress}
+              style={(state) => {
+                const hovered = Boolean((state as { hovered?: boolean }).hovered);
+                return [
+                  {
+                    width: phone ? 36 : 28,
+                    height: phone ? 36 : 28,
+                    borderRadius: 999,
+                    borderWidth: 0,
+                    backgroundColor:
+                      hovered && !locked && !uploading ? t.surfaceHover : t.surfaceSecondary,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: locked || uploading ? 0.45 : 1,
+                    ...webTransition("background-color 120ms ease"),
+                  },
+                  ctrlShadow(t, name),
+                ];
+              }}
             >
-              <Text
-                style={type(planMode ? t.textPrimary : t.textSecondary, phone ? 12 : 11, {
-                  fontWeight: "600",
-                })}
-              >
-                Plan
-              </Text>
+              <PaperclipIcon color={t.textSecondary} size={phone ? 16 : 13} />
             </Pressable>
-          ) : null}
-          {showSendAsTask ? (
             <Pressable
-              testID="composer-as-task"
+              testID="attach-image"
               role="button"
-              accessibilityLabel="Send next message as a task"
-              accessibilityState={{ selected: sendAsTask }}
+              accessibilityLabel="Attach image"
+              hitSlop={8}
               disabled={locked || uploading}
-              onPress={() => setSendAsTask((value) => !value)}
-              {...(isWeb
-                ? ({
-                    "aria-pressed": sendAsTask,
-                    title: sendAsTask
-                      ? "Next send will create a task"
-                      : "Send next message as a task",
-                  } as object)
-                : {})}
-              style={(state) => [
-                {
-                  minHeight: phone ? 36 : 28,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor: sendAsTask ? t.success : t.surfaceElevated,
-                  paddingHorizontal: 12,
-                  justifyContent: "center",
-                  opacity: locked || uploading ? 0.45 : 1,
-                  transform: [
-                    {
-                      translateY:
-                        !locked && !uploading && Boolean((state as { hovered?: boolean }).hovered)
-                          ? -1
-                          : 0,
-                    },
-                  ],
-                },
-                ctrlShadow(t, name),
-              ]}
+              onPress={handleAttachImagePress}
+              style={(state) => {
+                const hovered = Boolean((state as { hovered?: boolean }).hovered);
+                return [
+                  {
+                    width: phone ? 36 : 28,
+                    height: phone ? 36 : 28,
+                    borderRadius: 999,
+                    borderWidth: 0,
+                    backgroundColor:
+                      hovered && !locked && !uploading ? t.surfaceHover : t.surfaceSecondary,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: locked || uploading ? 0.45 : 1,
+                    ...webTransition("background-color 120ms ease"),
+                  },
+                  ctrlShadow(t, name),
+                ];
+              }}
             >
-              <Text
-                style={type(sendAsTask ? t.textPrimary : t.textSecondary, phone ? 12 : 11, {
-                  fontWeight: "600",
-                })}
-              >
-                As Task
-              </Text>
+              <LucideImage
+                color={t.textSecondary}
+                size={phone ? 16 : 13}
+                strokeWidth={2}
+                aria-hidden
+              />
             </Pressable>
-          ) : null}
-          {showCancel ? (
-            <Pressable
-              role="button"
-              accessibilityLabel="Cancel"
-              disabled={cancelling}
-              onPress={onStop}
-              style={[
-                {
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor: t.surfaceElevated,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: cancelling ? 0.6 : 1,
-                },
-                ctrlShadow(t, name),
-              ]}
-            >
-              {cancelling ? (
-                <ActivityIndicator size={12} color={t.textPrimary} />
-              ) : (
-                <StopIcon color={t.textPrimary} size={14} />
-              )}
-            </Pressable>
-          ) : null}
-          <Pressable
-            role="button"
-            accessibilityLabel="Send"
-            disabled={disabled}
-            onPress={submit}
-            style={(state) => {
-              const hovered = Boolean((state as { hovered?: boolean }).hovered);
-              const live = !disabled;
-              return [
-                {
-                  minHeight: 36,
-                  height: 36,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: t.retroBorder,
-                  backgroundColor: t.badgePink,
-                  paddingHorizontal: phone ? 16 : 12,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 4,
-                  opacity: disabled ? 0.45 : 1,
-                  transform: [{ translateY: live && hovered && !state.pressed ? -2 : 0 }],
-                  ...(isWeb
-                    ? ({
-                        transition: "transform 100ms cubic-bezier(0.4,0,0.2,1), filter 100ms",
-                        filter: live && hovered ? "brightness(1.05)" : undefined,
-                      } as object)
-                    : null),
-                },
-                ctrlShadow(t, name),
-              ];
+            <ComposerFooterChipContext.Provider value={true}>
+              {footerAction}
+            </ComposerFooterChipContext.Provider>
+          </View>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
             }}
           >
-            <Text style={type(t.onPink, phone ? 12 : 11, { fontWeight: "700" })}>Send</Text>
-            <SendIcon color={t.onPink} size={phone ? 14 : 16} />
-          </Pressable>
+            {group?.roundtable ? (
+              <RoundtableToggle
+                on={group.roundtable.on}
+                phone={phone}
+                onToggle={group.roundtable.onToggle}
+              />
+            ) : null}
+            {allowPlanMode ? (
+              <Pressable
+                testID="composer-plan"
+                role="button"
+                accessibilityLabel="Send next message in plan mode"
+                accessibilityState={{ selected: planMode }}
+                disabled={locked || uploading}
+                onPress={() => setPlanMode((value) => !value)}
+                {...(isWeb
+                  ? ({
+                      "aria-pressed": planMode,
+                      title: planMode
+                        ? "Next send will request a plan"
+                        : "Send next message in plan mode",
+                    } as object)
+                  : {})}
+                style={(state) => {
+                  const hovered =
+                    !locked && !uploading && Boolean((state as { hovered?: boolean }).hovered);
+                  return [
+                    {
+                      minHeight: phone ? 36 : 28,
+                      borderRadius: 999,
+                      borderWidth: 0,
+                      backgroundColor: planMode
+                        ? t.brandAccentSoft
+                        : hovered
+                          ? t.surfaceHover
+                          : t.surfaceSecondary,
+                      paddingHorizontal: 12,
+                      justifyContent: "center",
+                      opacity: locked || uploading ? 0.45 : 1,
+                      ...webTransition("background-color 120ms ease"),
+                    },
+                    ctrlShadow(t, name),
+                  ];
+                }}
+              >
+                <Text
+                  style={type(planMode ? t.textPrimary : t.textSecondary, phone ? 12 : 11, {
+                    fontWeight: "600",
+                  })}
+                >
+                  Plan
+                </Text>
+              </Pressable>
+            ) : null}
+            {showSendAsTask ? (
+              <Pressable
+                testID="composer-as-task"
+                role="button"
+                accessibilityLabel="Send next message as a task"
+                accessibilityState={{ selected: sendAsTask }}
+                disabled={locked || uploading}
+                onPress={() => setSendAsTask((value) => !value)}
+                {...(isWeb
+                  ? ({
+                      "aria-pressed": sendAsTask,
+                      title: sendAsTask
+                        ? "Next send will create a task"
+                        : "Send next message as a task",
+                    } as object)
+                  : {})}
+                style={(state) => {
+                  const hovered =
+                    !locked && !uploading && Boolean((state as { hovered?: boolean }).hovered);
+                  return [
+                    {
+                      minHeight: phone ? 36 : 28,
+                      borderRadius: 999,
+                      borderWidth: 0,
+                      backgroundColor: sendAsTask
+                        ? t.success
+                        : hovered
+                          ? t.surfaceHover
+                          : t.surfaceSecondary,
+                      paddingHorizontal: 12,
+                      justifyContent: "center",
+                      opacity: locked || uploading ? 0.45 : 1,
+                      ...webTransition("background-color 120ms ease"),
+                    },
+                    ctrlShadow(t, name),
+                  ];
+                }}
+              >
+                <Text
+                  style={type(
+                    sendAsTask ? (name === "dark" ? "#131007" : "#FFFFFF") : t.textSecondary,
+                    phone ? 12 : 11,
+                    { fontWeight: "600" },
+                  )}
+                >
+                  As Task
+                </Text>
+              </Pressable>
+            ) : null}
+            {showCancel ? (
+              <Pressable
+                role="button"
+                accessibilityLabel="Cancel"
+                disabled={cancelling}
+                onPress={onStop}
+                style={[
+                  {
+                    width: 28,
+                    height: 28,
+                    borderRadius: 999,
+                    borderWidth: 0,
+                    backgroundColor: t.surfaceSecondary,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: cancelling ? 0.6 : 1,
+                  },
+                  ctrlShadow(t, name),
+                ]}
+              >
+                {cancelling ? (
+                  <ActivityIndicator size={12} color={t.textPrimary} />
+                ) : (
+                  <StopIcon color={t.textPrimary} size={14} />
+                )}
+              </Pressable>
+            ) : null}
+            <Pressable
+              role="button"
+              accessibilityLabel="Send"
+              disabled={disabled}
+              onPress={submit}
+              style={(state) => {
+                const hovered = Boolean((state as { hovered?: boolean }).hovered);
+                const live = !disabled;
+                return [
+                  {
+                    minHeight: 36,
+                    height: 36,
+                    borderRadius: 999,
+                    borderWidth: 0,
+                    backgroundColor: live && hovered ? t.brandAccentHover : t.badgePink,
+                    paddingHorizontal: phone ? 16 : 12,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 4,
+                    opacity: disabled ? 0.45 : 1,
+                    ...webTransition("background-color 120ms ease"),
+                  },
+                  ctrlShadow(t, name),
+                ];
+              }}
+            >
+              <Text style={type(t.onPink, phone ? 12 : 11, { fontWeight: "700" })}>Send</Text>
+              <SendIcon color={t.onPink} size={phone ? 14 : 16} />
+            </Pressable>
+          </View>
         </View>
       </View>
       {group?.hint ? <ResponderHint hint={group.hint} /> : null}
