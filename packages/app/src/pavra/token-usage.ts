@@ -69,9 +69,16 @@ export const ASSISTANT_TOOL_FAMILIES: readonly AssistantToolFamilyMeta[] = [
     shortLabel: "Browser",
     description: "Operate persistent Chromium tabs and request user takeover.",
   },
+  {
+    id: "phone" as AssistantToolFamily,
+    label: "Phone Control",
+    shortLabel: "Phone",
+    description:
+      "Operate Android apps on a background virtual display with floating mini-window monitoring",
+  },
 ] as const;
 
-const VALID_TOOL_FAMILY_SET = new Set<string>(assistantToolFamilyValues);
+const VALID_TOOL_FAMILY_SET = new Set<string>([...assistantToolFamilyValues, "phone"]);
 const ENV_LINE_RE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
 
 function providerNumber(value: number | null | undefined): number | null {
@@ -233,20 +240,21 @@ export function normalizeDisabledTools(
 }
 
 export function isAssistantToolEnabled(
-  family: AssistantToolFamily,
-  disabledTools?: readonly AssistantToolFamily[] | null,
+  family: AssistantToolFamily | "phone",
+  disabledTools?: readonly (AssistantToolFamily | "phone")[] | null,
 ): boolean {
   if (!disabledTools || disabledTools.length === 0) return true;
-  return !disabledTools.includes(family);
+  return !(disabledTools as readonly string[]).includes(family);
 }
 
 export function toggleAssistantToolFamily(
-  family: AssistantToolFamily,
-  disabledTools?: readonly AssistantToolFamily[] | null,
+  family: AssistantToolFamily | "phone",
+  disabledTools?: readonly (AssistantToolFamily | "phone")[] | null,
 ): AssistantToolFamily[] | undefined {
   const next = new Set<AssistantToolFamily>(normalizeDisabledTools(disabledTools) ?? []);
-  if (next.has(family)) next.delete(family);
-  else next.add(family);
+  const target = family as AssistantToolFamily;
+  if (next.has(target)) next.delete(target);
+  else next.add(target);
   return next.size > 0 ? [...next] : undefined;
 }
 

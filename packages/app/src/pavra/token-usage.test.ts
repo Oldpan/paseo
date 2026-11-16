@@ -125,22 +125,36 @@ describe("pavra token-usage engine", () => {
       "tasks",
       "routines",
       "browser",
+      "phone",
     ]);
+    expect(ASSISTANT_TOOL_FAMILIES.find((item) => String(item.id) === "phone")).toMatchObject({
+      id: "phone",
+      label: "Phone Control",
+      description:
+        "Operate Android apps on a background virtual display with floating mini-window monitoring",
+    });
     expect(normalizeDisabledTools(undefined)).toBeUndefined();
-    expect(normalizeDisabledTools(["mailbox", "invalid", "mailbox", "browser"])).toEqual([
+    expect(normalizeDisabledTools(["mailbox", "invalid", "mailbox", "browser", "phone"])).toEqual([
       "mailbox",
       "browser",
+      "phone",
     ]);
 
     expect(isAssistantToolEnabled("mailbox", undefined)).toBe(true);
     expect(isAssistantToolEnabled("mailbox", ["mailbox"])).toBe(false);
     expect(isAssistantToolEnabled("tasks", ["mailbox"])).toBe(true);
+    expect(isAssistantToolEnabled("phone", undefined)).toBe(true);
+    expect(isAssistantToolEnabled("phone", ["phone"])).toBe(false);
 
     const disabledOne = toggleAssistantToolFamily("browser", undefined);
     expect(disabledOne).toEqual(["browser"]);
     const disabledTwo = toggleAssistantToolFamily("mailbox", disabledOne);
     expect(disabledTwo).toEqual(["browser", "mailbox"]);
-    const reenabled = toggleAssistantToolFamily("browser", disabledTwo);
+    const disabledThree = toggleAssistantToolFamily("phone", disabledTwo);
+    expect(disabledThree).toEqual(["browser", "mailbox", "phone"]);
+    const reenabledPhone = toggleAssistantToolFamily("phone", disabledThree);
+    expect(reenabledPhone).toEqual(["browser", "mailbox"]);
+    const reenabled = toggleAssistantToolFamily("browser", reenabledPhone);
     expect(reenabled).toEqual(["mailbox"]);
     expect(toggleAssistantToolFamily("mailbox", reenabled)).toBeUndefined();
   });
