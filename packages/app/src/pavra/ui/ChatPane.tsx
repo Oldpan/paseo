@@ -42,6 +42,10 @@ export interface MessageRow {
   workspaceCwd?: string;
   /** Opens the file-ref preview modal when a file path chip in the message is clicked. */
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  /** Opens PortPreviewModal when a previewable port URL in the message is clicked. */
+  onOpenPortPreview?: (url: string) => void;
+  /** Appends selected table rows as Markdown to the conversation draft. */
+  onQuoteTableSelection?: (markdown: string) => void;
   /** Forwarded message provenance pill metadata. */
   forwardedFrom?: ForwardedFrom;
   /** Whether this message is bookmarked/saved. */
@@ -105,6 +109,7 @@ export function ChatPane({
   onStop,
   cancelling = false,
   onPressFileRef,
+  contextUsageBar,
 }: {
   rows: MessageRow[];
   turns: LiveTurn[];
@@ -132,6 +137,8 @@ export function ChatPane({
   onStop?(): void;
   cancelling?: boolean;
   onPressFileRef?(ref: ParsedFileRef, row: MessageRow): void;
+  /** Compact context usage indicator rendered above the composer. */
+  contextUsageBar?: ReactNode;
 }) {
   const { palette: t } = useTheme();
   const list = useRef<FlatList<MessageRow>>(null);
@@ -188,6 +195,8 @@ export function ChatPane({
           onPressFileRef={
             row.onPressFileRef ?? (onPressFileRef ? (ref) => onPressFileRef(ref, row) : undefined)
           }
+          onOpenPortPreview={row.onOpenPortPreview}
+          onQuoteTableSelection={row.onQuoteTableSelection}
           quote={row.quote}
           routineBadge={row.routineBadge}
         >
@@ -269,6 +278,7 @@ export function ChatPane({
           onRemove={onRemoveQueued}
         />
       ) : null}
+      {contextUsageBar}
       <Composer
         draft={draft}
         setDraft={setDraft}

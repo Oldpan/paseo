@@ -951,6 +951,8 @@ export function ChatMessage({
   provenance,
   workspaceCwd,
   onPressFileRef,
+  onOpenPortPreview,
+  onQuoteTableSelection,
   quote,
   routineBadge,
   children,
@@ -978,6 +980,8 @@ export function ChatMessage({
   provenance?: TurnProvenanceSummary;
   workspaceCwd?: string;
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  onOpenPortPreview?: (url: string) => void;
+  onQuoteTableSelection?: (markdown: string) => void;
   /** The message this one answers, shown as a compact block above its text. */
   quote?: { sender: string; text: string };
   /** Compact routine origin badge (e.g. `Routine · 早间汇总`). */
@@ -1123,6 +1127,8 @@ export function ChatMessage({
                   quote={quote}
                   workspaceCwd={workspaceCwd}
                   onPressFileRef={onPressFileRef}
+                  onOpenPortPreview={onOpenPortPreview}
+                  onQuoteTableSelection={onQuoteTableSelection}
                 />
               </View>
             </Pressable>
@@ -1172,6 +1178,8 @@ function MessageBody({
   quote,
   workspaceCwd,
   onPressFileRef,
+  onOpenPortPreview,
+  onQuoteTableSelection,
 }: {
   id: string;
   content: string;
@@ -1179,6 +1187,8 @@ function MessageBody({
   quote?: { sender: string; text: string };
   workspaceCwd?: string;
   onPressFileRef?: (ref: ParsedFileRef) => void;
+  onOpenPortPreview?: (url: string) => void;
+  onQuoteTableSelection?: (markdown: string) => void;
 }) {
   const { palette: t } = useTheme();
   return (
@@ -1195,6 +1205,9 @@ function MessageBody({
           narrow={false}
           workspaceCwd={workspaceCwd}
           onPressFileRef={onPressFileRef}
+          onOpenPortPreview={onOpenPortPreview}
+          onPressPortUrl={onOpenPortPreview}
+          onQuoteTableSelection={onQuoteTableSelection}
         />
       )}
     </>

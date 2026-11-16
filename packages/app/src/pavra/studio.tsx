@@ -9,7 +9,12 @@ import { useWorkspace, useWorkspaceKeys } from "@/stores/session-store-hooks";
 import { getHostRuntimeStore, useHosts, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { usePavraView } from "./store";
+import { PortPreviewModal, type PortPreviewTarget } from "./ui/PortPreviewModal";
 import { StudioBar, WorkspaceChrome } from "./ui/StudioChrome";
+import {
+  StudioPortPreviewDialog,
+  type StudioPortPreviewSelection,
+} from "./ui/StudioPortPreviewDialog";
 import { resolveActiveStudioKey, studioKey, type StudioColumn } from "./model";
 import type { Palette } from "./palette";
 import type { PavraData } from "./data";
@@ -55,11 +60,28 @@ export function Studio({
   onError?(error: string | null): void;
 }) {
   const [collaborating, setCollaborating] = useState(false);
+  const [portPreviewDialogOpen, setPortPreviewDialogOpen] = useState(false);
+  const [portPreviewTarget, setPortPreviewTarget] = useState<PortPreviewTarget | null>(null);
   const [group, setGroup] = useState("General");
   const openCollaboration = useCallback(() => setCollaborating(true), []);
   const closeCollaboration = useCallback(() => setCollaborating(false), []);
+  const openPortPreview = useCallback(() => setPortPreviewDialogOpen(true), []);
+  const closePortPreviewDialog = useCallback(() => setPortPreviewDialogOpen(false), []);
+  const closePortPreviewModal = useCallback(() => setPortPreviewTarget(null), []);
+  const handleOpenPortPreview = useCallback((selection: StudioPortPreviewSelection) => {
+    setPortPreviewDialogOpen(false);
+    setPortPreviewTarget({
+      url: selection.url,
+      port: selection.port,
+      path: selection.path,
+      machineId: selection.serverId,
+      machineLabel: selection.label,
+      hostEndpoint: selection.hostEndpoint,
+    });
+  }, []);
   const columns = usePavraView((state) => state.columns);
   const activeKey = usePavraView((state) => state.activeColumn);
+  const storeActiveGroup = usePavraView((state) => state.activeGroup);
   const resolvedActiveKey = resolveActiveStudioKey(columns, activeKey);
   const compact = useIsCompactFormFactor();
   const frame = useMemo(
@@ -69,7 +91,11 @@ export function Studio({
   const focus = useCallback((key: string) => usePavraView.getState().focusColumn(key), []);
   const close = useCallback((key: string) => usePavraView.getState().removeColumn(key), []);
   const activeGroup =
-    columns.find((column) => studioKey(column) === resolvedActiveKey)?.group ?? "General";
+    storeActiveGroup ??
+    columns.find((column) => studioKey(column) === resolvedActiveKey)?.group ??
+    "General";
+  const defaultPortPreviewServerId =
+    columns.find((column) => studioKey(column) === resolvedActiveKey)?.serverId ?? coordinatorId;
   const columnViews = columns.map((column) => {
     const selected = studioKey(column) === resolvedActiveKey;
     return (
@@ -100,6 +126,7 @@ export function Studio({
         onAdd={onAdd}
         onSidebar={onSidebar}
         onCollaborate={openCollaboration}
+        onOpenPortPreview={openPortPreview}
       />
       <View style={HORIZONTAL}>
         {columns.length ? (
@@ -124,6 +151,14 @@ export function Studio({
           />
         ) : null}
       </View>
+      {portPreviewDialogOpen ? (
+        <StudioPortPreviewDialog
+          defaultServerId={defaultPortPreviewServerId}
+          onOpenPreview={handleOpenPortPreview}
+          onClose={closePortPreviewDialog}
+        />
+      ) : null}
+      <PortPreviewModal target={portPreviewTarget} onClose={closePortPreviewModal} />
     </View>
   );
 }

@@ -12,7 +12,6 @@ import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
 import {
   createConversation,
-  saveAssistant,
   type Assistant,
   type MachineInfo,
   startTask,
@@ -20,7 +19,6 @@ import {
   type Turn,
 } from "../../../../extensions/pavra/shared/contracts";
 import { useAssistantMachines, usePavraData, useMachines, type PavraData } from "./data";
-import { normalizeAutonomy, parseAutonomy, serializeAutonomy, validateAutonomy } from "./autonomy";
 import { deriveInboxState } from "./inbox";
 import { resolveDefaultChatId, resolveDefaultCoordinatorId } from "./model";
 import { taskIdOfThread, taskTitle } from "./task-view";
@@ -35,6 +33,7 @@ import { openTurnProcess, Studio, StudioHomePanel } from "./studio";
 import { TurnProcessDrawer } from "./turn-process-drawer";
 import { PavraTheme, usePavraDark } from "./ui/ThemeProvider";
 import { AnimatedDrawer } from "./ui/AnimatedDrawer";
+import { AssistantSheet } from "./ui/AssistantSheet";
 import { CoordinatorPickerModal } from "./ui/CoordinatorPickerModal";
 import { InboxPane } from "./ui/InboxPane";
 import { Sidebar } from "./ui/Sidebar";
@@ -55,12 +54,6 @@ const WORKSPACES_MODAL = {
   bottom: 0,
   zIndex: 40,
 } as const;
-const ASSISTANT_FIELDS = [
-  { name: "name", label: "Name", initial: "" },
-  { name: "provider", label: "Provider / model", initial: "" },
-  { name: "persona", label: "Persona", initial: "", multiline: true },
-  { name: "memory", label: "Initial memory", initial: "", multiline: true },
-];
 const ERROR_BANNER = {
   paddingHorizontal: 16,
   paddingVertical: 8,
@@ -70,62 +63,6 @@ const ERROR_BANNER = {
   justifyContent: "space-between",
 } as const;
 const DISMISS_TEXT = { fontSize: 12, marginLeft: 8 } as const;
-
-function assistantFormFields(input: {
-  assistant: Assistant | undefined;
-  editing: string | null;
-  coordinatorId: string;
-  hosts: Array<{ serverId: string; label: string }>;
-  formIds: ReturnType<typeof freshFormIds>;
-  machines: MachineInfo[];
-  defaultServerId?: string | null;
-}) {
-  const { assistant, editing, coordinatorId, hosts, formIds, machines, defaultServerId } = input;
-  const machineId = assistant?.serverId ?? defaultServerId ?? coordinatorId;
-  const machineOptions = machines
-    .filter((machine) => machine.role === "coordinator" || machine.role === "member")
-    .map((machine) => ({
-      id: machine.serverId,
-      value: machine.serverId,
-      label: machine.label,
-    }));
-  if (!machineOptions.some((o) => o.value === machineId)) {
-    machineOptions.unshift({
-      id: machineId,
-      value: machineId,
-      label: hosts.find((h) => h.serverId === machineId)?.label ?? machineId,
-    });
-  }
-  return [
-    { name: "id", label: "", initial: editing ?? formIds.assistant, hidden: true },
-    { name: "chatId", label: "", initial: formIds.chat, hidden: true },
-    // The model list follows the machine: a new assistant picks one; an existing one keeps its own.
-    {
-      name: "server",
-      label: "Machine",
-      initial: machineId,
-      hidden: !editing && machineOptions.length < 2,
-      readOnly: Boolean(editing),
-      options: machineOptions,
-    },
-    ...ASSISTANT_FIELDS.filter((field) => !editing || field.name !== "memory").map((field) => ({
-      name: field.name,
-      label: field.label,
-      modelHost: field.name === "provider" ? machineId : undefined,
-      multiline: field.multiline,
-      initial: assistant?.[field.name as "name" | "provider" | "persona"] ?? "",
-    })),
-    {
-      name: "autonomy",
-      label: "Tasks",
-      initial: serializeAutonomy(assistant?.autonomy),
-      autonomy: {
-        hosts: hosts.map((host) => ({ value: host.serverId, label: host.label })),
-        defaultHost: coordinatorId,
-      },
-    },
-  ];
-}
 
 // Option value for "no default responder": a plain message then goes to the first member.
 const NO_DEFAULT_RESPONDER = "first";
@@ -463,42 +400,6 @@ export function PavraScreen() {
   const assistant = data.state.assistants.find((item) => item.id === editing);
   const save = useCallback(
     async (values: Record<string, string>) => {
-      if (form === "assistant") {
-        const id = values.id;
-        const autonomy = parseAutonomy(values.autonomy);
-        const problem = validateAutonomy(
-          autonomy,
-          hosts.map((host) => host.serverId),
-          (serverId) => hosts.find((host) => host.serverId === serverId)?.label ?? serverId,
-        );
-        if (problem) throw new Error(problem);
-        const normalized = normalizeAutonomy(
-          autonomy,
-          (serverId) => hosts.find((host) => host.serverId === serverId)?.label,
-        );
-        // The machine is chosen once, at creation; edits resend it unchanged.
-        const serverId = editing ? assistant?.serverId : values.server;
-        await data.call(saveAssistant, {
-          id,
-          name: values.name,
-          provider: values.provider,
-          persona: values.persona,
-          ...(serverId && serverId !== coordinatorId ? { serverId } : {}),
-          ...(normalized ? { autonomy: normalized } : {}),
-          // Only seeds MEMORY.md for a new assistant; an existing one edits it in the Memory tab.
-          ...(editing ? {} : { memory: values.memory }),
-        });
-        if (!editing) {
-          const chat = await data.call(createConversation, {
-            id: values.chatId,
-            name: values.name,
-            kind: "dm",
-            members: [id],
-            roundtable: false,
-          });
-          changeChat(chat.id);
-        }
-      }
       if (form === "group") {
         const names = values.members.split(",").map((value) => value.trim());
         const members = names.map((name) => {
@@ -540,7 +441,7 @@ export function PavraScreen() {
       }
       close();
     },
-    [assistant, changeChat, chatId, close, coordinatorId, data, editing, form, hosts],
+    [changeChat, chatId, close, data, form],
   );
   const selectChat = useCallback(
     (id: string) => {
@@ -596,19 +497,6 @@ export function PavraScreen() {
         });
     },
     [data, selectChat],
-  );
-  const assistantFields = useMemo(
-    () =>
-      assistantFormFields({
-        assistant,
-        editing,
-        coordinatorId,
-        hosts,
-        formIds,
-        machines,
-        defaultServerId,
-      }),
-    [assistant, editing, coordinatorId, hosts, formIds, machines, defaultServerId],
   );
   const groupFields = useMemo(
     () => [
@@ -833,7 +721,11 @@ export function PavraScreen() {
                 form={form}
                 editing={editing}
                 chatId={chatId}
-                assistantFields={assistantFields}
+                assistant={assistant}
+                hosts={hosts}
+                machines={machines}
+                defaultServerId={defaultServerId}
+                onCreatedChat={changeChat}
                 groupFields={groupFields}
                 taskFields={taskFields}
                 palette={palette}
@@ -868,7 +760,11 @@ interface FormHostProps {
   editing: string | null;
   chatId: string;
   group: string;
-  assistantFields: ComponentProps<typeof PavraForm>["fields"];
+  assistant: Assistant | undefined;
+  hosts: ReadonlyArray<{ serverId: string; label: string }>;
+  machines: readonly MachineInfo[];
+  defaultServerId: string | null;
+  onCreatedChat(chatId: string): void;
   groupFields: ComponentProps<typeof PavraForm>["fields"];
   taskFields: ComponentProps<typeof PavraForm>["fields"];
   palette: ComponentProps<typeof PavraForm>["palette"];
@@ -884,7 +780,11 @@ function FormHost({
   form,
   editing,
   chatId,
-  assistantFields,
+  assistant,
+  hosts,
+  machines,
+  defaultServerId,
+  onCreatedChat,
   groupFields,
   taskFields,
   palette,
@@ -899,13 +799,17 @@ function FormHost({
 }: FormHostProps) {
   return (
     <>
-      {form === "assistant" ? (
-        <PavraForm
+      {form === "assistant" && data ? (
+        <AssistantSheet
           key={editing ?? "new-assistant"}
-          title={editing ? "Edit assistant" : "New assistant"}
-          fields={assistantFields}
-          palette={palette}
-          onSubmit={save}
+          assistant={assistant}
+          editing={editing}
+          coordinatorId={coordinatorId ?? ""}
+          hosts={hosts}
+          machines={machines}
+          defaultServerId={defaultServerId}
+          data={data}
+          onCreatedChat={onCreatedChat}
           onClose={close}
         />
       ) : null}

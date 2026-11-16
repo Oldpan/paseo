@@ -53,6 +53,7 @@ import { BrowserTakeoverModal, TakeoverCard } from "./ui/BrowserTakeoverModal";
 import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, MemoryPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
 import type { ComposerSendExtras } from "./ui/Composer";
+import { ContextUsageBar, useAssistantContextUsage } from "./ui/ContextUsageBar";
 import type { ParsedFileRef } from "./ui/fileRefParser";
 import {
   FileRefPreviewModal,
@@ -62,6 +63,7 @@ import {
 import { ForwardMessageModal } from "./ui/ForwardMessageModal";
 import { GlobalSearchModal } from "./ui/GlobalSearchModal";
 import type { PendingQueueItem } from "./ui/PendingQueueBar";
+import { PortPreviewModal, type PortPreviewTarget } from "./ui/PortPreviewModal";
 import { PromoteToTaskModal } from "./ui/PromoteToTaskModal";
 import { SavePlaybookModal } from "./ui/SavePlaybookModal";
 import { ColResizeHandle } from "./ui/ColResizeHandle";
@@ -886,6 +888,7 @@ function ConversationPane({
     workspaceName?: string;
     group?: string;
   } | null>(null);
+  const [portPreviewTarget, setPortPreviewTarget] = useState<PortPreviewTarget | null>(null);
   const [forwardModalMessage, setForwardModalMessage] = useState<Message | null>(null);
   const [promoteTaskMessage, setPromoteTaskMessage] = useState<Message | null>(null);
   const [playbookModalSource, setPlaybookModalSource] = useState<{
@@ -898,6 +901,44 @@ function ConversationPane({
   const changeDraft = useCallback(
     (value: string) => setDraft(draftKey, value),
     [draftKey, setDraft],
+  );
+  const handleQuoteTableSelection = useCallback(
+    (markdown: string) => {
+      const currentDraft = usePavraView.getState().drafts[draftKey] ?? "";
+      const prefix = currentDraft.trim().length > 0 ? `${currentDraft.trimEnd()}\n\n` : "";
+      changeDraft(`${prefix}${markdown}\n`);
+    },
+    [changeDraft, draftKey],
+  );
+  const primaryAssistant = useMemo(() => {
+    if (!conversation) return undefined;
+    if (conversation.kind === "dm") {
+      return assistantsById.get(conversation.members[0] ?? "");
+    }
+    const defaultId = conversation.defaultResponderId ?? conversation.members[0];
+    return defaultId ? assistantsById.get(defaultId) : undefined;
+  }, [assistantsById, conversation]);
+  const contextUsage = useAssistantContextUsage({
+    turns: data.state.turns,
+    assistant: primaryAssistant,
+    conversationId: chatId,
+    threadId,
+    coordinatorId,
+  });
+  const handleRequestCompact = useCallback(() => {
+    changeDraft(
+      "Please summarize our current progress, decisions, and next steps concisely so we can compact context or continue in a fresh thread.",
+    );
+  }, [changeDraft]);
+  const contextUsageBarNode = useMemo(
+    () => (
+      <ContextUsageBar
+        usage={contextUsage}
+        variant="compact"
+        onRequestCompact={handleRequestCompact}
+      />
+    ),
+    [contextUsage, handleRequestCompact],
   );
   const removeQueuedItem = useCallback(
     (id: string) => {
@@ -1112,6 +1153,8 @@ function ConversationPane({
         setThread,
         setQuoteId,
         setPreviewTarget,
+        setPortPreviewTarget,
+        onQuoteTableSelection: handleQuoteTableSelection,
         setForwardModalMessage,
         setPromoteTaskMessage,
         setPlaybookModalSource,
@@ -1124,6 +1167,7 @@ function ConversationPane({
       conversation,
       coordinatorId,
       data.state,
+      handleQuoteTableSelection,
       messagesById,
       onOpenTurn,
       setThread,
@@ -1343,6 +1387,7 @@ function ConversationPane({
         onRemoveQueued={handleRemoveQueued}
         onStop={stopPress}
         cancelling={cancelling}
+        contextUsageBar={contextUsageBarNode}
       />
       <ConversationActionModals
         data={data}
@@ -1354,6 +1399,8 @@ function ConversationPane({
         onCloseTakeover={closeTakeoverModal}
         previewTarget={previewTarget}
         setPreviewTarget={setPreviewTarget}
+        portPreviewTarget={portPreviewTarget}
+        setPortPreviewTarget={setPortPreviewTarget}
         forwardModalMessage={forwardModalMessage}
         setForwardModalMessage={setForwardModalMessage}
         promoteTaskMessage={promoteTaskMessage}
@@ -1486,6 +1533,8 @@ function buildConversationMessageRows(input: {
   setThread(id: string | null): void;
   setQuoteId(id: string | null): void;
   setPreviewTarget(target: PreviewTargetState | null): void;
+  setPortPreviewTarget(target: PortPreviewTarget | null): void;
+  onQuoteTableSelection(markdown: string): void;
   setForwardModalMessage(message: Message | null): void;
   setPromoteTaskMessage(message: Message | null): void;
   setPlaybookModalSource(source: PlaybookModalSourceState | null): void;
@@ -1508,6 +1557,8 @@ function buildConversationMessageRows(input: {
     setThread,
     setQuoteId,
     setPreviewTarget,
+    setPortPreviewTarget,
+    onQuoteTableSelection,
     setForwardModalMessage,
     setPromoteTaskMessage,
     setPlaybookModalSource,
@@ -1577,6 +1628,16 @@ function buildConversationMessageRows(input: {
           workspaceCwd: resolvePreviewWorkspaceCwd(ref.filePath, ws.workspaceCwd, task?.directory),
         });
       },
+      onOpenPortPreview: (url: string) => {
+        setPortPreviewTarget({
+          url,
+          machineId: ws.machineId,
+          workspaceId: ws.workspaceId,
+          workspaceName: ws.workspaceName,
+          group: ws.group,
+        });
+      },
+      onQuoteTableSelection,
       saved: isMessageSaved(message),
       forwardedFrom: message.forwardedFrom,
       onToggleSave: () => {
@@ -1693,6 +1754,8 @@ function ConversationActionModals({
   onCloseTakeover,
   previewTarget,
   setPreviewTarget,
+  portPreviewTarget,
+  setPortPreviewTarget,
   forwardModalMessage,
   setForwardModalMessage,
   promoteTaskMessage,
@@ -1709,6 +1772,8 @@ function ConversationActionModals({
   onCloseTakeover(): void;
   previewTarget: PreviewTargetState | null;
   setPreviewTarget(target: PreviewTargetState | null): void;
+  portPreviewTarget: PortPreviewTarget | null;
+  setPortPreviewTarget(target: PortPreviewTarget | null): void;
   forwardModalMessage: Message | null;
   setForwardModalMessage(message: Message | null): void;
   promoteTaskMessage: Message | null;
@@ -1717,6 +1782,22 @@ function ConversationActionModals({
   setPlaybookModalSource(source: PlaybookModalSourceState | null): void;
 }) {
   const handleClosePreview = useCallback(() => setPreviewTarget(null), [setPreviewTarget]);
+  const handleClosePortPreview = useCallback(
+    () => setPortPreviewTarget(null),
+    [setPortPreviewTarget],
+  );
+  const handleOpenPortPreviewInStudio = useMemo(() => {
+    if (!portPreviewTarget?.machineId || !portPreviewTarget?.workspaceId) return undefined;
+    const serverId = portPreviewTarget.machineId;
+    const workspaceId = portPreviewTarget.workspaceId;
+    const name = portPreviewTarget.workspaceName ?? "Workspace";
+    const group = portPreviewTarget.group ?? "General";
+    return () => {
+      usePavraView.getState().openColumn({ serverId, workspaceId, name, group });
+      usePavraView.getState().setMode("studio");
+      setPortPreviewTarget(null);
+    };
+  }, [portPreviewTarget, setPortPreviewTarget]);
   const handleReadFile = useCallback(
     (targetMachineId: string, filePath: string) =>
       readPreviewFileWithAgentFallback(targetMachineId, filePath, previewTarget),
@@ -1771,6 +1852,11 @@ function ConversationActionModals({
         onClose={handleClosePreview}
         onReadFile={handleReadFile}
         onOpenInStudio={handleOpenInStudio}
+      />
+      <PortPreviewModal
+        target={portPreviewTarget}
+        onClose={handleClosePortPreview}
+        onOpenInStudio={handleOpenPortPreviewInStudio}
       />
       {forwardModalMessage ? (
         <ForwardMessageModal
