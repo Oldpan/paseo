@@ -182,14 +182,16 @@ export function GlobalSearchButton({
         const hovered = Boolean((state as { hovered?: boolean }).hovered);
         return [
           {
-            height: 32,
-            paddingHorizontal: compact ? 8 : 10,
+            width: compact ? 34 : undefined,
+            height: compact ? 34 : 32,
+            paddingHorizontal: compact ? 0 : 10,
             borderRadius: 10,
             borderWidth: 1,
             borderColor: t.retroBorder,
             backgroundColor: hovered ? t.surfaceHover : t.surfaceElevated,
             flexDirection: "row",
             alignItems: "center",
+            justifyContent: "center",
             gap: 6,
             transform: [{ translateY: hovered ? -1 : 0 }],
             ...webTransition("transform 120ms ease, background-color 120ms ease"),

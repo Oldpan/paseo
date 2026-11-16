@@ -42,6 +42,12 @@ import { AnimatedDrawer, usePresenceId } from "./AnimatedDrawer";
 import { AgentAvatar } from "./avatars";
 import { HeaderIconButton, StudioButton } from "./ChatChrome";
 import {
+  ContextUsageBar,
+  useAssistantContextUsage,
+  type ContextUsageBarProps,
+} from "./ContextUsageBar";
+import { getContextUsageMetrics } from "../token-usage";
+import {
   ArrowLeftIcon,
   BriefcaseIcon,
   ChevronIcon,
@@ -1013,6 +1019,75 @@ export interface TurnProcessDrawerProps {
   onOpenPhoneControl?(): void;
 }
 
+function defaultContextWindowForProvider(provider: string | undefined): number {
+  const lower = (provider ?? "").toLowerCase();
+  if (lower.includes("grok")) return 131_072;
+  if (lower.includes("gpt") || lower.includes("codex")) return 258_400;
+  if (lower.includes("gemini")) return 1_000_000;
+  return 200_000;
+}
+
+function estimateTurnContextUsage(
+  activeTurn: Turn | null,
+  tail: readonly StreamItem[],
+  head: readonly StreamItem[],
+  provider: string | undefined,
+): ContextUsageBarProps["usage"] {
+  if (!activeTurn) return null;
+  let chars = (activeTurn.prompt?.length ?? 0) + (activeTurn.systemPrompt?.length ?? 0);
+  for (const item of tail) {
+    chars += JSON.stringify(item).length;
+  }
+  for (const item of head) {
+    chars += JSON.stringify(item).length;
+  }
+  if (chars <= 0) return null;
+  const usedTokens = Math.max(1_200, Math.round(chars / 3.2));
+  const windowTokens = defaultContextWindowForProvider(provider ?? activeTurn.provider);
+  return {
+    contextWindowUsedTokens: Math.min(usedTokens, windowTokens),
+    contextWindowMaxTokens: windowTokens,
+  };
+}
+
+function useTurnContextUsage(input: {
+  turns: PavraData["state"]["turns"];
+  assistant: PavraData["state"]["assistants"][number] | undefined;
+  activeTurn: Turn | null;
+  coordinatorId: string;
+  agentUsage: ContextUsageBarProps["usage"];
+  tail: readonly StreamItem[];
+  head: readonly StreamItem[];
+}) {
+  const { turns, assistant, activeTurn, coordinatorId, agentUsage, tail, head } = input;
+  const laneContextUsage = useAssistantContextUsage({
+    turns,
+    assistant,
+    conversationId: activeTurn?.conversationId,
+    threadId: activeTurn?.threadId,
+    coordinatorId,
+  });
+  const assistantContextUsage = useAssistantContextUsage({
+    turns,
+    assistant,
+    coordinatorId,
+  });
+  return useMemo(() => {
+    for (const candidate of [agentUsage, laneContextUsage, assistantContextUsage]) {
+      if (getContextUsageMetrics(candidate)) return candidate;
+    }
+    return estimateTurnContextUsage(activeTurn, tail, head, assistant?.provider);
+  }, [
+    activeTurn,
+    agentUsage,
+    assistant?.provider,
+    assistantContextUsage,
+    head,
+    laneContextUsage,
+    tail,
+  ]);
+}
+
 export function TurnProcessDrawer({
   turn,
   data,
@@ -1030,7 +1105,7 @@ export function TurnProcessDrawer({
   const hosts = useHosts();
   const { open, activeTurn } = useRetainedTurn(turn);
 
-  const serverId = activeTurn ? (activeTurn.serverId ?? coordinatorId) : "";
+  const serverId = activeTurn?.serverId ?? coordinatorId;
   const agentId = activeTurn?.agentId ?? "";
   const isTurnLive = Boolean(
     activeTurn && LIVE_STATUSES.has(activeTurn.status) && !activeTurn.finalMessageId,
@@ -1071,6 +1146,16 @@ export function TurnProcessDrawer({
       }),
     [activeTurn, data.state.assistants, hostLabels, hosts, liveView?.activity, serverId],
   );
+
+  const contextUsage = useTurnContextUsage({
+    turns: data.state.turns,
+    assistant,
+    activeTurn,
+    coordinatorId,
+    agentUsage: agent?.lastUsage,
+    tail,
+    head,
+  });
 
   const resolvedLineage = useMemo<TurnLineage | null>(() => {
     if (lineage !== undefined) return lineage;
@@ -1172,6 +1257,7 @@ export function TurnProcessDrawer({
           data={data}
           onOpenPhoneControl={onOpenPhoneControl}
         />
+        <ContextUsageBar usage={contextUsage} variant="compact" />
         {resolvedLineage && resolvedLineage.hasLineage ? (
           <TurnLineageSection
             lineage={resolvedLineage}

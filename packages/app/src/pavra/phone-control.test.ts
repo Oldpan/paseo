@@ -207,6 +207,20 @@ describe("pavra phone-control helpers & store", () => {
     expect(usePhoneControlStore.getState().paused).toBe(false);
     expect(usePhoneControlStore.getState().onMainScreenTakeover).toBe(false);
     expect(usePhoneControlStore.getState().liveExecution?.active).toBe(false);
+
+    // Re-launch demo task and verify setEnabled(false) clears overlayVisible and marks liveExecution inactive
+    usePhoneControlStore.getState().launchDemoBackgroundTask({
+      assistantName: "Sky",
+      appName: "Alipay",
+      packageName: "com.eg.android.AlipayGphone",
+      mode: "mini_window",
+    });
+    expect(usePhoneControlStore.getState().liveExecution?.active).toBe(true);
+    expect(usePhoneControlStore.getState().overlayVisible).toBe(true);
+    usePhoneControlStore.getState().setEnabled(false);
+    expect(usePhoneControlStore.getState().enabled).toBe(false);
+    expect(usePhoneControlStore.getState().overlayVisible).toBe(false);
+    expect(usePhoneControlStore.getState().liveExecution?.active).toBe(false);
   });
 
   it("polls coordinator commands and reports results in runPhoneWorkerIteration while respecting Relay gate", async () => {

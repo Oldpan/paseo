@@ -98,8 +98,21 @@ export function CollaborationPanel({
       accessibilityLabel="Studio collaboration"
       style={{
         width,
-        borderLeftWidth: 2,
-        borderLeftColor: t.black,
+        maxWidth: "100%",
+        ...(width === "100%"
+          ? {
+              position: "absolute" as const,
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              zIndex: 20,
+              borderLeftWidth: 0,
+            }
+          : {
+              borderLeftWidth: 2,
+              borderLeftColor: t.black,
+            }),
         backgroundColor: t.surfacePrimary,
         minHeight: 0,
       }}

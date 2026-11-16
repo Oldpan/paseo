@@ -359,8 +359,31 @@ export function PhoneLiveCard({
   });
 
   const handleOpenMiniWindow = useCallback(() => {
-    const current = usePhoneControlStore.getState().liveExecution;
-    if (!current || !current.active) {
+    const store = usePhoneControlStore.getState();
+    const current = store.liveExecution;
+    if (executionProp) {
+      store.setLiveExecution({ ...executionProp, active: true });
+      setOverlayMode("mini_window");
+    } else if (takeover && (!current || !current.active)) {
+      store.updateLiveExecution({
+        active: true,
+        assistantName: resolvedAssistantName,
+        appName: takeover.appName ?? takeover.title ?? resolvedAppName,
+        packageName: takeover.packageName ?? takeover.url ?? resolvedPackageName,
+        stepText: takeover.reason,
+        stepIndex: 1,
+        screenshotBase64:
+          takeover.screenshotDataUrl ?? current?.screenshotBase64 ?? DEMO_PHONE_SCREENSHOT_BASE64,
+        history: [
+          {
+            step: 1,
+            label: takeover.reason,
+            timestamp: takeover.createdAt || Date.now(),
+          },
+        ],
+      });
+      setOverlayMode("mini_window");
+    } else if (!current || !current.active) {
       launchDemoBackgroundTask({
         assistantName: resolvedAssistantName,
         appName: resolvedAppName,
@@ -372,12 +395,14 @@ export function PhoneLiveCard({
     }
     onOpenMiniWindow?.();
   }, [
+    executionProp,
     launchDemoBackgroundTask,
     onOpenMiniWindow,
     resolvedAppName,
     resolvedAssistantName,
     resolvedPackageName,
     setOverlayMode,
+    takeover,
   ]);
 
   const handleTakeoverPress = useCallback(() => {

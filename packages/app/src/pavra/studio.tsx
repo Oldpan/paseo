@@ -34,8 +34,8 @@ import { findLatestNonTaskTurn } from "./chat-studio";
 import { studioForGroup } from "./peer-activity";
 import { taskTitle } from "./task-view";
 
-const FILL = { flex: 1, minHeight: 0 };
-const HORIZONTAL = { flexDirection: "row", flex: 1 } as const;
+const FILL = { flex: 1, minHeight: 0, minWidth: 0 } as const;
+const HORIZONTAL = { flexDirection: "row", flex: 1, minWidth: 0, position: "relative" } as const;
 const SCROLL_CONTENT = { flexGrow: 1 };
 const MACHINES = { gap: 12 };
 

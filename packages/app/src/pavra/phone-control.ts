@@ -580,8 +580,15 @@ export const usePhoneControlStore = create<PhoneControlState>()(
                 overlayVisible: false,
                 paused: false,
                 onMainScreenTakeover: false,
+                liveExecution: state.liveExecution
+                  ? { ...state.liveExecution, active: false }
+                  : null,
               }),
         }));
+        if (!enabled) {
+          const nativeModule = getOptionalNativePhoneModule();
+          void nativeModule?.hidePhoneFloatingOverlayAsync?.().catch(() => undefined);
+        }
       },
 
       setDeviceId: (deviceId) => {

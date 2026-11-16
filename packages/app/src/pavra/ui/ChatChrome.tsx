@@ -1,3 +1,4 @@
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 // Presentation extracted/adapted from Bigbang Chat.tsx MessageRow and header.
 // Native execution, tool calls and approvals are rendered by Paseo in Studio.
@@ -112,7 +113,13 @@ export function StudioButton({ label, onPress }: { label: string; onPress(): voi
   );
 }
 
-export function PhoneControlHeaderButton({ onPress }: { onPress(): void }) {
+export function PhoneControlHeaderButton({
+  onPress,
+  compact = false,
+}: {
+  onPress(): void;
+  compact?: boolean;
+}) {
   const { palette: t, name } = useTheme();
   const enabled = usePhoneControlStore((state) => state.enabled);
   const active = usePhoneControlStore((state) => Boolean(state.liveExecution?.active));
@@ -138,14 +145,16 @@ export function PhoneControlHeaderButton({ onPress }: { onPress(): void }) {
         }
         return [
           {
-            height: 32,
-            paddingHorizontal: 10,
+            width: compact ? 34 : undefined,
+            height: compact ? 34 : 32,
+            paddingHorizontal: compact ? 0 : 10,
             borderRadius: 10,
             borderWidth: 1,
             borderColor: t.retroBorder,
             backgroundColor: bg,
             flexDirection: "row",
             alignItems: "center",
+            justifyContent: "center",
             gap: 6,
             transform: [{ translateY: hovered ? -1 : 0 }],
             ...webTransition("transform 120ms ease, background-color 120ms ease"),
@@ -154,22 +163,26 @@ export function PhoneControlHeaderButton({ onPress }: { onPress(): void }) {
         ];
       }}
     >
-      <Smartphone color={iconColor} size={13} strokeWidth={2} aria-hidden />
-      <Text style={type(active ? t.onAccent : t.textSecondary, 11, { fontWeight: "600" })}>
-        Phone
-      </Text>
+      <Smartphone color={iconColor} size={compact ? 14 : 13} strokeWidth={2} aria-hidden />
+      {!compact ? (
+        <Text style={type(active ? t.onAccent : t.textSecondary, 11, { fontWeight: "600" })}>
+          Phone
+        </Text>
+      ) : null}
     </Pressable>
   );
 }
 
 function ChatHeaderTrailingActions({
   label,
+  compact = false,
   onOpenSearch,
   onOpenPhoneControl,
   onOpenStudio,
   onEdit,
 }: {
   label: string;
+  compact?: boolean;
   onOpenSearch?: () => void;
   onOpenPhoneControl?: () => void;
   onOpenStudio?: () => void;
@@ -180,22 +193,88 @@ function ChatHeaderTrailingActions({
   if (!hasAny) return null;
   return (
     <>
-      <View
-        style={{
-          width: 1,
-          height: 18,
-          backgroundColor: t.dividerLine,
-          marginHorizontal: 2,
-        }}
-      />
-      {onOpenSearch ? <GlobalSearchButton onPress={onOpenSearch} /> : null}
-      {onOpenPhoneControl ? <PhoneControlHeaderButton onPress={onOpenPhoneControl} /> : null}
+      {!compact ? (
+        <View
+          style={{
+            width: 1,
+            height: 18,
+            backgroundColor: t.dividerLine,
+            marginHorizontal: 2,
+          }}
+        />
+      ) : null}
+      {onOpenSearch ? <GlobalSearchButton compact={compact} onPress={onOpenSearch} /> : null}
+      {onOpenPhoneControl ? (
+        <PhoneControlHeaderButton compact={compact} onPress={onOpenPhoneControl} />
+      ) : null}
       {onOpenStudio ? <StudioButton label="Open in Studio" onPress={onOpenStudio} /> : null}
       {onEdit ? (
-        <HeaderIconButton label={`Edit ${label}`} onPress={onEdit} size={32}>
+        <HeaderIconButton label={`Edit ${label}`} onPress={onEdit} size={compact ? 34 : 32}>
           <SettingsIcon color={t.textSecondary} size={15} />
         </HeaderIconButton>
       ) : null}
+    </>
+  );
+}
+
+function ChatHeaderTabsRow({
+  tabs,
+  tab,
+  compact,
+  onTab,
+}: {
+  tabs: ReadonlyArray<{ id: string; label: string }>;
+  tab: string;
+  compact: boolean;
+  onTab(value: string): void;
+}) {
+  const { palette: t, name } = useTheme();
+  return (
+    <>
+      {tabs.map((item) => {
+        const selected = tab === item.id;
+        return (
+          <Pressable
+            key={item.id}
+            role="button"
+            accessibilityLabel={item.label}
+            accessibilityState={{ selected }}
+            onPress={() => onTab(item.id)}
+            {...selectedFillProps(selected)}
+            style={(state) => {
+              const hovered = Boolean((state as { hovered?: boolean }).hovered);
+              return [
+                {
+                  height: compact ? 30 : 32,
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  borderColor: t.retroBorder,
+                  backgroundColor: selected
+                    ? hovered
+                      ? t.brandAccentHover
+                      : t.brandAccent
+                    : hovered
+                      ? t.surfaceHover
+                      : t.surfaceElevated,
+                  paddingHorizontal: compact ? 10 : 12,
+                  justifyContent: "center",
+                  transform: [{ translateY: hovered ? -1 : 0 }],
+                  ...webTransition("transform 120ms ease, background-color 120ms ease"),
+                },
+                ctrlShadow(t, name),
+              ];
+            }}
+          >
+            <Text
+              style={type(selected ? t.onAccent : t.textSecondary, 12, {
+                fontWeight: "600",
+              })}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
+        );
+      })}
     </>
   );
 }
@@ -228,6 +307,7 @@ export function ChatHeader({
   onOpenPhoneControl?: () => void;
 }) {
   const { palette: t, name } = useTheme();
+  const compact = useIsCompactFormFactor();
   const hasApkUpdate = usePavraApkUpdaterStore((state) => Boolean(state.availableRelease));
   const tabs = [
     { id: "chat", label: "Chat" },
@@ -245,20 +325,21 @@ export function ChatHeader({
       style={{
         minHeight: 56,
         backgroundColor: t.surfacePrimary,
-        paddingHorizontal: 14,
+        paddingHorizontal: compact ? 10 : 14,
         paddingVertical: 9,
         borderBottomWidth: 2,
         borderBottomColor: t.black,
         justifyContent: "center",
+        gap: compact ? 8 : 0,
       }}
     >
       <View
         style={{
           flexDirection: "row",
-          flexWrap: "wrap",
+          flexWrap: compact ? "nowrap" : "wrap",
           alignItems: "center",
           justifyContent: "space-between",
-          columnGap: 12,
+          columnGap: compact ? 8 : 12,
           rowGap: 8,
         }}
       >
@@ -266,9 +347,9 @@ export function ChatHeader({
           style={{
             flexDirection: "row",
             alignItems: "center",
-            gap: 10,
+            gap: compact ? 8 : 10,
             flex: 1,
-            minWidth: 160,
+            minWidth: compact ? 0 : 160,
           }}
         >
           {onSidebar ? (
@@ -324,60 +405,35 @@ export function ChatHeader({
             </Text>
           </View>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          {tabs.map((item) => {
-            const selected = tab === item.id;
-            return (
-              <Pressable
-                key={item.id}
-                role="button"
-                accessibilityLabel={item.label}
-                accessibilityState={{ selected }}
-                onPress={() => onTab(item.id)}
-                {...selectedFillProps(selected)}
-                style={(state) => {
-                  const hovered = Boolean((state as { hovered?: boolean }).hovered);
-                  return [
-                    {
-                      height: 32,
-                      borderRadius: 10,
-                      borderWidth: 1,
-                      borderColor: t.retroBorder,
-                      backgroundColor: selected
-                        ? hovered
-                          ? t.brandAccentHover
-                          : t.brandAccent
-                        : hovered
-                          ? t.surfaceHover
-                          : t.surfaceElevated,
-                      paddingHorizontal: 12,
-                      justifyContent: "center",
-                      transform: [{ translateY: hovered ? -1 : 0 }],
-                      ...webTransition("transform 120ms ease, background-color 120ms ease"),
-                    },
-                    ctrlShadow(t, name),
-                  ];
-                }}
-              >
-                <Text
-                  style={type(selected ? t.onAccent : t.textSecondary, 12, {
-                    fontWeight: "600",
-                  })}
-                >
-                  {item.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-          <ChatHeaderTrailingActions
-            label={label}
-            onOpenSearch={onOpenSearch}
-            onOpenPhoneControl={onOpenPhoneControl}
-            onOpenStudio={onOpenStudio}
-            onEdit={onEdit}
-          />
-        </View>
+        {compact ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 0 }}>
+            <ChatHeaderTrailingActions
+              label={label}
+              compact
+              onOpenSearch={onOpenSearch}
+              onOpenPhoneControl={onOpenPhoneControl}
+              onOpenStudio={onOpenStudio}
+              onEdit={onEdit}
+            />
+          </View>
+        ) : (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <ChatHeaderTabsRow tabs={tabs} tab={tab} compact={false} onTab={onTab} />
+            <ChatHeaderTrailingActions
+              label={label}
+              onOpenSearch={onOpenSearch}
+              onOpenPhoneControl={onOpenPhoneControl}
+              onOpenStudio={onOpenStudio}
+              onEdit={onEdit}
+            />
+          </View>
+        )}
       </View>
+      {compact ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+          <ChatHeaderTabsRow tabs={tabs} tab={tab} compact onTab={onTab} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -528,20 +584,33 @@ function MessageSideActions({
   onSavePlaybook?: () => void;
   onToggleMenu(): void;
 }) {
-  const { palette: t } = useTheme();
+  const { palette: t, name } = useTheme();
   if (!isWeb) return null;
   return (
     <View
       testID="message-side-actions"
       pointerEvents={visible ? "auto" : "none"}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 2,
-        opacity: visible ? 1 : 0,
-        flexShrink: 0,
-        ...webTransition("opacity 140ms ease"),
-      }}
+      style={[
+        {
+          display: visible ? "flex" : "none",
+          position: "absolute",
+          top: -14,
+          ...(user ? { right: 4 } : { left: 4 }),
+          zIndex: 20,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 2,
+          paddingHorizontal: 4,
+          paddingVertical: 2,
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: t.retroBorder,
+          backgroundColor: t.surfaceElevated,
+          opacity: visible ? 1 : 0,
+          ...webTransition("opacity 140ms ease"),
+        },
+        ctrlShadow(t, name),
+      ]}
     >
       {onReact ? (
         <SideActionIcon label="Add reaction" onPress={onToggleMenu}>
@@ -1187,6 +1256,7 @@ export function ChatMessage({
           />
           <View
             style={{
+              position: "relative",
               flexDirection: "row",
               alignItems: "center",
               justifyContent: alignment,

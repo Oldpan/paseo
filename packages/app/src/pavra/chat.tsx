@@ -58,7 +58,6 @@ import { ChatHeader, ThreadHeader } from "./ui/ChatChrome";
 import { ChatPane, PlaybooksPane, RoutinesPane } from "./ui/ChatPane";
 import { MemoryNotesSection } from "./ui/MemoryNotesSection";
 import type { ComposerSendExtras } from "./ui/Composer";
-import { ContextUsageBar, useAssistantContextUsage } from "./ui/ContextUsageBar";
 import type { ParsedFileRef } from "./ui/fileRefParser";
 import {
   FileRefPreviewModal,
@@ -862,14 +861,14 @@ function syncMiniWindowFromLiveOrTakeover(
   const store = usePhoneControlStore.getState();
   if (execution?.active) {
     store.setLiveExecution(execution);
-  } else if (!store.liveExecution?.active && takeover?.screenshotDataUrl) {
+  } else if (takeover) {
     store.updateLiveExecution({
       active: true,
       assistantName: fallbackAssistantName,
       appName: takeover.appName ?? takeover.title ?? "Android App",
       packageName: takeover.packageName ?? takeover.url ?? "com.tencent.mm",
       stepText: takeover.reason,
-      screenshotBase64: takeover.screenshotDataUrl,
+      ...(takeover.screenshotDataUrl ? { screenshotBase64: takeover.screenshotDataUrl } : {}),
     });
   }
   store.setOverlayMode("mini_window");
@@ -1243,36 +1242,6 @@ function ConversationPane({
       changeDraft(`${prefix}${markdown}\n`);
     },
     [changeDraft, draftKey],
-  );
-  const primaryAssistant = useMemo(() => {
-    if (!conversation) return undefined;
-    if (conversation.kind === "dm") {
-      return assistantsById.get(conversation.members[0] ?? "");
-    }
-    const defaultId = conversation.defaultResponderId ?? conversation.members[0];
-    return defaultId ? assistantsById.get(defaultId) : undefined;
-  }, [assistantsById, conversation]);
-  const contextUsage = useAssistantContextUsage({
-    turns: data.state.turns,
-    assistant: primaryAssistant,
-    conversationId: chatId,
-    threadId,
-    coordinatorId,
-  });
-  const handleRequestCompact = useCallback(() => {
-    changeDraft(
-      "Please summarize our current progress, decisions, and next steps concisely so we can compact context or continue in a fresh thread.",
-    );
-  }, [changeDraft]);
-  const contextUsageBarNode = useMemo(
-    () => (
-      <ContextUsageBar
-        usage={contextUsage}
-        variant="compact"
-        onRequestCompact={handleRequestCompact}
-      />
-    ),
-    [contextUsage, handleRequestCompact],
   );
   const removeQueuedItem = useCallback(
     (id: string) => {
@@ -1741,7 +1710,6 @@ function ConversationPane({
         onRemoveQueued={handleRemoveQueued}
         onStop={stopPress}
         cancelling={cancelling}
-        contextUsageBar={contextUsageBarNode}
         focusMessageId={focusMessageId}
         onFocusMessageHandled={onFocusMessageHandled}
       />

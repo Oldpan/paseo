@@ -315,8 +315,9 @@ const s = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    marginHorizontal: 12,
-    marginBottom: 4,
+    marginHorizontal: 14,
+    marginTop: 8,
+    marginBottom: 8,
     gap: 4,
   },
   compactWrap: {
