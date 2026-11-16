@@ -1,4 +1,6 @@
 // Migrated from Bigbang apps/app/src/slashCommands.ts. Keep presentation changes reviewable against that source.
+import { resolveRasterImageMimeType } from "../../attachments/file-types";
+
 type AgentType = string;
 interface ConversationPromptSlashCommand {
   name: string;
@@ -162,6 +164,159 @@ export function resolveSlashCommandAction(
     default:
       return bodyText ? { kind: "send", command, content: bodyText } : null;
   }
+}
+
+export interface PendingAttachment {
+  localId: string;
+  attachmentId: string | null;
+  name: string;
+  previewUrl: string | null;
+  mimeType?: string;
+  sizeBytes?: number;
+  textContent?: string | null;
+}
+
+export interface PickedNativeAsset {
+  name: string;
+  uri: string;
+  mimeType?: string | null;
+  size?: number | null;
+  base64?: string | null;
+  file?: File | null;
+}
+
+export interface NativeAssetFileReader {
+  readText(uri: string): Promise<string>;
+  readBase64(uri: string): Promise<string>;
+}
+
+const TEXT_ATTACHMENT_EXT =
+  /\.(txt|md|json|ts|tsx|py|js|jsx|mjs|cjs|yaml|yml|toml|csv|log|sh|html|css|xml|sql|rs|go|java|kt|swift|c|cpp|h)$/i;
+const MAX_ATTACHMENT_TEXT_CHARS = 16_000;
+
+function normalizeSuppliedMimeType(mimeType: string | null | undefined): string | undefined {
+  const trimmed = mimeType?.trim();
+  if (!trimmed || trimmed === "application/octet-stream") return undefined;
+  return trimmed;
+}
+
+function resolvePickedAttachmentKind(
+  suppliedMimeType: string | null | undefined,
+  fileName: string,
+): { mimeType: string | undefined; isImage: boolean; isText: boolean } {
+  const rawMime = normalizeSuppliedMimeType(suppliedMimeType);
+  const resolvedImageMime =
+    resolveRasterImageMimeType({ mimeType: rawMime, path: fileName }) ??
+    resolveRasterImageMimeType({ path: fileName });
+  const mimeType = resolvedImageMime ?? rawMime;
+  const isImage = Boolean(resolvedImageMime || mimeType?.startsWith("image/"));
+  const isText =
+    !isImage &&
+    (Boolean(mimeType?.startsWith("text/")) ||
+      mimeType === "application/json" ||
+      TEXT_ATTACHMENT_EXT.test(fileName));
+  return { mimeType, isImage, isText };
+}
+
+function truncateAttachmentText(raw: string): string {
+  return raw.length > MAX_ATTACHMENT_TEXT_CHARS
+    ? `${raw.slice(0, MAX_ATTACHMENT_TEXT_CHARS)}\n…`
+    : raw;
+}
+
+async function readNativeImagePreviewUrl(
+  asset: PickedNativeAsset,
+  imageMime: string,
+  reader: NativeAssetFileReader,
+): Promise<string | null> {
+  if (typeof asset.base64 === "string" && asset.base64.length > 0) {
+    return asset.base64.startsWith("data:")
+      ? asset.base64
+      : `data:${imageMime};base64,${asset.base64}`;
+  }
+  if (!asset.uri) return null;
+  try {
+    const b64 = await reader.readBase64(asset.uri);
+    return b64 ? `data:${imageMime};base64,${b64}` : asset.uri;
+  } catch {
+    return asset.uri;
+  }
+}
+
+async function readNativeTextExcerpt(
+  uri: string,
+  reader: NativeAssetFileReader,
+): Promise<string | null> {
+  if (!uri) return null;
+  try {
+    const raw = await reader.readText(uri);
+    return truncateAttachmentText(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function readPickedFile(file: File, index: number): Promise<PendingAttachment> {
+  const localId = `local-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+  const { mimeType, isImage, isText } = resolvePickedAttachmentKind(file.type, file.name);
+  let previewUrl: string | null = null;
+  let textContent: string | null = null;
+  if (isImage && typeof FileReader !== "undefined") {
+    previewUrl = await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.addEventListener(
+        "load",
+        () => resolve(typeof reader.result === "string" ? reader.result : null),
+        { once: true },
+      );
+      reader.addEventListener("error", () => resolve(null), { once: true });
+      reader.readAsDataURL(file);
+    });
+  } else if (isText && typeof file.text === "function") {
+    try {
+      textContent = truncateAttachmentText(await file.text());
+    } catch {
+      textContent = null;
+    }
+  }
+  return {
+    localId,
+    attachmentId: localId,
+    name: file.name,
+    previewUrl,
+    mimeType,
+    sizeBytes: file.size,
+    textContent,
+  };
+}
+
+export async function readPickedNativeAsset(
+  asset: PickedNativeAsset,
+  index: number,
+  reader: NativeAssetFileReader,
+): Promise<PendingAttachment> {
+  if (asset.file) {
+    return await readPickedFile(asset.file, index);
+  }
+  const localId = `local-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+  const name = asset.name?.trim() || asset.uri.split("/").pop()?.split("?")[0] || "attachment";
+  const { mimeType, isImage, isText } = resolvePickedAttachmentKind(
+    asset.mimeType,
+    name || asset.uri,
+  );
+  const previewUrl = isImage
+    ? await readNativeImagePreviewUrl(asset, mimeType ?? "image/png", reader)
+    : null;
+  const textContent = !isImage && isText ? await readNativeTextExcerpt(asset.uri, reader) : null;
+  return {
+    localId,
+    attachmentId: localId,
+    name,
+    previewUrl,
+    mimeType,
+    sizeBytes: typeof asset.size === "number" ? asset.size : undefined,
+    textContent,
+  };
 }
 
 export function formatMessageWithAttachments(

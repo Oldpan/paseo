@@ -8,6 +8,7 @@ import { openExchanges, studioRecords } from "./peer-activity";
 import {
   findMatchingSlashCommands,
   formatMessageWithAttachments,
+  readPickedNativeAsset,
   resolveSlashCommandAction,
   resolveSlashCommands,
 } from "./ui/slashCommands";
@@ -249,5 +250,81 @@ describe("Hermes runtime compatibility", () => {
     expect(formatted).toContain("Please review");
     expect(formatted).toContain("[Attachment: notes.md]\n```\n# Plan\n- Step 1\n```");
     expect(formatted).toContain("[Attachment: shot.png (image)]");
+  });
+
+  it("wires expo-document-picker on native and reads picked native image/text/binary assets", async () => {
+    const composerSource = readFileSync(path.join(pavraDir, "ui", "Composer.tsx"), "utf8");
+    expect(composerSource).toContain("DocumentPicker.getDocumentAsync");
+    expect(composerSource).toContain("void handlePickNativeDocuments()");
+
+    const fakeReader = {
+      async readText(uri: string) {
+        if (uri.endsWith("notes.md")) return "# Android Note\nHello from APK";
+        throw new Error("unreadable");
+      },
+      async readBase64(uri: string) {
+        if (uri.endsWith("screen.png")) return "iVBORw0KGgoAAAANSUhEUg==";
+        throw new Error("no base64");
+      },
+    };
+
+    const imageItem = await readPickedNativeAsset(
+      {
+        name: "screen.png",
+        uri: "file:///data/user/0/app.paseo.dogfood/cache/screen.png",
+        mimeType: "application/octet-stream",
+        size: 1024,
+      },
+      0,
+      fakeReader,
+    );
+    expect(imageItem).toMatchObject({
+      name: "screen.png",
+      mimeType: "image/png",
+      previewUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+      sizeBytes: 1024,
+      textContent: null,
+    });
+    expect(imageItem.attachmentId).toBe(imageItem.localId);
+
+    const fallbackImageItem = await readPickedNativeAsset(
+      {
+        name: "camera.jpg",
+        uri: "file:///data/user/0/app.paseo.dogfood/cache/camera.jpg",
+        mimeType: "image/jpeg",
+        size: 2048,
+      },
+      1,
+      fakeReader,
+    );
+    expect(fallbackImageItem).toMatchObject({
+      name: "camera.jpg",
+      mimeType: "image/jpeg",
+      previewUrl: "file:///data/user/0/app.paseo.dogfood/cache/camera.jpg",
+      sizeBytes: 2048,
+      textContent: null,
+    });
+
+    const textItem = await readPickedNativeAsset(
+      {
+        name: "notes.md",
+        uri: "file:///data/user/0/app.paseo.dogfood/cache/notes.md",
+        mimeType: "application/octet-stream",
+        size: 64,
+      },
+      2,
+      fakeReader,
+    );
+    expect(textItem).toMatchObject({
+      name: "notes.md",
+      previewUrl: null,
+      sizeBytes: 64,
+      textContent: "# Android Note\nHello from APK",
+    });
+
+    const formatted = formatMessageWithAttachments("", [imageItem, textItem]);
+    expect(formatted).toBe(
+      "[Attachment: screen.png (image)]\n\n[Attachment: notes.md]\n```\n# Android Note\nHello from APK\n```",
+    );
   });
 });

@@ -2,6 +2,9 @@ import { isWeb } from "@/constants/platform";
 // Migrated from Bigbang apps/app/src/Chat.tsx:Composer. Keep presentation changes reviewable against that source.
 import { useState, useMemo, useRef, useEffect, type ReactNode } from "react";
 import { Platform, ActivityIndicator, Image, Pressable, Text, View } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
+import { File as ExpoFile } from "expo-file-system";
+import * as LegacyFileSystem from "expo-file-system/legacy";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { PaperclipIcon, SendIcon, StopIcon } from "./icons";
 import { bubbleShadow, ctrlShadow, text as type, webTransition } from "./theme";
@@ -21,19 +24,21 @@ import {
   buildPromptSlashCommand,
   resolveSlashCommandAction,
   formatMessageWithAttachments,
+  readPickedFile,
+  readPickedNativeAsset,
+  type NativeAssetFileReader,
+  type PendingAttachment,
+  type PickedNativeAsset,
 } from "./slashCommands";
 
-export { formatMessageWithAttachments };
-
-export interface PendingAttachment {
-  localId: string;
-  attachmentId: string | null;
-  name: string;
-  previewUrl: string | null;
-  mimeType?: string;
-  sizeBytes?: number;
-  textContent?: string | null;
-}
+export {
+  formatMessageWithAttachments,
+  readPickedFile,
+  readPickedNativeAsset,
+  type NativeAssetFileReader,
+  type PendingAttachment,
+  type PickedNativeAsset,
+};
 
 export interface ComposerSendExtras {
   sendAsTask?: boolean;
@@ -44,51 +49,26 @@ export interface ComposerSendExtras {
   slashCommand?: { name: string; bodyText: string };
 }
 
-const TEXT_ATTACHMENT_EXT = /\.(txt|md|json|ts|tsx|py)$/i;
-const MAX_ATTACHMENT_TEXT_CHARS = 16_000;
-
-async function readPickedFile(file: File, index: number): Promise<PendingAttachment> {
-  const localId = `local-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
-  const mimeType = file.type || undefined;
-  const isImage = Boolean(mimeType?.startsWith("image/"));
-  const isText =
-    Boolean(mimeType?.startsWith("text/")) ||
-    mimeType === "application/json" ||
-    TEXT_ATTACHMENT_EXT.test(file.name);
-  let previewUrl: string | null = null;
-  let textContent: string | null = null;
-  if (isImage && typeof FileReader !== "undefined") {
-    previewUrl = await new Promise<string | null>((resolve) => {
-      const reader = new FileReader();
-      reader.addEventListener(
-        "load",
-        () => resolve(typeof reader.result === "string" ? reader.result : null),
-        { once: true },
-      );
-      reader.addEventListener("error", () => resolve(null), { once: true });
-      reader.readAsDataURL(file);
-    });
-  } else if (isText && typeof file.text === "function") {
+const defaultNativeAssetFileReader: NativeAssetFileReader = {
+  async readText(uri: string): Promise<string> {
     try {
-      const raw = await file.text();
-      textContent =
-        raw.length > MAX_ATTACHMENT_TEXT_CHARS
-          ? `${raw.slice(0, MAX_ATTACHMENT_TEXT_CHARS)}\n…`
-          : raw;
+      return await new ExpoFile(uri).text();
     } catch {
-      textContent = null;
+      return await LegacyFileSystem.readAsStringAsync(uri, {
+        encoding: LegacyFileSystem.EncodingType.UTF8,
+      });
     }
-  }
-  return {
-    localId,
-    attachmentId: localId,
-    name: file.name,
-    previewUrl,
-    mimeType,
-    sizeBytes: file.size,
-    textContent,
-  };
-}
+  },
+  async readBase64(uri: string): Promise<string> {
+    try {
+      return await new ExpoFile(uri).base64();
+    } catch {
+      return await LegacyFileSystem.readAsStringAsync(uri, {
+        encoding: LegacyFileSystem.EncodingType.Base64,
+      });
+    }
+  },
+};
 
 export function Composer({
   draft,
@@ -141,7 +121,10 @@ export function Composer({
   const { palette: t, name } = useTheme();
   const editor = useRef<EditingTextInputHandle>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pickingNativeRef = useRef(false);
   const [localFiles, setLocalFiles] = useState<PendingAttachment[]>([]);
+  const [localUploadError, setLocalUploadError] = useState("");
+  const effectiveUploadError = uploadError || localUploadError;
   const allPendingFiles = useMemo(
     () => (localFiles.length ? [...pendingFiles, ...localFiles] : pendingFiles),
     [localFiles, pendingFiles],
@@ -181,6 +164,7 @@ export function Composer({
     setPlanMode(false);
     setSendAsTask(false);
     setLocalFiles([]);
+    setLocalUploadError("");
     setUserRows(null);
     userRowsRef.current = null;
     setAutoH(minHeight);
@@ -260,6 +244,7 @@ export function Composer({
     setPlanMode(false);
     setSendAsTask(false);
     setLocalFiles([]);
+    setLocalUploadError("");
     setUserRows(null);
     userRowsRef.current = null;
     setAutoH(minHeight);
@@ -267,9 +252,33 @@ export function Composer({
 
   async function handlePickedFiles(files: File[]) {
     if (!files.length) return;
+    setLocalUploadError("");
     onPasteFiles(files);
     const items = await Promise.all(files.map((file, index) => readPickedFile(file, index)));
     setLocalFiles((current) => [...current, ...items]);
+  }
+
+  async function handlePickNativeDocuments() {
+    if (pickingNativeRef.current || locked || uploading) return;
+    pickingNativeRef.current = true;
+    setLocalUploadError("");
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const items = await Promise.all(
+        result.assets.map((asset, index) =>
+          readPickedNativeAsset(asset, index, defaultNativeAssetFileReader),
+        ),
+      );
+      setLocalFiles((current) => [...current, ...items]);
+    } catch (err) {
+      setLocalUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      pickingNativeRef.current = false;
+    }
   }
 
   function handleRemoveAttachment(localId: string) {
@@ -279,7 +288,11 @@ export function Composer({
 
   function handleAttachPress() {
     if (onAttach) onAttach();
-    if (isWeb) fileInputRef.current?.click();
+    if (isWeb) {
+      fileInputRef.current?.click();
+      return;
+    }
+    void handlePickNativeDocuments();
   }
 
   function submit() {
@@ -429,6 +442,7 @@ export function Composer({
               ) : null}
               <Pressable
                 accessibilityLabel="Remove attachment"
+                hitSlop={8}
                 onPress={() => handleRemoveAttachment(item.localId)}
               >
                 <Text style={type(t.textMuted, 11)}>×</Text>
@@ -437,12 +451,12 @@ export function Composer({
           ))}
         </View>
       ) : null}
-      {uploadError ? (
+      {effectiveUploadError ? (
         <Text
           role="alert"
           testID="upload-error"
           style={type(t.destructive, 12, { marginBottom: 6 })}
-        >{`Upload failed: ${uploadError}`}</Text>
+        >{`Upload failed: ${effectiveUploadError}`}</Text>
       ) : null}
       {group?.quote ? (
         <QuoteChip
@@ -635,6 +649,7 @@ export function Composer({
             testID="attach-file"
             role="button"
             accessibilityLabel="Attach file"
+            hitSlop={8}
             disabled={locked || uploading}
             onPress={handleAttachPress}
             style={(state) => {
