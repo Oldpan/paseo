@@ -8,7 +8,7 @@ import {
   unbindStudioWorkspace,
 } from "../../../../extensions/pavra/shared/contracts";
 import type { PavraData } from "./data";
-import { studioKey, type StudioColumn } from "./model";
+import { buildStudioGroupSummary, studioKey, type StudioColumn } from "./model";
 import { studioForGroup, studioRecords } from "./peer-activity";
 import { CollaborationPanel, type CollaborationToggle } from "./ui/CollaborationPanel";
 
@@ -32,6 +32,7 @@ export function Collaboration({
   const hosts = useHosts();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [summaryGeneratedAt, setSummaryGeneratedAt] = useState(() => Date.now());
   const studio = studioForGroup(data.state.studios ?? [], group);
   const run = useCallback(async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -47,6 +48,10 @@ export function Collaboration({
   const groupColumns = useMemo(
     () => columns.filter((column) => column.group === group),
     [columns, group],
+  );
+  const hostLabels = useMemo<Record<string, string>>(
+    () => Object.fromEntries(hosts.map((host) => [host.serverId, host.label])),
+    [hosts],
   );
   const enable = useCallback(
     () =>
@@ -65,8 +70,7 @@ export function Collaboration({
   const workspaces = useMemo<CollaborationToggle[]>(() => {
     if (!studio) return [];
     const bound = new Set(studio.workspaces.map((workspace) => studioKey(workspace)));
-    const label = (serverId: string) =>
-      hosts.find((host) => host.serverId === serverId)?.label ?? serverId;
+    const label = (serverId: string) => hostLabels[serverId] ?? serverId;
     const shown = [
       ...groupColumns.map((column) => ({ ...column, name: column.name })),
       ...studio.workspaces.filter(
@@ -96,7 +100,7 @@ export function Collaboration({
           ),
       };
     });
-  }, [data, groupColumns, hosts, run, studio]);
+  }, [data, groupColumns, hostLabels, run, studio]);
   const assistants = useMemo<CollaborationToggle[]>(() => {
     if (!studio) return [];
     const linked = new Set(studio.assistantIds ?? []);
@@ -118,6 +122,34 @@ export function Collaboration({
     () => (studio ? studioRecords(data.state.peerMessages ?? [], studio) : []),
     [data.state.peerMessages, studio],
   );
+  const summary = useMemo(
+    () =>
+      buildStudioGroupSummary({
+        group,
+        columns: groupColumns,
+        studio,
+        assistants: studio ? data.state.assistants : [],
+        tasks: data.state.tasks,
+        turns: data.state.turns,
+        studioRecords: records,
+        hostLabels,
+        generatedAt: summaryGeneratedAt,
+      }),
+    [
+      data.state.assistants,
+      data.state.tasks,
+      data.state.turns,
+      group,
+      groupColumns,
+      hostLabels,
+      records,
+      studio,
+      summaryGeneratedAt,
+    ],
+  );
+  const refreshSummary = useCallback(() => {
+    setSummaryGeneratedAt(Date.now());
+  }, []);
   return (
     <CollaborationPanel
       group={group}
@@ -126,6 +158,8 @@ export function Collaboration({
       workspaces={workspaces}
       assistants={assistants}
       records={records}
+      summary={summary}
+      onRefreshSummary={refreshSummary}
       error={error}
       busy={busy}
       onClose={onClose}
