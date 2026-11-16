@@ -54,14 +54,15 @@ export function FormFrame({
             flexDirection: "row",
             alignItems: "center",
             justifyContent: "space-between",
-            backgroundColor: t.brandAccent,
+            backgroundColor: t.surfaceSecondary,
             paddingHorizontal: 16,
             paddingVertical: 8,
             borderBottomWidth: 1,
-            borderColor: t.retroBorder,
+            borderBottomColor: t.dividerLine,
+            borderColor: t.dividerLine,
           }}
         >
-          <Text role="heading" style={type(t.onAccent, 14, { fontWeight: "700" })}>
+          <Text role="heading" style={type(t.textPrimary, 14, { fontWeight: "700" })}>
             {title}
           </Text>
           <Pressable
@@ -70,7 +71,7 @@ export function FormFrame({
             onPress={onClose}
             style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
           >
-            <CloseIcon color={t.onAccent} size={14} />
+            <CloseIcon color={t.textSecondary} size={14} />
           </Pressable>
         </View>
         <ScrollView

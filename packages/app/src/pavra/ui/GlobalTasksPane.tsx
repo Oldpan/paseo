@@ -486,27 +486,27 @@ function ViewToggleButton({
         const hovered = Boolean((state as { hovered?: boolean }).hovered);
         const bg = selected
           ? hovered
-            ? t.brandAccentHover
-            : t.brandAccent
+            ? t.surfaceHover
+            : t.brandAccentSoft
           : hovered
             ? t.surfaceHover
-            : t.surfaceElevated;
+            : t.surfaceSecondary;
         return [
           {
             height: 30,
             borderRadius: 10,
-            borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderWidth: selected ? 1 : 0,
+            borderColor: selected ? t.retroBorder : "transparent",
             backgroundColor: bg,
             paddingHorizontal: 10,
             justifyContent: "center",
             ...webTransition("background-color 120ms ease"),
           },
-          ctrlShadow(t, name),
+          selected ? ctrlShadow(t, name) : null,
         ];
       }}
     >
-      <Text style={type(selected ? t.onAccent : t.textSecondary, 11, { fontWeight: "700" })}>
+      <Text style={type(selected ? t.textPrimary : t.textSecondary, 11, { fontWeight: "700" })}>
         {label}
       </Text>
     </Pressable>
@@ -537,8 +537,8 @@ function GlobalTasksHeader({
         backgroundColor: t.surfacePrimary,
         paddingHorizontal: compact ? 10 : 14,
         paddingVertical: 9,
-        borderBottomWidth: 2,
-        borderBottomColor: t.black,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
@@ -691,7 +691,7 @@ function GlobalTasksFilterBar({
     <View
       style={{
         borderBottomWidth: 1,
-        borderColor: t.retroBorder,
+        borderBottomColor: t.dividerLine,
         backgroundColor: t.surfacePrimary,
         paddingHorizontal: compact ? 10 : 14,
         paddingVertical: 8,
@@ -738,28 +738,28 @@ function GlobalTasksFilterBar({
                   const hovered = Boolean((state as { hovered?: boolean }).hovered);
                   const bg = selected
                     ? hovered
-                      ? t.brandAccentHover
-                      : t.brandAccent
+                      ? t.surfaceHover
+                      : t.brandAccentSoft
                     : hovered
                       ? t.surfaceHover
-                      : t.surfaceElevated;
+                      : t.surfaceSecondary;
                   return [
                     {
                       minHeight: 32,
                       borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: t.retroBorder,
+                      borderWidth: selected ? 1 : 0,
+                      borderColor: selected ? t.retroBorder : "transparent",
                       backgroundColor: bg,
                       paddingHorizontal: 11,
                       justifyContent: "center",
                       ...webTransition("background-color 120ms ease"),
                     },
-                    ctrlShadow(t, name),
+                    selected ? ctrlShadow(t, name) : null,
                   ];
                 }}
               >
                 <Text
-                  style={type(selected ? t.onAccent : t.textSecondary, 11, {
+                  style={type(selected ? t.textPrimary : t.textSecondary, 11, {
                     fontWeight: "700",
                   })}
                 >

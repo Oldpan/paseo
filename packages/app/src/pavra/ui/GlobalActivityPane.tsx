@@ -116,24 +116,24 @@ function FilterPill({
           {
             height: 28,
             borderRadius: 999,
-            borderWidth: 1,
-            borderColor: t.retroBorder,
+            borderWidth: selected ? 1 : 0,
+            borderColor: selected ? t.retroBorder : "transparent",
             backgroundColor: selected
               ? hovered
-                ? t.brandAccentHover
-                : t.brandAccent
+                ? t.surfaceHover
+                : t.brandAccentSoft
               : hovered
                 ? t.surfaceHover
-                : t.surfaceElevated,
+                : t.surfaceSecondary,
             paddingHorizontal: 10,
             justifyContent: "center",
             ...webTransition("background-color 120ms ease"),
           },
-          ctrlShadow(t, name),
+          selected ? ctrlShadow(t, name) : null,
         ];
       }}
     >
-      <Text style={type(selected ? t.onAccent : t.textSecondary, 11, { fontWeight: "700" })}>
+      <Text style={type(selected ? t.textPrimary : t.textSecondary, 11, { fontWeight: "700" })}>
         {label}
       </Text>
     </Pressable>
@@ -675,8 +675,8 @@ function ActivityHeader({
         backgroundColor: t.surfacePrimary,
         paddingHorizontal: 14,
         paddingVertical: 9,
-        borderBottomWidth: 2,
-        borderBottomColor: t.black,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
@@ -784,7 +784,7 @@ function ActivityFilterBar({
       style={{
         backgroundColor: t.surfacePrimary,
         borderBottomWidth: 1,
-        borderBottomColor: t.retroBorder,
+        borderBottomColor: t.dividerLine,
         paddingHorizontal: 14,
         paddingVertical: 8,
         gap: 8,

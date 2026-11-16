@@ -110,8 +110,8 @@ export function CollaborationPanel({
               borderLeftWidth: 0,
             }
           : {
-              borderLeftWidth: 2,
-              borderLeftColor: t.black,
+              borderLeftWidth: 1,
+              borderLeftColor: t.dividerLine,
             }),
         backgroundColor: t.surfacePrimary,
         minHeight: 0,
@@ -130,7 +130,7 @@ export function CollaborationPanel({
           paddingHorizontal: 12,
           paddingBottom: 10,
           borderBottomWidth: 1,
-          borderBottomColor: t.retroBorderLight,
+          borderBottomColor: t.dividerLine,
         }}
       >
         <Pressable
@@ -144,16 +144,16 @@ export function CollaborationPanel({
               height: 28,
               paddingHorizontal: 12,
               borderRadius: 8,
-              borderWidth: 1,
-              borderColor: t.retroBorder,
-              backgroundColor: tab === "summary" ? t.brandAccent : t.surfaceElevated,
+              borderWidth: tab === "summary" ? 1 : 0,
+              borderColor: tab === "summary" ? t.retroBorder : "transparent",
+              backgroundColor: tab === "summary" ? t.brandAccentSoft : t.surfaceSecondary,
               justifyContent: "center",
             },
-            ctrlShadow(t, name),
+            tab === "summary" ? ctrlShadow(t, name) : null,
           ]}
         >
           <Text
-            style={type(tab === "summary" ? t.onAccent : t.textSecondary, 11, {
+            style={type(tab === "summary" ? t.textPrimary : t.textSecondary, 11, {
               fontWeight: "700",
             })}
           >
@@ -171,16 +171,16 @@ export function CollaborationPanel({
               height: 28,
               paddingHorizontal: 12,
               borderRadius: 8,
-              borderWidth: 1,
-              borderColor: t.retroBorder,
-              backgroundColor: tab === "activity" ? t.brandAccent : t.surfaceElevated,
+              borderWidth: tab === "activity" ? 1 : 0,
+              borderColor: tab === "activity" ? t.retroBorder : "transparent",
+              backgroundColor: tab === "activity" ? t.brandAccentSoft : t.surfaceSecondary,
               justifyContent: "center",
             },
-            ctrlShadow(t, name),
+            tab === "activity" ? ctrlShadow(t, name) : null,
           ]}
         >
           <Text
-            style={type(tab === "activity" ? t.onAccent : t.textSecondary, 11, {
+            style={type(tab === "activity" ? t.textPrimary : t.textSecondary, 11, {
               fontWeight: "700",
             })}
           >

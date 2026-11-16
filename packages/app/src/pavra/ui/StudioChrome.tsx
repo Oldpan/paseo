@@ -187,8 +187,8 @@ export function StudioBar({
     <View
       style={{
         backgroundColor: t.surfacePrimary,
-        borderBottomWidth: 2,
-        borderBottomColor: t.black,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
       }}
     >
       <StudioBarHeader
@@ -411,9 +411,9 @@ function StudioGroupSection({
         style={{
           height: 28,
           borderRadius: 8,
-          borderWidth: 1,
-          borderColor: groupSelected ? t.brandAccent : t.retroBorderLight,
-          backgroundColor: groupSelected ? t.brandAccentSoft : t.surfaceHover,
+          borderWidth: groupSelected ? 1 : 0,
+          borderColor: groupSelected ? t.retroBorder : "transparent",
+          backgroundColor: groupSelected ? t.brandAccentSoft : t.surfaceSecondary,
           paddingHorizontal: 8,
           flexDirection: "row",
           alignItems: "center",
@@ -421,7 +421,7 @@ function StudioGroupSection({
         }}
       >
         <Text
-          style={type(groupSelected ? t.onAccent : t.textSecondary, 11, {
+          style={type(groupSelected ? t.textPrimary : t.textSecondary, 11, {
             fontWeight: "700",
           })}
         >
@@ -429,7 +429,7 @@ function StudioGroupSection({
         </Text>
         {groupColumns.length > 0 ? (
           <Text
-            style={type(groupSelected ? t.onAccent : t.textMuted, 10, {
+            style={type(groupSelected ? t.textPrimary : t.textMuted, 10, {
               fontWeight: "700",
             })}
           >
@@ -452,8 +452,8 @@ function StudioGroupSection({
               alignItems: "center",
               height: 28,
               borderRadius: 8,
-              borderWidth: 1,
-              borderColor: selected ? t.retroBorderLight : "transparent",
+              borderWidth: selected ? 1 : 0,
+              borderColor: selected ? t.retroBorder : "transparent",
               backgroundColor: selected ? t.surfaceElevated : "transparent",
               paddingHorizontal: 8,
               gap: 4,

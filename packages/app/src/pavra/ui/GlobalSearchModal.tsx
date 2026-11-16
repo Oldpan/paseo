@@ -508,8 +508,8 @@ function SearchHeaderBar({
         flexDirection: "row",
         alignItems: "center",
         gap: 10,
-        borderBottomWidth: 2,
-        borderColor: t.retroBorder,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         backgroundColor: t.surfacePrimary,
         paddingHorizontal: 14,
         paddingVertical: 10,
@@ -613,8 +613,8 @@ function SearchFilterPillsBar({
   return (
     <View
       style={{
-        borderBottomWidth: 2,
-        borderColor: t.retroBorder,
+        borderBottomWidth: 1,
+        borderBottomColor: t.dividerLine,
         backgroundColor: t.surfaceSecondary,
       }}
     >
@@ -644,8 +644,8 @@ function SearchFilterPillsBar({
               {...selectedFillProps(selected)}
               style={(pressState) => {
                 const hovered = Boolean((pressState as { hovered?: boolean }).hovered);
-                const selectedBg = hovered ? t.brandAccentHover : t.brandAccent;
-                const idleBg = hovered ? t.surfaceHover : t.surfaceElevated;
+                const selectedBg = hovered ? t.surfaceHover : t.brandAccentSoft;
+                const idleBg = hovered ? t.surfaceHover : "transparent";
                 return [
                   {
                     flexDirection: "row",
@@ -653,8 +653,8 @@ function SearchFilterPillsBar({
                     gap: 5,
                     minHeight: 28,
                     borderRadius: 8,
-                    borderWidth: 1,
-                    borderColor: t.retroBorder,
+                    borderWidth: selected ? 1 : 0,
+                    borderColor: selected ? t.retroBorder : "transparent",
                     backgroundColor: selected ? selectedBg : idleBg,
                     paddingHorizontal: 10,
                     paddingVertical: 4,
@@ -665,7 +665,7 @@ function SearchFilterPillsBar({
               }}
             >
               <Text
-                style={type(selected ? t.onAccent : t.textSecondary, 11, {
+                style={type(selected ? t.textPrimary : t.textSecondary, 11, {
                   fontWeight: "700",
                   letterSpacing: 0.4,
                 })}
@@ -673,7 +673,9 @@ function SearchFilterPillsBar({
                 {pill.label}
               </Text>
               {!isEmptyQuery && count > 0 ? (
-                <Text style={type(selected ? t.onAccent : t.textMuted, 10, { fontWeight: "800" })}>
+                <Text
+                  style={type(selected ? t.textPrimary : t.textMuted, 10, { fontWeight: "800" })}
+                >
                   {count}
                 </Text>
               ) : null}
@@ -841,8 +843,8 @@ function SearchFooterBar({ onClose }: { onClose: () => void }) {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        borderTopWidth: 2,
-        borderColor: t.retroBorder,
+        borderTopWidth: 1,
+        borderTopColor: t.dividerLine,
         backgroundColor: t.surfaceSecondary,
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -1041,7 +1043,7 @@ export function GlobalSearchModal(props: GlobalSearchModalProps) {
             maxWidth: 640,
             maxHeight: "84%",
             borderRadius: 14,
-            borderWidth: 2,
+            borderWidth: 1,
             borderColor: t.retroBorder,
             backgroundColor: t.surfacePrimary,
             overflow: "hidden",

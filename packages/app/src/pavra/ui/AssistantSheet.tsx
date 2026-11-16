@@ -241,7 +241,7 @@ function ToolPermissionsSection({
         style={[
           s.sectionBox,
           {
-            borderColor: t.retroBorder,
+            borderColor: t.retroBorderLight,
             backgroundColor: t.surfaceSecondary,
           },
         ]}
@@ -270,7 +270,7 @@ function ToolPermissionsSection({
                   s.toolCard,
                   {
                     borderColor: enabled ? t.retroBorder : t.retroBorderLight,
-                    backgroundColor: enabled ? t.brandAccentMuted : t.surfacePrimary,
+                    backgroundColor: enabled ? t.brandAccentSoft : t.surfaceSecondary,
                     opacity: disabled ? 0.5 : pressed ? 0.85 : 1,
                   },
                   enabled && ctrlShadow(t, name),
@@ -758,7 +758,7 @@ const s = StyleSheet.create({
   },
   errorBanner: {
     borderRadius: 8,
-    borderWidth: 1.5,
+    borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },

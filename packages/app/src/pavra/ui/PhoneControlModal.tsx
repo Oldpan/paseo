@@ -61,7 +61,7 @@ function MasterSwitchCard({
       style={[
         s.card,
         {
-          borderColor: t.retroBorder,
+          borderColor: t.retroBorderLight,
           backgroundColor: t.surfaceSecondary,
         },
       ]}
@@ -141,7 +141,7 @@ function PrivilegeChannelsCard({
       style={[
         s.card,
         {
-          borderColor: t.retroBorder,
+          borderColor: t.retroBorderLight,
           backgroundColor: t.surfaceSecondary,
         },
       ]}
@@ -158,8 +158,8 @@ function PrivilegeChannelsCard({
         style={[
           s.subCard,
           {
-            borderColor: t.retroBorder,
-            backgroundColor: t.surfacePrimary,
+            borderColor: t.retroBorderLight,
+            backgroundColor: t.surfaceSecondary,
           },
         ]}
       >
@@ -215,8 +215,8 @@ function PrivilegeChannelsCard({
         style={[
           s.subCard,
           {
-            borderColor: t.retroBorder,
-            backgroundColor: t.surfacePrimary,
+            borderColor: t.retroBorderLight,
+            backgroundColor: t.surfaceSecondary,
           },
         ]}
       >
@@ -330,7 +330,7 @@ function VirtualDisplayOverlayCard({
       style={[
         s.card,
         {
-          borderColor: t.retroBorder,
+          borderColor: t.retroBorderLight,
           backgroundColor: t.surfaceSecondary,
         },
       ]}
@@ -517,25 +517,29 @@ function NetworkAndSafetyCards({
                 onPress={() => onSelectConfirmTier(option.id)}
                 style={(state) => {
                   const hovered = Boolean((state as { hovered?: boolean }).hovered);
-                  const bg = selected ? t.brandAccent : hovered ? t.surfaceHover : t.surfacePrimary;
+                  const bg = selected
+                    ? t.brandAccentSoft
+                    : hovered
+                      ? t.surfaceHover
+                      : t.surfacePrimary;
                   return [
                     s.tierPill,
                     {
-                      borderColor: t.retroBorder,
+                      borderColor: selected ? t.retroBorder : t.retroBorderLight,
                       backgroundColor: bg,
                     },
-                    ctrlShadow(t, name),
+                    selected ? ctrlShadow(t, name) : null,
                   ];
                 }}
               >
                 <Text
-                  style={type(selected ? t.onAccent : t.textPrimary, 11, {
+                  style={type(t.textPrimary, 11, {
                     fontWeight: "800",
                   })}
                 >
                   {option.label}
                 </Text>
-                <Text style={type(selected ? t.onAccent : t.textMuted, 10)}>
+                <Text style={type(selected ? t.textSecondary : t.textMuted, 10)}>
                   {option.description}
                 </Text>
               </Pressable>
@@ -734,7 +738,7 @@ const s = StyleSheet.create({
   },
   card: {
     borderRadius: 12,
-    borderWidth: 1.5,
+    borderWidth: 1,
     padding: 12,
     gap: 10,
   },
@@ -765,7 +769,7 @@ const s = StyleSheet.create({
   togglePill: {
     minHeight: 32,
     borderRadius: 999,
-    borderWidth: 1.5,
+    borderWidth: 1,
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
@@ -773,7 +777,7 @@ const s = StyleSheet.create({
   actionBtn: {
     minHeight: 34,
     borderRadius: 999,
-    borderWidth: 1.5,
+    borderWidth: 1,
     paddingHorizontal: 14,
     alignItems: "center",
     justifyContent: "center",
@@ -806,14 +810,14 @@ const s = StyleSheet.create({
     flexBasis: 170,
     minWidth: 150,
     borderRadius: 10,
-    borderWidth: 1.5,
+    borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 8,
     gap: 3,
   },
   noticeBanner: {
     borderRadius: 10,
-    borderWidth: 1.5,
+    borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },

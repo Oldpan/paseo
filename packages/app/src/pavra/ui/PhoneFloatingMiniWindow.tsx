@@ -147,7 +147,8 @@ function MiniWindowControlBar({
       style={[
         s.miniControlBar,
         {
-          borderColor: t.retroBorder,
+          borderTopColor: t.dividerLine,
+          borderColor: t.dividerLine,
           backgroundColor: t.surfaceSecondary,
         },
       ]}
@@ -283,7 +284,8 @@ function PhoneMiniWindowExpanded({
         style={[
           s.miniHeader,
           {
-            borderColor: t.retroBorder,
+            borderBottomColor: t.dividerLine,
+            borderColor: t.dividerLine,
             backgroundColor: t.brandAccent,
           },
         ]}
@@ -517,7 +519,7 @@ const s = StyleSheet.create({
     maxWidth: 320,
     minHeight: 44,
     borderRadius: 999,
-    borderWidth: 2,
+    borderWidth: 1,
     paddingLeft: 10,
     paddingRight: 6,
     paddingVertical: 4,
@@ -539,7 +541,7 @@ const s = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 999,
-    borderWidth: 1.5,
+    borderWidth: 1,
   },
   capsuleTextCol: {
     flex: 1,
@@ -550,7 +552,7 @@ const s = StyleSheet.create({
     minHeight: 28,
     paddingHorizontal: 9,
     borderRadius: 999,
-    borderWidth: 1.5,
+    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -558,14 +560,14 @@ const s = StyleSheet.create({
     width: MINI_WINDOW_WIDTH,
     height: MINI_WINDOW_HEIGHT,
     borderRadius: 16,
-    borderWidth: 2,
+    borderWidth: 1,
     overflow: "hidden",
     flexDirection: "column",
   },
   miniHeader: {
     paddingHorizontal: 8,
     paddingVertical: 6,
-    borderBottomWidth: 1.5,
+    borderBottomWidth: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -632,7 +634,7 @@ const s = StyleSheet.create({
     height: 18,
     borderRadius: 999,
     backgroundColor: "rgba(239, 68, 68, 0.35)",
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: "#ffffff",
     alignItems: "center",
     justifyContent: "center",
@@ -646,7 +648,7 @@ const s = StyleSheet.create({
   miniControlBar: {
     paddingHorizontal: 6,
     paddingVertical: 6,
-    borderTopWidth: 1.5,
+    borderTopWidth: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",

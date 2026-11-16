@@ -85,7 +85,7 @@ const HEADER_ROW = {
   minHeight: 56,
   paddingHorizontal: 14,
   paddingVertical: 9,
-  borderBottomWidth: 2,
+  borderBottomWidth: 1,
   flexDirection: "row",
   gap: 10,
   alignItems: "center",
@@ -108,7 +108,7 @@ const STREAM_BODY = {
 } as const;
 
 const LINEAGE_CONTAINER = {
-  borderBottomWidth: 2,
+  borderBottomWidth: 1,
 } as const;
 
 const LINEAGE_TOGGLE_ROW = {
@@ -368,10 +368,10 @@ function TurnProcessHeader({
       HEADER_ROW,
       {
         backgroundColor: t.surfacePrimary,
-        borderBottomColor: t.black,
+        borderBottomColor: t.dividerLine,
       },
     ],
-    [t.black, t.surfacePrimary],
+    [t.dividerLine, t.surfacePrimary],
   );
   return (
     <View style={headerStyle}>
@@ -454,15 +454,15 @@ function consultationBadgeColors(
   t: ReturnType<typeof useTheme>["palette"],
 ): { bg: string; fg: string; label: string } {
   if (status === "cancelled") {
-    return { bg: t.badgeRed, fg: t.onAccent, label: "cancelled" };
+    return { bg: t.badgeRed, fg: t.textPrimary, label: "cancelled" };
   }
   if (outcome === "failed") {
-    return { bg: t.badgeRed, fg: t.onAccent, label: "failed" };
+    return { bg: t.badgeRed, fg: t.textPrimary, label: "failed" };
   }
   if (status === "replied") {
-    return { bg: t.badgeGreen, fg: t.onAccent, label: "replied" };
+    return { bg: t.badgeGreen, fg: t.textPrimary, label: "replied" };
   }
-  return { bg: t.badgeAmber, fg: t.onAccent, label: "pending" };
+  return { bg: t.badgeAmber, fg: t.textPrimary, label: "pending" };
 }
 
 function ConsultationCard({ item }: { item: PeerMailboxActivity }) {
@@ -570,7 +570,7 @@ function TaskLineagePill({
           },
         ]}
       >
-        <Text style={type(t.onAccent, 10, { fontWeight: "700" })}>{item.status}</Text>
+        <Text style={type(t.textPrimary, 10, { fontWeight: "700" })}>{item.status}</Text>
       </View>
     </Pressable>
   );
@@ -580,8 +580,8 @@ function takeoverBadgeColors(
   status: Takeover["status"],
   t: ReturnType<typeof useTheme>["palette"],
 ): { bg: string; fg: string } {
-  if (status === "resolved") return { bg: t.badgeGreen, fg: t.onAccent };
-  if (status === "cancelled") return { bg: t.badgeRed, fg: t.onAccent };
+  if (status === "resolved") return { bg: t.badgeGreen, fg: t.textPrimary };
+  if (status === "cancelled") return { bg: t.badgeRed, fg: t.textPrimary };
   return { bg: t.badgePink, fg: t.onPink };
 }
 
@@ -677,7 +677,7 @@ function TurnLineageSection({
         LINEAGE_CONTAINER,
         {
           backgroundColor: t.surfacePrimary,
-          borderBottomColor: t.black,
+          borderBottomColor: t.dividerLine,
         },
       ]}
     >
@@ -786,7 +786,7 @@ function deriveHeaderMetadata(input: {
 const PHONE_SECTION_WRAPPER = {
   paddingHorizontal: 14,
   paddingVertical: 10,
-  borderBottomWidth: 2,
+  borderBottomWidth: 1,
 } as const;
 
 function resolveDrawerLiveLabels(live: PhoneLiveState) {
@@ -980,7 +980,7 @@ function TurnProcessPhoneSection({
         PHONE_SECTION_WRAPPER,
         {
           backgroundColor: t.surfacePrimary,
-          borderBottomColor: t.black,
+          borderBottomColor: t.dividerLine,
         },
       ]}
     >
@@ -1207,11 +1207,11 @@ export function TurnProcessDrawer({
       PANEL_CONTAINER,
       {
         backgroundColor: t.surfaceSecondary,
-        borderLeftWidth: compact ? 0 : 2,
-        borderLeftColor: t.black,
+        borderLeftWidth: compact ? 0 : 1,
+        borderLeftColor: t.dividerLine,
       },
     ],
-    [compact, t.black, t.surfaceSecondary],
+    [compact, t.dividerLine, t.surfaceSecondary],
   );
 
   const disconnectedEmpty =

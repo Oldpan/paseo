@@ -124,8 +124,8 @@ export function SavedMessagesPane({
           backgroundColor: t.surfacePrimary,
           paddingHorizontal: 14,
           paddingVertical: 10,
-          borderBottomWidth: embedded ? 1 : 2,
-          borderBottomColor: embedded ? t.retroBorder : t.black,
+          borderBottomWidth: 1,
+          borderBottomColor: t.dividerLine,
           gap: 10,
         }}
       >
@@ -204,25 +204,25 @@ export function SavedMessagesPane({
                       {
                         height: 30,
                         borderRadius: 10,
-                        borderWidth: 1,
-                        borderColor: t.retroBorder,
+                        borderWidth: selected ? 1 : 0,
+                        borderColor: selected ? t.retroBorder : "transparent",
                         backgroundColor: selected
                           ? hovered
-                            ? t.brandAccentHover
-                            : t.brandAccent
+                            ? t.surfaceHover
+                            : t.brandAccentSoft
                           : hovered
                             ? t.surfaceHover
-                            : t.surfaceElevated,
+                            : t.surfaceSecondary,
                         paddingHorizontal: 10,
                         justifyContent: "center",
                         ...webTransition("background-color 120ms ease"),
                       },
-                      ctrlShadow(t, name),
+                      selected ? ctrlShadow(t, name) : null,
                     ];
                   }}
                 >
                   <Text
-                    style={type(selected ? t.onAccent : t.textSecondary, 11, {
+                    style={type(selected ? t.textPrimary : t.textSecondary, 11, {
                       fontWeight: "700",
                     })}
                   >
